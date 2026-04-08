@@ -1,0 +1,38 @@
+# Node
+node_modules/
+dist/
+build/
+.vite/
+.next/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
+# Env
+.env
+.env.local
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rust
+target/
+Cargo.lock
+
+# Tauri
+src-tauri/target/
+src-tauri/.tauri/
+
+# IDE
+.vscode/
+.idea/
+
+# Misc
+*.tmp
+*.bak
