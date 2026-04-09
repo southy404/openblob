@@ -7,17 +7,19 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Emitter;
-use windows::Win32::Foundation::HWND;
-use windows::Win32::System::ProcessStatus::K32GetModuleFileNameExW;
-use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
-use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use std::fs; 
 
 mod modules {
     pub mod app_profiles;
     pub mod browser_automations;
     pub mod command_router;
+    pub mod context;
+    pub mod screen_capture;
     pub mod session_memory;
+    pub mod snip_session;
     pub mod steam_games;
+    pub mod streaming;
     pub mod system;
     pub mod voice;
     pub mod windows_discovery;
@@ -25,11 +27,86 @@ mod modules {
 
 use modules::app_profiles::resolve_app_action;
 use modules::command_router::{parse_voice_command, CompanionAction};
+use modules::context::{resolve_active_context, is_internal_companion_app};
+use modules::snip_session::{set_snip};
 
 static LAST_EXTERNAL_APP: OnceLock<Mutex<String>> = OnceLock::new();
 
+fn default_text_model() -> String {
+    "llama3.1:8b".to_string()
+}
+
+fn default_vision_model() -> String {
+    "gemma3".to_string()
+}
+
 fn last_external_app_store() -> &'static Mutex<String> {
     LAST_EXTERNAL_APP.get_or_init(|| Mutex::new(String::from("unknown")))
+}
+
+#[derive(Debug, Serialize)]
+struct ActiveSnipContext {
+    app_name: String,
+    window_title: String,
+    context_domain: String,
+}
+
+fn is_useful_external_app(app: &str) -> bool {
+    let trimmed = app.trim();
+    !trimmed.is_empty() && trimmed != "unknown" && !is_internal_companion_app(trimmed)
+}
+
+fn clean_search_query(query: &str) -> String {
+    let mut q = query.to_string();
+
+    let noise = [
+        "snip overlay",
+        "snip panel",
+        "companion",
+        "companion-v1",
+        "overlay",
+        ".exe",
+    ];
+
+    for n in noise {
+        q = q.replace(n, "");
+    }
+
+    q.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn resolve_snip_context() -> ActiveSnipContext {
+    let context = resolve_active_context();
+
+    let mut app_name = context.app_name.clone();
+    let mut window_title = context.window_title.clone();
+    let context_domain = context.domain.clone();
+
+    if !is_useful_external_app(&app_name) {
+        let remembered = get_last_external_app();
+        if is_useful_external_app(&remembered) {
+            app_name = remembered;
+        }
+    }
+
+    if window_title.trim().is_empty() && is_useful_external_app(&app_name) {
+        window_title = app_name.clone();
+    }
+
+    ActiveSnipContext {
+        app_name: if app_name.trim().is_empty() {
+            "unknown".to_string()
+        } else {
+            app_name
+        },
+        window_title,
+        context_domain,
+    }
+}
+
+#[tauri::command]
+fn get_active_snip_context() -> ActiveSnipContext {
+    resolve_snip_context()
 }
 
 #[derive(Debug, Serialize)]
@@ -47,6 +124,291 @@ struct OllamaChatResponse {
 #[derive(Debug, Deserialize)]
 struct OllamaMessage {
     content: String,
+}
+
+
+fn build_snip_search_prompt(comment: &str, app_name: &str, window_title: &str) -> String {
+    format!(
+        "You are analyzing a screenshot.
+
+STEP 1: Extract ALL visible text from the image.
+- Prioritize LARGE titles, headers, mission names, locations.
+- Then extract all smaller readable text.
+- Preserve original language.
+- Do NOT summarize.
+
+STEP 2: Determine context.
+- Is this a game, UI, error, or other?
+If a game is detected or app context is known:
+- ALWAYS include the real game/app name in the search query
+- Prefer real game name over executable name
+
+STEP 3: Build a HIGH QUALITY search query.
+STRICT RULES:
+- MUST be based on extracted image text
+- MUST include key phrases from the image
+- DO NOT use user comment as main text
+- DO NOT invent quest names
+- DO NOT use generic queries
+
+USER COMMENT:
+{comment}
+
+APP CONTEXT:
+{app_name}
+
+WINDOW TITLE:
+{window_title}
+
+Return EXACTLY in this format:
+
+INTENT: <quest_help | puzzle_help | location_help | error_help | general_search>
+GAME_OR_APP: <best guess or unknown>
+EXTRACTED_TEXT:
+<all visible text from image>
+
+KEY_TEXT:
+<most important title or mission text>
+
+SEARCH_QUERY:
+<precise query using extracted text>
+
+ALT_QUERY_1:
+<broader query>
+
+ALT_QUERY_2:
+<video/guide query>
+
+ANSWER:
+<short helpful explanation>",
+        comment = comment.trim(),
+        app_name = app_name.trim(),
+        window_title = window_title.trim(),
+    )
+}
+
+fn extract_labeled_value(text: &str, label: &str) -> String {
+    let prefix = format!("{label}:");
+    let lines: Vec<&str> = text.lines().collect();
+
+    for (idx, line) in lines.iter().enumerate() {
+        if line.trim_start().starts_with(&prefix) {
+            let after = line.trim_start()[prefix.len()..].trim();
+            if !after.is_empty() {
+                return after.to_string();
+            }
+
+            let mut collected = Vec::new();
+            for next in lines.iter().skip(idx + 1) {
+                let trimmed = next.trim();
+                if trimmed.is_empty() {
+                    if !collected.is_empty() {
+                        break;
+                    }
+                    continue;
+                }
+
+                let looks_like_next_label = [
+                    "INTENT:",
+                    "GAME_OR_APP:",
+                    "EXTRACTED_TEXT:",
+                    "KEY_TEXT:",
+                    "SEARCH_QUERY:",
+                    "ALT_QUERY_1:",
+                    "ALT_QUERY_2:",
+                    "ANSWER:",
+                ]
+                .iter()
+                .any(|known| trimmed.starts_with(known));
+                if looks_like_next_label {
+                    break;
+                }
+
+                collected.push(trimmed);
+            }
+
+            return collected.join(" ");
+        }
+    }
+
+    String::new()
+}
+
+fn format_search_result(raw: &str) -> String {
+    let intent = extract_labeled_value(raw, "INTENT");
+    let game_or_app = extract_labeled_value(raw, "GAME_OR_APP");
+    let extracted_text = extract_labeled_value(raw, "EXTRACTED_TEXT");
+    let key_text = extract_labeled_value(raw, "KEY_TEXT");
+    let search_query_raw = extract_labeled_value(raw, "SEARCH_QUERY");
+    let search_query = clean_search_query(&search_query_raw);
+    let alt_query_1 = extract_labeled_value(raw, "ALT_QUERY_1");
+    let alt_query_2 = extract_labeled_value(raw, "ALT_QUERY_2");
+    let answer = extract_labeled_value(raw, "ANSWER");
+
+    format!(
+        "INTENT: {intent}\nGAME OR APP: {game_or_app}\nEXTRACTED_TEXT: {extracted_text}\nKEY TEXT: {key_text}\nSEARCH QUERY: {search_query}\nALT QUERY 1: {alt_query_1}\nALT QUERY 2: {alt_query_2}\nANSWER: {answer}",
+        intent = if intent.is_empty() { "unknown" } else { &intent },
+        game_or_app = if game_or_app.is_empty() { "unknown" } else { &game_or_app },
+        extracted_text = if extracted_text.is_empty() { "unknown" } else { &extracted_text },
+        key_text = if key_text.is_empty() { "unknown" } else { &key_text },
+        search_query = if search_query.is_empty() { "unknown" } else { &search_query },
+        alt_query_1 = if alt_query_1.is_empty() { "unknown" } else { &alt_query_1 },
+        alt_query_2 = if alt_query_2.is_empty() { "unknown" } else { &alt_query_2 },
+        answer = if answer.is_empty() { "No concise answer returned." } else { &answer },
+    )
+}
+
+fn build_snip_vision_prompt(mode: &str, comment: &str) -> String {
+    let extra = if comment.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\n\nUSER COMMENT:\n{}", comment.trim())
+    };
+
+    match mode {
+        "ocr" => format!(
+            "Read all visible text from this screenshot exactly as well as possible. \
+Return plain text only. Preserve line breaks where helpful. \
+If some text is unclear, mark it with [unclear].{}",
+            extra
+        ),
+        "translate" => format!(
+            "Look at this screenshot, read the visible text, and translate it into natural German. \
+Do not describe the image unless necessary. \
+If there is very little text, say that clearly.{}",
+            extra
+        ),
+        "search" => format!(
+            "Look at this screenshot and identify the main relevant text, topic, quest, error, or UI issue. \
+Return your answer in exactly this format:\n\
+SEARCH QUERY: <a concise web search query>\n\
+SUMMARY: <1-3 lines explaining what the screenshot likely shows>\n\
+KEY TEXT: <important extracted text>\n\
+If nothing useful is visible, say so clearly.{}",
+            extra
+        ),
+        _ => format!(
+            "Look at this screenshot and explain clearly what it shows. \
+If there is visible text, include the important text in your explanation. \
+If this appears to be a game, app, or UI, explain what is happening and what the user likely needs.{}",
+            extra
+        ),
+    }
+}
+
+async fn ask_ollama_vision_with_model(
+    client: &Client,
+    model: &str,
+    image_b64: &str,
+    prompt: &str,
+) -> Result<OllamaChatResponse, String> {
+    let body = json!({
+        "model": model,
+        "stream": false,
+        "keep_alive": "10m",
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are a desktop screenshot assistant. Be precise, useful, and concise."
+            },
+            {
+                "role": "user",
+                "content": prompt,
+                "images": [image_b64]
+            }
+        ]
+    });
+
+    let response = client
+        .post("http://127.0.0.1:11434/api/chat")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Fehler beim Vision-Aufruf von Ollama: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("Ollama Vision Fehler {}: {}", status, text));
+    }
+
+    response
+        .json::<OllamaChatResponse>()
+        .await
+        .map_err(|e| format!("Vision-Antwort konnte nicht gelesen werden: {}", e))
+}
+
+async fn ask_ollama_vision(prompt: &str, image_path: &str) -> Result<OllamaResult, String> {
+    let bytes = fs::read(image_path)
+        .map_err(|e| format!("Screenshot konnte nicht gelesen werden: {}", e))?;
+
+    let image_b64 = BASE64.encode(bytes);
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("Ollama Client konnte nicht erstellt werden: {}", e))?;
+
+    let preferred_model = default_vision_model();
+
+    let mut candidate_models: Vec<String> = vec![preferred_model];
+
+    for fallback in [
+        "gemma3:4b",
+        "gemma3",
+        "llama3.2-vision",
+        "qwen2.5vl:7b",
+        "qwen2.5vl",
+    ] {
+        if !candidate_models.iter().any(|m| m == fallback) {
+            candidate_models.push(fallback.to_string());
+        }
+    }
+
+    let mut attempted_models: Vec<String> = Vec::new();
+    let mut not_found_errors: Vec<String> = Vec::new();
+
+    for model in candidate_models {
+        attempted_models.push(model.clone());
+
+        match ask_ollama_vision_with_model(&client, &model, &image_b64, prompt).await {
+            Ok(parsed) => {
+                return Ok(OllamaResult {
+                    content: parsed.message.content,
+                    model: parsed.model,
+                });
+            }
+            Err(err) => {
+                let lower = err.to_lowercase();
+
+                let is_missing_model =
+                    lower.contains("not found")
+                        || lower.contains("unknown model")
+                        || lower.contains("model")
+                        || lower.contains("pull");
+
+                if is_missing_model {
+                    not_found_errors.push(format!("{} -> {}", model, err));
+                    continue;
+                }
+
+                return Err(format!(
+                    "Vision-Aufruf mit Modell '{}' ist fehlgeschlagen: {}",
+                    model, err
+                ));
+            }
+        }
+    }
+
+    Err(format!(
+        "Kein passendes Ollama-Vision-Modell gefunden.\n\nVersucht wurden:\n- {}\n\nInstalliere z. B. eines davon:\n- ollama pull gemma3\n- ollama pull llama3.2-vision\n- ollama pull qwen2.5vl:7b\n\nFehler:\n{}",
+        attempted_models.join("\n- "),
+        if not_found_errors.is_empty() {
+            "Keine weiteren Details verfügbar.".to_string()
+        } else {
+            not_found_errors.join("\n")
+        }
+    ))
 }
 
 fn system_prompt() -> &'static str {
@@ -78,16 +440,6 @@ fn build_user_prompt(mode: &str, text: &str, question: Option<&str>) -> String {
         ),
         _ => format!("Help the user with the following text.\n\nTEXT:\n{}", text),
     }
-}
-
-fn is_internal_companion_app(app: &str) -> bool {
-    let lower = app.to_lowercase();
-    lower.contains("companion-v1")
-        || lower.contains("webview")
-        || lower.contains("msedgewebview2")
-        || lower.contains("bubble")
-        || lower.contains("speech")
-        || lower == "unknown"
 }
 
 fn remember_external_app(app: &str) {
@@ -229,6 +581,85 @@ async fn ensure_debug_browser() -> Result<(), String> {
     }
 }
 
+
+
+#[tauri::command]
+async fn capture_snip_region(x: i32, y: i32, width: u32, height: u32) -> Result<String, String> {
+    modules::screen_capture::capture_region_to_file(x, y, width, height)
+}
+
+#[tauri::command]
+async fn snip_file_exists(path: String) -> Result<bool, String> {
+    Ok(modules::screen_capture::file_exists(&path))
+}
+
+#[tauri::command]
+async fn create_snip(comment: Option<String>) -> Result<String, String> {
+    let context = resolve_active_context();
+
+    let image_path = modules::screen_capture::capture_region_to_file(0, 0, 400, 300)?;
+
+    let session = modules::snip_session::SnipSession {
+        image_path: image_path.clone(),
+        comment: comment.unwrap_or_default(),
+        context_app: context.app_name,
+        context_domain: context.domain,
+        window_title: context.window_title,
+    };
+
+    set_snip(session);
+
+    Ok(format!("Snip created: {}", image_path))
+}
+
+#[tauri::command]
+async fn analyze_snip(
+    mode: String,
+    comment: String,
+    image_path: String,
+    app_name: Option<String>,
+    window_title: Option<String>,
+) -> Result<String, String> {
+    println!(
+        "[analyze_snip] mode={} image_path={} app_name={:?} window_title={:?}",
+        mode, image_path, app_name, window_title
+    );
+
+    if image_path.trim().is_empty() {
+        return Err("No snip found".into());
+    }
+
+    if !std::path::Path::new(&image_path).exists() {
+        return Err(format!("Snip file not found: {}", image_path));
+    }
+
+    let mut resolved_app_name = app_name.unwrap_or_else(|| "unknown".to_string());
+    let resolved_window_title = window_title.unwrap_or_default();
+
+    if is_internal_companion_app(&resolved_app_name) {
+        let remembered = get_last_external_app();
+        if is_useful_external_app(&remembered) {
+            resolved_app_name = remembered;
+        } else {
+            resolved_app_name = "unknown".to_string();
+        }
+    }
+
+    let prompt = if mode == "search" {
+        build_snip_search_prompt(&comment, &resolved_app_name, &resolved_window_title)
+    } else {
+        build_snip_vision_prompt(&mode, &comment)
+    };
+
+    let result = ask_ollama_vision(&prompt, &image_path).await?;
+
+    if mode == "search" {
+        return Ok(format_search_result(&result.content));
+    }
+
+    Ok(result.content)
+}
+
 #[tauri::command]
 async fn ping_ollama() -> Result<bool, String> {
     let client = Client::builder()
@@ -257,7 +688,7 @@ async fn ask_ollama(
         return Err("Kein Text vorhanden.".into());
     }
 
-    let chosen_model = model.unwrap_or_else(|| "llama3.1:8b".to_string());
+    let chosen_model = model.unwrap_or_else(default_text_model);
 
     let body = json!({
         "model": chosen_model,
@@ -467,41 +898,20 @@ fn get_cursor_position() -> (i32, i32) {
 
 #[tauri::command]
 fn get_active_app() -> String {
-    unsafe {
-        let hwnd: HWND = GetForegroundWindow();
+    let ctx = resolve_active_context();
+    let app = ctx.app_name.clone();
 
-        if hwnd.0 == 0 {
-            return "unknown".into();
-        }
-
-        let mut pid: u32 = 0;
-        GetWindowThreadProcessId(hwnd, Some(&mut pid));
-
-        if pid == 0 {
-            return "unknown".into();
-        }
-
-        let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid);
-
-        if process.is_err() {
-            return "unknown".into();
-        }
-
-        let process = process.unwrap();
-
-        let mut buffer = [0u16; 260];
-        let len = K32GetModuleFileNameExW(process, None, &mut buffer);
-
-        if len == 0 {
-            return "unknown".into();
-        }
-
-        let path = String::from_utf16_lossy(&buffer[..len as usize]);
-        let app = path.split('\\').last().unwrap_or("unknown").to_string();
-
+    if !is_internal_companion_app(&app) {
         remember_external_app(&app);
-        app
+        return app;
     }
+
+    let last = get_last_external_app();
+    if last != "unknown" {
+        return last;
+    }
+
+    app
 }
 
 fn command_exists_windows(command: &str) -> bool {
@@ -525,31 +935,68 @@ fn spawn_hidden_cmd(args: &[&str]) -> Result<(), String> {
 }
 
 fn open_url_prefer_browser(url: &str, new_window: bool, incognito: bool) -> Result<(), String> {
-    if command_exists_windows("chrome") {
-        let mut args = vec!["/C", "start", "", "chrome"];
-        if incognito {
-            args.push("--incognito");
+    let chrome_paths = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ];
+
+    for chrome_path in chrome_paths {
+        if std::path::Path::new(chrome_path).exists() {
+            let mut cmd = Command::new(chrome_path);
+
+            if incognito {
+                cmd.arg("--incognito");
+            }
+
+            if new_window {
+                cmd.arg("--new-window");
+            }
+
+            cmd.arg(url)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| format!("Could not open Chrome: {e}"))?;
+
+            return Ok(());
         }
-        if new_window {
-            args.push("--new-window");
-        }
-        args.push(url);
-        return spawn_hidden_cmd(&args);
     }
 
-    if command_exists_windows("msedge") {
-        let mut args = vec!["/C", "start", "", "msedge"];
-        if incognito {
-            args.push("-inprivate");
+    let edge_paths = [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ];
+
+    for edge_path in edge_paths {
+        if std::path::Path::new(edge_path).exists() {
+            let mut cmd = Command::new(edge_path);
+
+            if incognito {
+                cmd.arg("-inprivate");
+            }
+
+            if new_window {
+                cmd.arg("--new-window");
+            }
+
+            cmd.arg(url)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| format!("Could not open Edge: {e}"))?;
+
+            return Ok(());
         }
-        if new_window {
-            args.push("--new-window");
-        }
-        args.push(url);
-        return spawn_hidden_cmd(&args);
     }
 
-    spawn_hidden_cmd(&["/C", "start", "", url])
+    Command::new("explorer")
+        .arg(url)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Could not open URL: {e}"))?;
+
+    Ok(())
 }
 
 fn known_web_fallback(target: &str) -> Option<&'static str> {
@@ -559,6 +1006,11 @@ fn known_web_fallback(target: &str) -> Option<&'static str> {
         "youtube" => Some("https://www.youtube.com"),
         "google" => Some("https://www.google.com"),
         "gmail" => Some("https://mail.google.com"),
+        "twitch" => Some("https://www.twitch.tv"),
+        "x" => Some("https://x.com"),
+        "twitter" => Some("https://x.com"),
+        "reddit" => Some("https://www.reddit.com"),
+        "github" => Some("https://github.com"),
         _ => None,
     }
 }
@@ -675,39 +1127,50 @@ fn open_known_local_target(target: &str) -> Result<bool, String> {
 fn open_app_target(target: &str, prefer_browser: bool) -> Result<String, String> {
     let normalized = target.trim().to_lowercase();
 
+    if prefer_browser {
+        if let Some(url) = known_web_fallback(&normalized) {
+            open_url_prefer_browser(url, false, false)?;
+            return Ok(format!("Opening {} in the browser.", target));
+        }
+
+        if normalized.contains('.') || normalized.starts_with("http://") || normalized.starts_with("https://") {
+            let url = if normalized.starts_with("http://") || normalized.starts_with("https://") {
+                normalized.clone()
+            } else {
+                format!("https://{}", normalized)
+            };
+
+            open_url_prefer_browser(&url, false, false)?;
+            return Ok(format!("Opening {} in the browser.", target));
+        }
+    }
+
     if open_known_local_target(&normalized)? {
-        return Ok(format!("Öffne {}.", target));
+        return Ok(format!("Opening {}.", target));
     }
 
     if let Some(game) = modules::steam_games::find_steam_game(&normalized) {
         let uri = modules::steam_games::steam_launch_uri(&game.appid);
         spawn_hidden_cmd(&["/C", "start", "", &uri])?;
-        return Ok(format!("Starte {} über Steam.", game.name));
+        return Ok(format!("Launching {} via Steam.", game.name));
     }
 
     if let Some(app) = modules::windows_discovery::find_app_launch_target(&normalized) {
         spawn_hidden_cmd(&["/C", "start", "", &app.launch_target])?;
-        return Ok(format!("Öffne {}.", app.canonical_name));
+        return Ok(format!("Opening {}.", app.canonical_name));
     }
 
     if command_exists_windows(&normalized) {
         spawn_hidden_cmd(&["/C", "start", "", &normalized])?;
-        return Ok(format!("Öffne {}.", target));
-    }
-
-    if prefer_browser {
-        if let Some(url) = known_web_fallback(&normalized) {
-            open_url_prefer_browser(url, false, false)?;
-            return Ok(format!("Öffne {} im Browser.", target));
-        }
+        return Ok(format!("Opening {}.", target));
     }
 
     if let Some(url) = known_web_fallback(&normalized) {
         open_url_prefer_browser(url, false, false)?;
-        return Ok(format!("{} lokal nicht gefunden. Öffne Web-Version.", target));
+        return Ok(format!("{} was not found locally. Opening web version.", target));
     }
 
-    Err(format!("Ich konnte '{}' nicht öffnen.", target))
+    Err(format!("I couldn't open '{}'.", target))
 }
 
 fn send_keys<F>(f: F) -> Result<String, String>
@@ -851,6 +1314,121 @@ async fn handle_voice_command(input: String) -> Result<String, String> {
     };
 
     match action {
+        CompanionAction::StreamOpenTitle {
+            service,
+            title,
+            autoplay: _,
+        } => {
+            println!("[stream-open] service='{}' title='{}'", service, title);
+
+            if let Some(item) = modules::streaming::find_title(&service, &title) {
+                println!("[stream-open] matched '{}' -> {}", item.title, item.url);
+
+                open_url_prefer_browser(&item.url, false, false)?;
+                modules::session_memory::set_last_suggestion(
+                    &item.title,
+                    &service,
+                    &item.url,
+                    &title,
+                );
+                Ok(format!("Opening {} on {}.", item.title, service))
+            } else {
+                println!("[stream-open] no match found");
+                Ok(format!("I couldn't find '{}' on {}.", title, service))
+            }
+        }
+        CompanionAction::StreamRecommend {
+            service,
+            mood,
+            genre,
+            kind,
+            trending,
+        } => {
+            let query_text = format!(
+                "{} {} {} {} {}",
+                service.clone().unwrap_or_else(|| "netflix".into()),
+                mood.clone().unwrap_or_default(),
+                genre.clone().unwrap_or_default(),
+                kind.clone().unwrap_or_default(),
+                if trending { "trending" } else { "" }
+            );
+
+            let rec = modules::streaming::recommend_title_with_reason(
+                modules::streaming::RecommendationQuery {
+                    service: service.clone(),
+                    mood: mood.clone(),
+                    genre: genre.clone(),
+                    kind: kind.clone(),
+                    trending,
+                    exclude_titles: Vec::new(),
+                }
+            );
+
+            if let Some(rec) = rec {
+                modules::session_memory::set_last_suggestion(
+                    &rec.title.title,
+                    &rec.title.service,
+                    &rec.title.url,
+                    &query_text,
+                );
+
+                Ok(modules::streaming::build_recommendation_reply(&rec))
+            } else {
+                Ok("I couldn't find a strong recommendation yet.".into())
+            }
+        }
+        CompanionAction::StreamCapability { service } => {
+            let svc = service.unwrap_or_else(|| "netflix".into());
+
+            Ok(format!(
+                "I can open specific titles on {}, show trending picks, and recommend movies or series by mood, genre, or type. For example: 'play Black Mirror on {}', 'what's trending on {}', or 'recommend a funny movie on {}'.",
+                svc, svc, svc, svc
+            ))
+        }
+        CompanionAction::StreamOpenLastSuggestion => {
+            let state = modules::session_memory::get_state();
+
+            if !state.last_suggested_url.is_empty() {
+                open_url_prefer_browser(&state.last_suggested_url, false, false)?;
+                return Ok(format!("Opening {}.", state.last_suggested_title));
+            }
+
+            Ok("There is no recent streaming suggestion to open.".into())
+        }
+        CompanionAction::StreamMoreLikeLast => {
+            let state = modules::session_memory::get_state();
+
+            let rec = modules::streaming::best_followup_alternative(
+                if state.last_suggested_service.is_empty() {
+                    "netflix"
+                } else {
+                    &state.last_suggested_service
+                },
+                &[state.last_suggested_title.clone()],
+                if state.last_recommendation_query.is_empty() {
+                    None
+                } else {
+                    Some(state.last_recommendation_query.as_str())
+                },
+            );
+
+            if let Some(item) = rec {
+                modules::session_memory::set_last_suggestion(
+                    &item.title.title,
+                    &item.title.service,
+                    &item.title.url,
+                    &state.last_recommendation_query,
+                );
+
+                Ok(format!(
+                    "Then {} could be another good choice. {}. Want me to open it?",
+                    item.title.title,
+                    item.reason
+                ))
+            } else {
+                Ok("I couldn't find another good option yet.".into())
+            }
+        }
         CompanionAction::VolumeUp => {
             modules::system::change_system_volume(0.08)?;
             Ok("Okay, lauter.".into())
@@ -1041,9 +1619,16 @@ async fn handle_voice_command(input: String) -> Result<String, String> {
             Ok(format!("Tastenkombination in {} gesendet.", target))
         }
         CompanionAction::Confirm => {
+            let state = modules::session_memory::get_state();
+
+            if !state.last_suggested_url.is_empty() {
+                open_url_prefer_browser(&state.last_suggested_url, false, false)?;
+                return Ok(format!("Opening {}.", state.last_suggested_title));
+            }
+
             let target = ensure_external_focus(&active_app)?;
             press_key("enter")?;
-            Ok(format!("Bestätigt in {}.", target))
+            Ok(format!("Confirmed in {}.", target))
         }
         CompanionAction::Clear => {
             let target = ensure_external_focus(&active_app)?;
@@ -1076,19 +1661,20 @@ async fn handle_voice_command(input: String) -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        let _ = app.emit("companion-hotkey", "selection");
+                        let _ = app.emit("companion-toggle", ());
                     }
                 })
                 .build(),
         )
         .setup(|app| {
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
-            app.global_shortcut().register("Ctrl+Alt+Q")?;
+            app.global_shortcut().register("Ctrl+Space")?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1097,6 +1683,7 @@ pub fn run() {
             trigger_copy_shortcut,
             get_cursor_position,
             get_active_app,
+            get_active_snip_context,
             handle_voice_command,
             browser_list_tabs,
             browser_close_tab_by_index,
@@ -1115,6 +1702,10 @@ pub fn run() {
             browser_click_best_match,
             youtube_search_and_play,
             youtube_play_title,
+            create_snip,
+            analyze_snip,
+            capture_snip_region,
+            snip_file_exists,
             modules::system::get_system_volume,
             modules::system::set_system_volume,
             modules::system::change_system_volume,

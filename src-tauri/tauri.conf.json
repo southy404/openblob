@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "companion-v1",
+  "productName": "openblob",
   "version": "0.1.0",
   "identifier": "com.davide.companionv1",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "companion-v1",
+        "title": "openblob",
         "width": 260,
         "height": 260,
         "minWidth": 230,
@@ -27,10 +27,27 @@
         "shadow": false,
         "resizable": false,
         "visible": true
+      },
+      {
+        "label": "snip-panel",
+        "title": "Snip Panel",
+        "url": "snip-panel.html",
+        "transparent": false,
+        "decorations": true,
+        "alwaysOnTop": true,
+        "resizable": true,
+        "width": 520,
+        "height": 760,
+        "visible": false
       }
     ],
     "security": {
-      "capabilities": ["default"]
+      "capabilities": ["default"],
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$TEMP/**"]
+      }
     }
   },
   "bundle": {

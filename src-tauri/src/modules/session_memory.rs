@@ -9,7 +9,31 @@ pub struct SessionState {
     pub last_command: String,
     pub last_search_query: String,
     pub last_clicked_label: String,
+
+    pub last_suggested_title: String,
+    pub last_suggested_service: String,
+    pub last_suggested_url: String,
+    pub last_recommendation_query: String,
 }
+
+pub fn set_last_suggestion(title: &str, service: &str, url: &str, query: &str) {
+    update(|s| {
+        s.last_suggested_title = title.to_string();
+        s.last_suggested_service = service.to_string();
+        s.last_suggested_url = url.to_string();
+        s.last_recommendation_query = query.to_string();
+    });
+}
+
+pub fn clear_last_suggestion() {
+    update(|s| {
+        s.last_suggested_title.clear();
+        s.last_suggested_service.clear();
+        s.last_suggested_url.clear();
+        s.last_recommendation_query.clear();
+    });
+}
+
 
 static SESSION: OnceLock<Mutex<SessionState>> = OnceLock::new();
 

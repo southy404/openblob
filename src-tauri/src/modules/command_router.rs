@@ -18,6 +18,24 @@ pub enum CompanionAction {
     YouTubeSearch { query: String },
     YouTubePlayTitle { title: String },
 
+    StreamOpenTitle {
+        service: String,
+        title: String,
+        autoplay: bool,
+    },
+    StreamRecommend {
+        service: Option<String>,
+        mood: Option<String>,
+        genre: Option<String>,
+        kind: Option<String>,
+        trending: bool,
+    },
+    StreamOpenLastSuggestion,
+    StreamMoreLikeLast,
+    StreamCapability {
+        service: Option<String>,
+    },
+
     OpenApp { target: String, prefer_browser: bool },
 
     Save,
@@ -136,7 +154,15 @@ const BROWSER_WORDS: &[&str] = &["browser", "web", "website", "chrome", "edge", 
 const GOOGLE_WORDS: &[&str] = &["google", "googel", "gogle"];
 const YOUTUBE_WORDS: &[&str] = &["youtube", "youtub", "jutube", "jutub", "yt"];
 const WEATHER_WORDS: &[&str] = &[
-    "wetter", "weather", "temperatur", "temperature", "regen", "rain", "sun", "sonne", "forecast",
+    "wetter",
+    "weather",
+    "temperatur",
+    "temperature",
+    "regen",
+    "rain",
+    "sun",
+    "sonne",
+    "forecast",
 ];
 const EXPLAIN_WORDS: &[&str] = &["erklaer", "erklaere", "explain", "meaning", "bedeutet", "mean"];
 const VOLUME_UP_WORDS: &[&str] = &["lauter", "louder", "increase", "up", "hoch"];
@@ -179,6 +205,9 @@ const KNOWN_TARGETS: &[(&str, &[&str])] = &[
     ("google", &["google", "googel", "gogle"]),
     ("chrome", &["chrome", "chrom"]),
     ("edge", &["edge", "msedge", "microsoftedge"]),
+    ("twitch", &["twitch", "twuicth", "twich", "twtich"]),
+    ("github", &["github", "git hub"]),
+    ("reddit", &["reddit", "redit"]),
     ("paint", &["paint", "mspaint"]),
     ("notepad", &["notepad", "editor", "texteditor"]),
     ("explorer", &["explorer", "fileexplorer", "dateiexplorer"]),
@@ -186,6 +215,44 @@ const KNOWN_TARGETS: &[(&str, &[&str])] = &[
     ("taskmgr", &["taskmanager", "taskmgr"]),
     ("settings", &["settings", "einstellungen"]),
     ("gmail", &["gmail", "googlemail", "mail"]),
+    ("steam", &["steam", "steem", "steeeam", "stim"]),
+    ("fl studio", &["fl", "flstudio", "fl studio"]),
+];
+
+const STREAMING_SERVICE_ALIASES: &[(&str, &[&str])] = &[
+    ("netflix", &["netflix", "netflx", "netfliks"]),
+    ("youtube", &["youtube", "yt", "youtub", "jutube"]),
+    ("prime", &["prime", "prime video", "amazon prime"]),
+    ("disney", &["disney", "disney plus", "disneyplus"]),
+    ("twitch", &["twitch", "twuicth", "twich"]),
+    ("spotify", &["spotify", "spotfy"]),
+];
+
+const STREAMING_FOLLOWUP_CONFIRM: &[&str] = &[
+    "yes",
+    "yeah",
+    "yep",
+    "ja",
+    "mach",
+    "do it",
+    "open it",
+    "launch it",
+    "play it",
+    "open that",
+    "launch that",
+    "yes open it",
+    "yes launch it",
+    "yes play it",
+];
+
+const STREAMING_MORE_WORDS: &[&str] = &[
+    "something else",
+    "another one",
+    "more like this",
+    "more like that",
+    "was anderes",
+    "noch was",
+    "gib mir was anderes",
 ];
 
 fn normalize(input: &str) -> String {
@@ -238,6 +305,10 @@ fn fuzzy_count(tokens: &[&str], words: &[&str], threshold: f32) -> usize {
     tokens.iter().filter(|t| best_similarity(t, words) >= threshold).count()
 }
 
+fn contains_any_phrase(normalized: &str, phrases: &[&str]) -> bool {
+    phrases.iter().any(|p| normalized.contains(p))
+}
+
 fn extract_percent(normalized: &str) -> Option<u8> {
     for token in normalized.split_whitespace() {
         let cleaned = token.replace('%', "").replace("prozent", "").replace("percent", "");
@@ -264,6 +335,22 @@ fn detect_known_target(tokens: &[&str]) -> Option<String> {
     }
 
     best.map(|(name, _)| name.to_string())
+}
+
+fn detect_streaming_service(normalized: &str, toks: &[&str]) -> Option<String> {
+    for (canonical, aliases) in STREAMING_SERVICE_ALIASES {
+        if aliases.iter().any(|a| normalized.contains(a)) {
+            return Some((*canonical).to_string());
+        }
+
+        for token in toks {
+            if best_similarity(token, aliases) >= 0.88 {
+                return Some((*canonical).to_string());
+            }
+        }
+    }
+
+    None
 }
 
 fn extract_after_prefixes(normalized: &str, prefixes: &[&str]) -> Option<String> {
@@ -416,6 +503,212 @@ fn extract_after_command(normalized: &str, commands: &[&str]) -> Option<String> 
     None
 }
 
+fn extract_stream_title(normalized: &str, service: &str) -> Option<String> {
+    let mut text = normalized.to_string();
+
+    for prefix in [
+        "play ",
+        "spiele ",
+        "abspielen ",
+        "open ",
+        "oeffne ",
+        "launch ",
+        "run ",
+        "starte ",
+        "start ",
+    ] {
+        if let Some(rest) = text.strip_prefix(prefix) {
+            text = rest.trim().to_string();
+            break;
+        }
+    }
+
+    let patterns = [
+        format!(" on {}", service),
+        format!(" auf {}", service),
+        format!(" in {}", service),
+        format!(" im {}", service),
+    ];
+
+    for p in patterns {
+        if let Some(idx) = text.find(&p) {
+            text = text[..idx].trim().to_string();
+        }
+    }
+
+    let cleaned = text
+        .replace(" on netflix", "")
+        .replace(" auf netflix", "")
+        .replace(" in netflix", "")
+        .replace(" on youtube", "")
+        .replace(" auf youtube", "")
+        .replace(" on prime", "")
+        .replace(" auf prime", "")
+        .replace(" on disney", "")
+        .replace(" auf disney", "")
+        .trim()
+        .to_string();
+
+    if cleaned.is_empty() { None } else { Some(cleaned) }
+}
+
+fn parse_media_command(normalized: &str) -> Option<CompanionAction> {
+    let toks = tokens(normalized);
+    let service = detect_streaming_service(normalized, &toks);
+
+    if normalized == "yes"
+    || normalized == "ja"
+    || normalized == "yeah"
+    || normalized == "yep"
+    || normalized == "do it"
+    || normalized == "open it"
+    || normalized == "launch it"
+    || normalized == "play it"
+    || normalized == "open that"
+    || normalized == "launch that"
+    || normalized == "yes open it"
+    || normalized == "yes launch it"
+    || normalized == "yes play it"
+{
+    return Some(CompanionAction::StreamOpenLastSuggestion);
+}
+
+    if contains_any_phrase(normalized, STREAMING_MORE_WORDS) {
+        return Some(CompanionAction::StreamMoreLikeLast);
+    }
+
+    if normalized == "yes"
+        || normalized == "ja"
+        || normalized == "yeah"
+        || normalized == "yep"
+        || normalized == "mach"
+    {
+        return Some(CompanionAction::StreamOpenLastSuggestion);
+    }
+
+    if normalized == "no"
+        || normalized == "nein"
+        || normalized == "cancel"
+        || normalized == "stop"
+    {
+        return Some(CompanionAction::Clear);
+    }
+
+    if normalized.contains("what can you play on")
+        || normalized.contains("what can you recommend on")
+        || normalized.contains("what can you do on")
+        || normalized.contains("was kannst du auf")
+        || normalized.contains("was kannst du auf netflix")
+        || normalized.contains("what can you play on netflix")
+    {
+        return Some(CompanionAction::StreamCapability { service });
+    }
+
+    let trending = normalized.contains("trending")
+        || normalized.contains("trend")
+        || normalized.contains("popular on")
+        || normalized.contains("top on")
+        || normalized.contains("was ist im trend")
+        || normalized.contains("was ist gerade im trend")
+        || normalized.contains("was ist beliebt");
+
+    if trending {
+        return Some(CompanionAction::StreamRecommend {
+            service,
+            mood: None,
+            genre: None,
+            kind: None,
+            trending: true,
+        });
+    }
+
+    let mood = if contains_any_phrase(normalized, &["funny", "lustig", "witzig", "comedy"]) {
+        Some("funny".to_string())
+    } else if contains_any_phrase(normalized, &["dark", "duester", "dunkel"]) {
+        Some("dark".to_string())
+    } else if contains_any_phrase(normalized, &["smart", "clever", "klug", "mind bending"]) {
+        Some("smart".to_string())
+    } else if contains_any_phrase(normalized, &["sad", "emotional", "traurig"]) {
+        Some("emotional".to_string())
+    } else if contains_any_phrase(normalized, &["action"]) {
+        Some("action".to_string())
+    } else if contains_any_phrase(normalized, &["thriller"]) {
+        Some("thriller".to_string())
+    } else if contains_any_phrase(normalized, &["sci fi", "scifi", "sci-fi", "science fiction"]) {
+        Some("scifi".to_string())
+    } else {
+        None
+    };
+
+    let genre = if contains_any_phrase(normalized, &["comedy"]) {
+        Some("comedy".to_string())
+    } else if contains_any_phrase(normalized, &["animation", "animated"]) {
+        Some("animation".to_string())
+    } else if contains_any_phrase(normalized, &["crime", "krimi"]) {
+        Some("crime".to_string())
+    } else if contains_any_phrase(normalized, &["drama"]) {
+        Some("drama".to_string())
+    } else if contains_any_phrase(normalized, &["fantasy"]) {
+        Some("fantasy".to_string())
+    } else if contains_any_phrase(normalized, &["documentary", "doku"]) {
+        Some("documentary".to_string())
+    } else if contains_any_phrase(normalized, &["mystery"]) {
+        Some("mystery".to_string())
+    } else if contains_any_phrase(normalized, &["thriller"]) {
+        Some("thriller".to_string())
+    } else if contains_any_phrase(normalized, &["sci fi", "scifi", "sci-fi"]) {
+        Some("sci-fi".to_string())
+    } else {
+        None
+    };
+
+    let kind = if contains_any_phrase(normalized, &["movie", "film"]) {
+        Some("movie".to_string())
+    } else if contains_any_phrase(normalized, &["series", "serie", "show"]) {
+        Some("series".to_string())
+    } else {
+        None
+    };
+
+    let sounds_like_recommendation =
+        normalized.contains("recommend")
+            || normalized.contains("empfiehl")
+            || normalized.contains("schlag")
+            || normalized.contains("i want")
+            || normalized.contains("ich will")
+            || normalized.contains("i am in the mood")
+            || normalized.contains("ich habe lust")
+            || normalized.contains("give me")
+            || normalized.contains("gib mir");
+
+    if sounds_like_recommendation || mood.is_some() || genre.is_some() || kind.is_some() {
+        return Some(CompanionAction::StreamRecommend {
+            service,
+            mood,
+            genre,
+            kind,
+            trending: false,
+        });
+    }
+
+    let play_or_open_media =
+        contains_any_phrase(normalized, &["play ", "spiele ", "open ", "oeffne ", "launch ", "starte ", "start "])
+            && service.is_some();
+
+    if play_or_open_media {
+        let service_name = service.clone().unwrap_or_else(|| "netflix".to_string());
+        if let Some(title) = extract_stream_title(normalized, &service_name) {
+            return Some(CompanionAction::StreamOpenTitle {
+                service: service_name,
+                title,
+                autoplay: true,
+            });
+        }
+    }
+
+    None
+}
+
 fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
     if extract_percent(normalized).is_some() && fuzzy_has_any(toks, VOLUME_WORDS, 0.82) {
         return IntentKind::SetVolume;
@@ -456,6 +749,7 @@ fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
         IntentScore { kind: IntentKind::NewWindow, score: score(toks, WINDOW_NEW_WORDS, 0.82, 2.3) + if normalized.contains("new window") || normalized.contains("neues fenster") { 0.8 } else { 0.0 } },
         IntentScore { kind: IntentKind::Incognito, score: score(toks, INCOGNITO_WORDS, 0.82, 2.3) },
         IntentScore { kind: IntentKind::Reload, score: score(toks, RELOAD_WORDS, 0.82, 2.0) },
+        IntentScore { kind: IntentKind::BrowserOpenUrl, score: if normalized.contains("http") || normalized.contains("www.") || normalized.contains(".com") { 2.1 } else { 0.0 } },
         IntentScore { kind: IntentKind::BrowserClickLinkByText, score: score(toks, CLICK_WORDS, 0.82, 2.2) },
         IntentScore { kind: IntentKind::BrowserClickFirstResult, score: if normalized.contains("erstes ergebnis") || normalized.contains("first result") { 2.5 } else { 0.0 } },
         IntentScore { kind: IntentKind::BrowserClickNthResult, score: if normalized.contains("ergebnis") && extract_number(toks).is_some() { 2.4 } else { 0.0 } },
@@ -475,18 +769,30 @@ fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
     ];
 
     scores.sort_by(|a, b| b.score.total_cmp(&a.score));
-    let best = scores.first().map(|s| (s.kind, s.score)).unwrap_or((IntentKind::None, 0.0));
+    let best = scores
+        .first()
+        .map(|s| (s.kind, s.score))
+        .unwrap_or((IntentKind::None, 0.0));
 
-    if best.1 >= 1.8 { best.0 } else { IntentKind::None }
+    if best.1 >= 1.8 {
+        best.0
+    } else {
+        IntentKind::None
+    }
 }
 
 pub fn parse_voice_command(input: &str) -> CompanionAction {
     let normalized = normalize(input);
-    let toks = tokens(&normalized);
 
     if normalized.is_empty() {
         return CompanionAction::None;
     }
+
+    if let Some(action) = parse_media_command(&normalized) {
+        return action;
+    }
+
+    let toks = tokens(&normalized);
 
     match best_intent(&normalized, &toks) {
         IntentKind::SetVolume => extract_percent(&normalized)
@@ -500,14 +806,21 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
         IntentKind::MediaPlayPause => CompanionAction::MediaPlayPause,
         IntentKind::MediaNext => CompanionAction::MediaNext,
         IntentKind::MediaPrev => CompanionAction::MediaPrev,
-        
 
         IntentKind::GoogleSearch => CompanionAction::GoogleSearch {
-            query: extract_search_query(&normalized, &toks, &["google", "googel", "gogle", "search", "suche", "such", "find"]),
+            query: extract_search_query(
+                &normalized,
+                &toks,
+                &["google", "googel", "gogle", "search", "suche", "such", "find"],
+            ),
         },
 
         IntentKind::YouTubeSearch => CompanionAction::YouTubeSearch {
-            query: extract_search_query(&normalized, &toks, &["youtube", "youtub", "jutube", "jutub", "yt", "search", "suche", "such", "find"]),
+            query: extract_search_query(
+                &normalized,
+                &toks,
+                &["youtube", "youtub", "jutube", "jutub", "yt", "search", "suche", "such", "find"],
+            ),
         },
 
         IntentKind::YouTubePlayTitle => {
@@ -591,6 +904,7 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
         }
 
         IntentKind::BrowserContext => CompanionAction::BrowserContext,
+
         IntentKind::BrowserClickLinkByText => {
             let text = extract_quoted_text(input).unwrap_or_else(|| {
                 normalized
@@ -619,7 +933,7 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
             index: extract_number(&toks).unwrap_or(1).saturating_sub(1),
         },
 
-               IntentKind::BrowserOpenUrl => {
+        IntentKind::BrowserOpenUrl => {
             let raw = extract_quoted_text(input).unwrap_or_else(|| {
                 normalized
                     .replace("oeffne ", "")
@@ -648,7 +962,7 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
                     incognito: wants_incognito(&normalized, &toks),
                 }
             }
-        } 
+        }
 
         IntentKind::YouTubeNextVideo => CompanionAction::YouTubeNextVideo,
         IntentKind::YouTubeSeekForward => CompanionAction::YouTubeSeekForward,

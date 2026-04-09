@@ -5,6 +5,9 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { openSnipOverlay } from "./openSnipOverlay";
+import { ensureSnipPanelWindow } from "./openSnipPanel";
+import { ensureBubbleWindow } from "./openBubbleWindow";
 
 type ContextPayload = {
   text: string;
@@ -12,9 +15,22 @@ type ContextPayload = {
   autoRun?: boolean;
 };
 
+type SnipCreatedPayload = {
+  path: string;
+  rect?: { x: number; y: number; width: number; height: number };
+};
+
 type BlobMood = "idle" | "happy" | "thinking" | "sleepy" | "music" | "love";
 
-type PresenceState = "visible" | "sleeping" | "hidden" | "entering" | "exiting";
+type PresenceState =
+  | "visible"
+  | "sleeping"
+  | "hidden"
+  | "entering"
+  | "exiting"
+  | "hidden_peek";
+
+type HideGameState = "idle" | "seeking" | "found";
 
 type BlobConfig = {
   cols: [string, string, string];
@@ -264,6 +280,9 @@ function BlobAvatar({
   state,
   dragging,
   presenceState,
+  hideGameState,
+  peekVisible,
+  foundBubbleText,
   onMouseDown,
   onPet,
   onContextMenu,
@@ -273,6 +292,9 @@ function BlobAvatar({
   state: BlobMood;
   dragging: boolean;
   presenceState: PresenceState;
+  hideGameState: HideGameState;
+  peekVisible: boolean;
+  foundBubbleText: string;
   onMouseDown: (event: React.MouseEvent<HTMLCanvasElement>) => void;
   onPet: () => void;
   onContextMenu: (event: React.MouseEvent<HTMLCanvasElement>) => void;
@@ -336,6 +358,59 @@ function BlobAvatar({
     ];
 
     ctx.clearRect(0, 0, W, H);
+
+    if (presenceState === "hidden_peek" && hideGameState === "seeking") {
+      if (!peekVisible) {
+        return;
+      }
+
+      const eyeY = H / 2 - 6;
+      const leftX = W / 2 - 16;
+      const rightX = W / 2 + 16;
+
+      ctx.save();
+
+      const glow = ctx.createRadialGradient(W / 2, eyeY, 1, W / 2, eyeY, 28);
+      glow.addColorStop(0, "rgba(160,210,255,0.18)");
+      glow.addColorStop(1, "rgba(160,210,255,0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(W / 2, eyeY, 28, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(leftX, eyeY, 7, 0, Math.PI * 2);
+      ctx.fillStyle = "#ffffff";
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(leftX, eyeY, 3, 0, Math.PI * 2);
+      ctx.fillStyle = "#243042";
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(leftX - 1.2, eyeY - 1.2, 1.1, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(rightX, eyeY, 7, 0, Math.PI * 2);
+      ctx.fillStyle = "#ffffff";
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(rightX, eyeY, 3, 0, Math.PI * 2);
+      ctx.fillStyle = "#243042";
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(rightX - 1.2, eyeY - 1.2, 1.1, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.fill();
+
+      ctx.restore();
+      return;
+    }
 
     const stiffness = dragging ? 1 : 0;
     const blink = blinkTimer < 0.15 ? 0.12 : 1;
@@ -561,9 +636,68 @@ function BlobAvatar({
         ctx.restore();
       }
     }
+    if (foundBubbleText) {
+      const bx = CX + 10;
+      const by = CY - 78;
 
+      ctx.save();
+      ctx.translate(bx, by + Math.sin(time * 2) * 1.5);
+
+      const text = foundBubbleText;
+      ctx.font = "bold 12px sans-serif";
+      const metrics = ctx.measureText(text);
+      const padX = 12;
+      const rectW = metrics.width + padX * 2;
+      const rectH = 28;
+      const rectX = -rectW / 2;
+      const rectY = -rectH / 2;
+      const r = 14;
+
+      ctx.beginPath();
+      ctx.moveTo(rectX + r, rectY);
+      ctx.lineTo(rectX + rectW - r, rectY);
+      ctx.quadraticCurveTo(rectX + rectW, rectY, rectX + rectW, rectY + r);
+      ctx.lineTo(rectX + rectW, rectY + rectH - r);
+      ctx.quadraticCurveTo(
+        rectX + rectW,
+        rectY + rectH,
+        rectX + rectW - r,
+        rectY + rectH
+      );
+      ctx.lineTo(rectX + r, rectY + rectH);
+      ctx.quadraticCurveTo(rectX, rectY + rectH, rectX, rectY + rectH - r);
+      ctx.lineTo(rectX, rectY + r);
+      ctx.quadraticCurveTo(rectX, rectY, rectX + r, rectY);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(255,255,255,0.94)";
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(-8, rectH / 2 - 2);
+      ctx.lineTo(-13, rectH / 2 + 8);
+      ctx.lineTo(-1, rectH / 2 - 2);
+      ctx.fill();
+
+      ctx.fillStyle = "#526684";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, 0, 1);
+
+      ctx.restore();
+    }
     ctx.restore();
-  }, [time, blinkTimer, irisOffset, targetCfg, dragging, presenceState, state]);
+  }, [
+    time,
+    blinkTimer,
+    irisOffset,
+    targetCfg,
+    dragging,
+    presenceState,
+    state,
+    hideGameState,
+    peekVisible,
+    foundBubbleText,
+  ]);
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     onActivity();
@@ -604,12 +738,12 @@ function BlobAvatar({
     lastPetXRef.current = x;
     lastPetTimeRef.current = now;
   };
-
+  const canvasSize = hideGameState === "seeking" ? 120 : 250;
   return (
     <canvas
       ref={canvasRef}
-      width={250}
-      height={250}
+      width={canvasSize}
+      height={canvasSize}
       onMouseDown={onMouseDown}
       onMouseMove={handleMouseMove}
       onMouseLeave={() => {
@@ -619,33 +753,14 @@ function BlobAvatar({
       onContextMenu={onContextMenu}
       style={{
         display: "block",
-        width: 250,
-        height: 250,
+        width: canvasSize,
+        height: canvasSize,
         background: "transparent",
         cursor: dragging ? "grabbing" : "grab",
         pointerEvents: "auto",
       }}
     />
   );
-}
-
-async function ensureBubbleWindow() {
-  const existing = await WebviewWindow.getByLabel("bubble");
-  if (existing) return existing;
-
-  return new WebviewWindow("bubble", {
-    url: "bubble.html",
-    title: "Companion Bubble",
-    transparent: true,
-    decorations: false,
-    alwaysOnTop: true,
-    shadow: false,
-    skipTaskbar: true,
-    resizable: false,
-    width: 520,
-    height: 620,
-    visible: false,
-  });
 }
 
 async function ensureSpeechWindow() {
@@ -674,9 +789,7 @@ async function positionBubbleWindow() {
   const pos = await main.outerPosition();
   const size = await main.outerSize();
 
-  await bubble.setPosition(
-    new LogicalPosition(pos.x + size.width - 8, pos.y + 8)
-  );
+  await bubble.setPosition(new LogicalPosition(380, 720));
 }
 
 async function positionSpeechWindow() {
@@ -693,8 +806,8 @@ async function positionSpeechWindow() {
 
 async function showBubbleWindow() {
   const bubble = await ensureBubbleWindow();
-  await positionBubbleWindow();
   await bubble.show();
+  await bubble.setFocus();
 }
 
 async function showSpeechWindow(text: string) {
@@ -710,8 +823,8 @@ async function sendContextToBubble(payload: ContextPayload) {
 }
 
 function clampContextMenuPosition(x: number, y: number) {
-  const menuWidth = 226;
-  const menuHeight = 430;
+  const menuWidth = 236;
+  const menuHeight = 520;
   const padding = 12;
 
   const maxX = window.innerWidth - menuWidth - padding;
@@ -724,9 +837,9 @@ function clampContextMenuPosition(x: number, y: number) {
 }
 
 export default function App() {
-  const [copiedText, setCopiedText] = useState("Noch nichts kopiert");
+  const [copiedText, setCopiedText] = useState("Nothing copied yet");
   const [activeApp, setActiveApp] = useState("unknown");
-  const [hint, setHint] = useState("Rechtsklick auf den Blob für Optionen");
+  const [hint, setHint] = useState("Right-click the blob for options");
   const [irisOffset, setIrisOffset] = useState({ x: 0, y: 0 });
   const [blobMood, setBlobMood] = useState<BlobMood>("idle");
   const [dragging, setDragging] = useState(false);
@@ -737,12 +850,23 @@ export default function App() {
     x: 0,
     y: 0,
   });
+  const [hideGameState, setHideGameState] = useState<HideGameState>("idle");
+  const [peekVisible, setPeekVisible] = useState(false);
+  const [hideSpot, setHideSpot] = useState({ x: 20, y: 20 });
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const speechTimerRef = useRef<number | null>(null);
   const blobTimerRef = useRef<number | null>(null);
   const sleepTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
+  const hideBlinkTimerRef = useRef<number | null>(null);
+  const hideEndTimerRef = useRef<number | null>(null);
+  const [foundBubbleText, setFoundBubbleText] = useState("");
+  const foundBubbleTimerRef = useRef<number | null>(null);
+  const lastWindowPosRef = useRef<LogicalPosition | null>(null);
+  const lastWindowSizeRef = useRef<{ width: number; height: number } | null>(
+    null
+  );
 
   const pulseBlob = (
     next: BlobMood,
@@ -750,12 +874,169 @@ export default function App() {
     fallback: BlobMood = "idle"
   ) => {
     setBlobMood(next);
+    if (foundBubbleTimerRef.current)
+      window.clearTimeout(foundBubbleTimerRef.current);
     if (blobTimerRef.current) {
       window.clearTimeout(blobTimerRef.current);
     }
     blobTimerRef.current = window.setTimeout(() => {
       setBlobMood(fallback);
     }, ms);
+  };
+
+  const stopHideAndSeek = () => {
+    if (hideBlinkTimerRef.current) {
+      window.clearInterval(hideBlinkTimerRef.current);
+      hideBlinkTimerRef.current = null;
+    }
+
+    if (hideEndTimerRef.current) {
+      window.clearTimeout(hideEndTimerRef.current);
+      hideEndTimerRef.current = null;
+    }
+
+    setPeekVisible(false);
+  };
+
+  const getRandomHideSpot = () => {
+    const avatarSize = 82;
+    const margin = 16;
+
+    const safeWidth = Math.max(avatarSize + margin * 2, window.innerWidth);
+    const safeHeight = Math.max(avatarSize + margin * 2, window.innerHeight);
+
+    const x = Math.floor(
+      margin + Math.random() * (safeWidth - avatarSize - margin * 2)
+    );
+
+    const y = Math.floor(
+      margin + Math.random() * (safeHeight - avatarSize - margin * 2)
+    );
+
+    return { x, y };
+  };
+
+  const moveWindowToHideSpot = async () => {
+    const win = getCurrentWindow();
+
+    const currentPos = await win.outerPosition();
+    const currentSize = await win.outerSize();
+
+    lastWindowPosRef.current = new LogicalPosition(currentPos.x, currentPos.y);
+    lastWindowSizeRef.current = {
+      width: currentSize.width,
+      height: currentSize.height,
+    };
+
+    const hideWindowWidth = 120;
+    const hideWindowHeight = 120;
+    const margin = 8;
+
+    const screenW = window.screen.availWidth || window.screen.width;
+    const screenH = window.screen.availHeight || window.screen.height;
+
+    const maxX = Math.max(margin, screenW - hideWindowWidth - margin);
+    const maxY = Math.max(margin, screenH - hideWindowHeight - margin);
+
+    const randomX = Math.floor(margin + Math.random() * (maxX - margin));
+    const randomY = Math.floor(margin + Math.random() * (maxY - margin));
+
+    await win.setSize({
+      type: "Logical",
+      width: hideWindowWidth,
+      height: hideWindowHeight,
+    });
+
+    await win.setPosition(new LogicalPosition(randomX, randomY));
+  };
+
+  const restoreMainWindowPosition = async () => {
+    const win = getCurrentWindow();
+
+    const previousSize = lastWindowSizeRef.current;
+    const previousPos = lastWindowPosRef.current;
+
+    await win.setSize({
+      type: "Logical",
+      width: previousSize?.width ?? 260,
+      height: previousSize?.height ?? 260,
+    });
+
+    await win.setPosition(
+      previousPos ??
+        new LogicalPosition(
+          window.screen.availWidth - 300,
+          window.screen.availHeight - 320
+        )
+    );
+  };
+
+  const restoreMainWindowSizeAtCurrentSpot = async () => {
+    const win = getCurrentWindow();
+    const currentPos = await win.outerPosition();
+    const currentSize = await win.outerSize();
+
+    const targetWidth = lastWindowSizeRef.current?.width ?? 260;
+    const targetHeight = lastWindowSizeRef.current?.height ?? 260;
+
+    const centerX = currentPos.x + currentSize.width / 2;
+    const centerY = currentPos.y + currentSize.height / 2;
+
+    const nextX = Math.round(centerX - targetWidth / 2);
+    const nextY = Math.round(centerY - targetHeight / 2);
+
+    await win.setSize({
+      type: "Logical",
+      width: targetWidth,
+      height: targetHeight,
+    });
+
+    await win.setPosition(new LogicalPosition(nextX, nextY));
+  };
+
+  const startHideAndSeek = () => {
+    stopHideAndSeek();
+    closeMenu();
+
+    setHideGameState("seeking");
+    setPresenceState("hidden_peek");
+    setPeekVisible(false);
+    setHint("Find me...");
+
+    void moveWindowToHideSpot().catch(console.error);
+
+    pulseBlob("thinking", 1200, "idle");
+
+    hideBlinkTimerRef.current = window.setInterval(() => {
+      setPeekVisible(true);
+      window.setTimeout(() => setPeekVisible(false), 220);
+    }, 1800);
+
+    hideEndTimerRef.current = window.setTimeout(() => {
+      stopHideAndSeek();
+      setHideGameState("idle");
+      setPresenceState("entering");
+      setHint("You did not find me in time.");
+      pulseBlob("sleepy", 1200, "idle");
+
+      void restoreMainWindowPosition().catch(console.error);
+
+      window.setTimeout(() => {
+        setPresenceState("visible");
+      }, 420);
+    }, 45000);
+  };
+
+  const isHideAndSeekCommand = (input: string) => {
+    const q = input.trim().toLowerCase();
+
+    return (
+      q.includes("hide and seek") ||
+      q.includes("lets play hide and seek") ||
+      q.includes("let's play hide and seek") ||
+      q.includes("lass uns verstecken spielen") ||
+      q.includes("verstecken spielen")
+    );
   };
 
   const markActivity = () => {
@@ -822,6 +1103,17 @@ export default function App() {
     pulseBlob("thinking", 1000);
   };
 
+  const openSnip = async () => {
+    markActivity();
+    closeMenu();
+    setHint("Snip mode opened");
+    pulseBlob("thinking", 1000);
+    await openSnipOverlay().catch((error) => {
+      console.error(error);
+      setHint(`Snip overlay error: ${String(error)}`);
+    });
+  };
+
   useEffect(() => {
     markActivity();
 
@@ -830,7 +1122,14 @@ export default function App() {
       if (blobTimerRef.current) window.clearTimeout(blobTimerRef.current);
       if (sleepTimerRef.current) window.clearTimeout(sleepTimerRef.current);
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+      if (hideBlinkTimerRef.current)
+        window.clearInterval(hideBlinkTimerRef.current);
+      if (hideEndTimerRef.current) window.clearTimeout(hideEndTimerRef.current);
     };
+  }, []);
+
+  useEffect(() => {
+    ensureBubbleWindow().catch(console.error);
   }, []);
 
   useEffect(() => {
@@ -898,11 +1197,6 @@ export default function App() {
     const setupMoveSync = async () => {
       const win = getCurrentWindow();
       unlistenMove = await win.onMoved(async () => {
-        const bubble = await WebviewWindow.getByLabel("bubble");
-        if (bubble) {
-          await positionBubbleWindow().catch(console.error);
-        }
-
         const speech = await WebviewWindow.getByLabel("speech");
         if (speech) {
           await positionSpeechWindow().catch(console.error);
@@ -918,56 +1212,111 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    let unlistenHotkey: null | (() => void) = null;
+    let unlistenToggle: null | (() => void) = null;
+    let unlistenSnipHotkey: null | (() => void) = null;
 
     const setupHotkeyListener = async () => {
-      unlistenHotkey = await listen<string>("companion-hotkey", async () => {
+      unlistenToggle = await listen("companion-toggle", async () => {
         try {
           markActivity();
-          pulseBlob("thinking", 1100);
+          pulseBlob("thinking", 900);
 
-          const previous = (await readText().catch(() => "")) || "";
-          await invoke("trigger_copy_shortcut");
-          await new Promise((resolve) => setTimeout(resolve, 220));
-          const selected = (await readText().catch(() => "")) || "";
+          const bubble = await ensureBubbleWindow();
+          const isVisible = await bubble.isVisible();
 
-          if (selected.trim()) {
-            const trimmed = selected.slice(0, 1500);
-            setCopiedText(trimmed);
-            setHint("Markierter Text erkannt.");
-            await showBubbleWindow();
-            await sendContextToBubble({
-              text: trimmed,
-              hint: `Markierter Text automatisch übernommen. App: ${activeApp}`,
-              autoRun: true,
-            });
-            pulseBlob("happy", 1400);
+          if (isVisible) {
+            await bubble.hide();
           } else {
-            setHint("Kein markierter Text gefunden.");
-            await showBubbleWindow();
-            await sendContextToBubble({
-              text: "",
-              hint: `Kein markierter Text gefunden. App: ${activeApp}`,
-            });
-            pulseBlob("thinking", 1200);
-          }
-
-          if (previous && previous !== selected) {
-            await writeText(previous).catch(() => {});
+            await bubble.show();
+            await bubble.setFocus();
           }
         } catch (error) {
-          setHint(`Hotkey-Fehler: ${String(error)}`);
-          pulseBlob("thinking", 1200);
+          console.error("toggle bubble failed:", error);
+          setHint(`Toggle error: ${String(error)}`);
         }
+      });
+
+      unlistenSnipHotkey = await listen("companion-snip-hotkey", async () => {
+        await openSnip();
       });
     };
 
     setupHotkeyListener();
 
     return () => {
-      if (unlistenHotkey) unlistenHotkey();
+      if (unlistenToggle) unlistenToggle();
+      if (unlistenSnipHotkey) unlistenSnipHotkey();
     };
-  }, [activeApp, presenceState]);
+  }, []);
+
+  useEffect(() => {
+    let unlistenHideAndSeek: null | (() => void) = null;
+
+    const setup = async () => {
+      unlistenHideAndSeek = await listen("start-hide-and-seek", async () => {
+        markActivity();
+        startHideAndSeek();
+      });
+    };
+
+    setup();
+
+    return () => {
+      if (unlistenHideAndSeek) unlistenHideAndSeek();
+    };
+  }, []);
+
+  useEffect(() => {
+    let unlistenSnipCreated: null | (() => void) = null;
+
+    const setupSnipCreated = async () => {
+      unlistenSnipCreated = await listen<SnipCreatedPayload>(
+        "snip-created",
+        async (event) => {
+          try {
+            const path = event.payload.path;
+            if (!path) return;
+
+            const context = await invoke<{
+              app_name: string;
+              window_title: string;
+              context_domain: string;
+            }>("get_active_snip_context").catch(() => ({
+              app_name: "unknown",
+              window_title: "",
+              context_domain: "desktop",
+            }));
+
+            const panel = await ensureSnipPanelWindow();
+
+            await panel.show();
+            await panel.setFocus();
+
+            await emitTo("snip-panel", "snip-panel-data", {
+              path,
+              app: context.app_name || "unknown",
+              windowTitle: context.window_title || "",
+              contextDomain: context.context_domain || "desktop",
+            });
+
+            setHint("Snip captured");
+            pulseBlob("happy", 1200);
+            markActivity();
+          } catch (error) {
+            console.error("snip-panel open failed:", error);
+            setHint("Snip panel failed");
+            pulseBlob("thinking", 1200);
+          }
+        }
+      );
+    };
+
+    setupSnipCreated();
+
+    return () => {
+      if (unlistenSnipCreated) unlistenSnipCreated();
+    };
+  }, []);
 
   useEffect(() => {
     const interval = window.setInterval(async () => {
@@ -1019,27 +1368,39 @@ export default function App() {
     return () => window.clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const onKeyDown = async (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.altKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        await openSnip();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [presenceState]);
+
   const refreshClipboard = async () => {
     try {
       markActivity();
       const text = await readText();
       if (!text?.trim()) {
-        setHint("Im Clipboard ist gerade kein Text.");
+        setHint("Clipboard is empty");
         pulseBlob("thinking", 900);
         return;
       }
 
       const trimmed = text.slice(0, 1500);
       setCopiedText(trimmed);
-      setHint("Clipboard aktualisiert.");
+      setHint("Clipboard updated");
       await showBubbleWindow();
       await sendContextToBubble({
         text: trimmed,
-        hint: `Clipboard manuell übernommen. App: ${activeApp}`,
+        hint: `Clipboard captured manually. App: ${activeApp}`,
       });
       pulseBlob("happy", 1200);
     } catch {
-      setHint("Clipboard konnte nicht gelesen werden.");
+      setHint("Could not read clipboard");
       pulseBlob("thinking", 900);
     }
   };
@@ -1048,8 +1409,8 @@ export default function App() {
     markActivity();
     await showBubbleWindow();
     await sendContextToBubble({
-      text: copiedText === "Noch nichts kopiert" ? "" : copiedText,
-      hint: `Bubble geöffnet. App: ${activeApp}`,
+      text: copiedText === "Nothing copied yet" ? "" : copiedText,
+      hint: `Bubble opened. App: ${activeApp}`,
     });
     pulseBlob("happy", 1000);
   };
@@ -1072,7 +1433,34 @@ export default function App() {
     event: React.MouseEvent<HTMLCanvasElement>
   ) => {
     if (event.button !== 0) return;
+
     markActivity();
+
+    if (hideGameState === "seeking") {
+      stopHideAndSeek();
+      setHideGameState("found");
+      setPresenceState("entering");
+      setHint("You found me. You win!");
+      pulseBlob("happy", 1600, "idle");
+
+      setFoundBubbleText("You found me!");
+      if (foundBubbleTimerRef.current) {
+        window.clearTimeout(foundBubbleTimerRef.current);
+      }
+      foundBubbleTimerRef.current = window.setTimeout(() => {
+        setFoundBubbleText("");
+      }, 2200);
+
+      void restoreMainWindowSizeAtCurrentSpot().catch(console.error);
+
+      window.setTimeout(() => {
+        setPresenceState("visible");
+        setHideGameState("idle");
+      }, 520);
+
+      return;
+    }
+
     setDragging(true);
 
     try {
@@ -1119,6 +1507,10 @@ export default function App() {
           opacity:
             presenceState === "hidden"
               ? 0.18
+              : presenceState === "hidden_peek"
+              ? peekVisible
+                ? 0.22
+                : 0.04
               : presenceState === "sleeping"
               ? 0.72
               : 1,
@@ -1139,10 +1531,19 @@ export default function App() {
           scale:
             presenceState === "hidden"
               ? 0.72
+              : presenceState === "hidden_peek"
+              ? 0.34
+              : presenceState === "entering"
+              ? [0.75, 1.08, 1]
               : presenceState === "sleeping"
               ? 0.9
               : 1,
-          rotate: presenceState === "sleeping" ? -6 : 0,
+          rotate:
+            presenceState === "sleeping"
+              ? -6
+              : presenceState === "hidden_peek"
+              ? 0
+              : 0,
         }}
         transition={{
           opacity: { duration: 0.4 },
@@ -1159,32 +1560,38 @@ export default function App() {
           position: "absolute",
           right: 16,
           bottom: 18,
-          width: 250,
-          height: 250,
+          width: hideGameState === "seeking" ? 82 : 250,
+          height: hideGameState === "seeking" ? 82 : 250,
           display: "grid",
           placeItems: "center",
+          pointerEvents: "auto",
         }}
       >
-        <div
-          className="shadow"
-          style={{
-            position: "absolute",
-            bottom: 18,
-            width: 120,
-            height: 28,
-            borderRadius: 999,
-            background:
-              "radial-gradient(circle, rgba(80, 110, 170, 0.18), rgba(80, 110, 170, 0))",
-            filter: "blur(8px)",
-            pointerEvents: "none",
-          }}
-        />
+        {hideGameState !== "seeking" && (
+          <div
+            className="shadow"
+            style={{
+              position: "absolute",
+              bottom: 18,
+              width: 120,
+              height: 28,
+              borderRadius: 999,
+              background:
+                "radial-gradient(circle, rgba(80, 110, 170, 0.18), rgba(80, 110, 170, 0))",
+              filter: "blur(8px)",
+              pointerEvents: "none",
+            }}
+          />
+        )}
 
         <BlobAvatar
           irisOffset={irisOffset}
           state={blobMood}
           dragging={dragging}
           presenceState={presenceState}
+          hideGameState={hideGameState}
+          peekVisible={peekVisible}
+          foundBubbleText={foundBubbleText}
           onMouseDown={handleAvatarMouseDown}
           onPet={() => pulseBlob("love", 1600, "happy")}
           onContextMenu={handleAvatarContextMenu}
@@ -1209,7 +1616,7 @@ export default function App() {
               await openBubble();
             }}
           >
-            Bubble öffnen
+            Open Bubble
           </button>
 
           <button
@@ -1219,7 +1626,16 @@ export default function App() {
               await refreshClipboard();
             }}
           >
-            Clipboard übernehmen
+            Capture Clipboard
+          </button>
+
+          <button
+            className="menu-btn"
+            onClick={async () => {
+              await openSnip();
+            }}
+          >
+            Snip Screen
           </button>
 
           <button
@@ -1239,7 +1655,7 @@ export default function App() {
               await mediaPrev();
             }}
           >
-            Vorheriger Track
+            Previous Track
           </button>
 
           <button
@@ -1249,7 +1665,7 @@ export default function App() {
               await mediaNext();
             }}
           >
-            Nächster Track
+            Next Track
           </button>
 
           <button
@@ -1259,7 +1675,7 @@ export default function App() {
               await volumeDown();
             }}
           >
-            Leiser
+            Volume Down
           </button>
 
           <button
@@ -1269,7 +1685,7 @@ export default function App() {
               await volumeUp();
             }}
           >
-            Lauter
+            Volume Up
           </button>
 
           <button
@@ -1279,7 +1695,7 @@ export default function App() {
               await toggleMute();
             }}
           >
-            Mute umschalten
+            Toggle Mute
           </button>
 
           <button
@@ -1290,7 +1706,7 @@ export default function App() {
               markActivity();
             }}
           >
-            {pinned ? "Always on top aus" : "Always on top an"}
+            {pinned ? "Disable Always on Top" : "Enable Always on Top"}
           </button>
 
           <button
@@ -1302,7 +1718,7 @@ export default function App() {
               markActivity();
             }}
           >
-            Jetzt schlafen
+            Sleep Now
           </button>
 
           <button
@@ -1312,7 +1728,7 @@ export default function App() {
               await handleClose();
             }}
           >
-            Schließen
+            Close
           </button>
 
           <div className="menu-meta">
