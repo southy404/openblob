@@ -10,6 +10,10 @@ pub fn find_steam_game(query: &str) -> Option<SteamGame> {
     let games = load_all_games().ok()?;
     let q = normalize(query);
 
+    if q.len() < 3 {
+        return None;
+    }
+
     let mut best: Option<SteamGame> = None;
     let mut best_score = 0usize;
 
@@ -21,7 +25,10 @@ pub fn find_steam_game(query: &str) -> Option<SteamGame> {
         } else if name.contains(&q) || q.contains(&name) {
             850
         } else {
-            q.split_whitespace().filter(|w| name.contains(w)).count() * 100
+            q.split_whitespace()
+                .filter(|w| w.len() >= 3 && name.contains(w))
+                .count()
+                * 120
         };
 
         if score > best_score {
@@ -30,7 +37,11 @@ pub fn find_steam_game(query: &str) -> Option<SteamGame> {
         }
     }
 
-    best
+    if best_score >= 240 {
+        best
+    } else {
+        None
+    }
 }
 
 pub fn steam_launch_uri(appid: &str) -> String {

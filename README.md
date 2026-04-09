@@ -10,8 +10,8 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-378ADD?style=flat-square)
 ![Tauri](https://img.shields.io/badge/Tauri-v2-1D9E75?style=flat-square)
 ![Rust](https://img.shields.io/badge/backend-Rust-EF9F27?style=flat-square)
-![Ollama](https://img.shields.io/badge/AI-Ollama-D85A30?style=flat-square)
-![Status](https://img.shields.io/badge/status-early%20stage-639922?style=flat-square)
+![AI](https://img.shields.io/badge/AI-Multi--Model-D85A30?style=flat-square)
+![Status](https://img.shields.io/badge/status-active%20development-639922?style=flat-square)
 
 </div>
 
@@ -19,7 +19,7 @@
 
 > **Build a desktop copilot that feels alive, useful, extensible, and truly personal.**
 
-OpenBlob is a local-first AI companion that lives on your Windows desktop — and grows through community-driven features, smarter abilities, better design, and new integrations.
+OpenBlob is a local-first AI companion that lives on your Windows desktop — sees your screen, understands your context, and grows through community-driven features, smarter abilities, better design, and new integrations.
 
 ---
 
@@ -31,6 +31,8 @@ OpenBlob aims to be different:
 
 - **open-source** — built in public, for everyone
 - **local-first** — runs on your machine, not someone else's server
+- **context-aware** — understands what app you're in, not just what you type
+- **vision-enabled** — analyzes your screen in real time
 - **privacy-conscious** — transparent about what touches the network
 - **extensible** — designed for modules, plugins, and new capabilities
 - **community-built** — welcoming to devs, designers, tinkerers, and curious builders
@@ -42,43 +44,78 @@ OpenBlob aims to be different:
 
 ### Current / in progress
 
-| Feature                                             | Status |
-| --------------------------------------------------- | ------ |
-| Desktop companion UI (transparent Tauri window)     | ✅     |
-| Organic blob avatar with Framer Motion              | ✅     |
-| Voice + typed command routing                       | ✅     |
-| Ollama local AI integration                         | ✅     |
-| Browser automation via Chrome/Edge remote debugging | ✅     |
-| Local app launching                                 | ✅     |
-| Steam game launching                                | ✅     |
-| Session memory for recent interactions              | ✅     |
-| Basic command parsing (German + English)            | ✅     |
-| Speech bubble / companion bubble windows            | ✅     |
+| Feature                                                | Status |
+| ------------------------------------------------------ | ------ |
+| Desktop companion UI (transparent Tauri window)        | ✅     |
+| Organic blob avatar with Framer Motion                 | ✅     |
+| Emotional states (idle, thinking, love, sleepy, music) | ✅     |
+| Petting interaction → heart mode                       | ✅     |
+| Music-reactive dancing                                 | ✅     |
+| Sleep / hide / wake states                             | ✅     |
+| Voice + typed command routing                          | ✅     |
+| Ollama local AI integration (multi-model)              | ✅     |
+| Multi-model fallback system (vision + text)            | ✅     |
+| Active window / app context detection                  | ✅     |
+| Context-aware responses (games, apps, UI)              | ✅     |
+| Screen capture + region snipping                       | ✅     |
+| OCR, translation & explanation via screenshot          | ✅     |
+| Vision-based search query generation                   | ✅     |
+| Game UI / quest / error recognition via screenshot     | ✅     |
+| Browser automation via Chrome/Edge remote debugging    | ✅     |
+| Local app launching                                    | ✅     |
+| Steam game detection & launching                       | ✅     |
+| Input simulation (keyboard/mouse)                      | ✅     |
+| Clipboard integration                                  | ✅     |
+| Session memory for recent interactions                 | ✅     |
+| Natural command parsing (German + English)             | ✅     |
+| Speech bubble / companion bubble windows               | ✅     |
+| Global shortcut: CTRL + SPACE to toggle UI             | ✅ ⚠️  |
+| Hide & Seek mini game mode                             | ✅     |
+
+> ⚠️ = feature exists but is still unstable or in active refinement
 
 ### Planned
 
 - Settings UI
 - Plugin / capability system
-- Richer blob behaviors and emotional states
+- Persistent long-term memory
+- Structured reasoning / tool-based agent system
+- More mini games and interactive blob modes
+- Personality system with persistent character state
 - Better onboarding experience
-- Music-reactive avatar motion
-- Better browser awareness and consent handling
-- More local model support
 - Community skill packs
+- More local model support
 - Cross-platform exploration
+
+---
+
+## Known Issues / Rough Edges
+
+| Area                                     | Status                                             |
+| ---------------------------------------- | -------------------------------------------------- |
+| Global shortcut (CTRL + SPACE)           | ⚠️ slightly unstable, WIP                          |
+| Browser automation consent / permissions | ⚠️ needs clearer user controls                     |
+| Multi-model routing                      | ⚠️ fallback logic still rough                      |
+| Voice pipeline                           | ⚠️ occasional recognition failures                 |
+| Context detection edge cases             | ⚠️ fallback to last known app isn't always correct |
+| Error handling across modules            | ⚠️ inconsistent, needs improvement                 |
+| Settings UI                              | ❌ not yet implemented                             |
+
+> Expect rapid changes, rough edges, and ongoing refactors — this is early-stage, actively evolving software.
 
 ---
 
 ## Tech Stack
 
-| Layer    | Technology                |
-| -------- | ------------------------- |
-| Frontend | React + TypeScript + Vite |
-| Desktop  | Tauri v2                  |
-| Backend  | Rust                      |
-| AI       | Ollama                    |
-| Motion   | Framer Motion             |
-| Platform | Windows 10 / 11           |
+| Layer    | Technology                               |
+| -------- | ---------------------------------------- |
+| Frontend | React + TypeScript + Vite                |
+| Desktop  | Tauri v2                                 |
+| Backend  | Rust                                     |
+| AI       | Ollama (multi-model orchestration)       |
+| Vision   | gemma3 / qwen2.5vl / llama vision models |
+| Motion   | Framer Motion                            |
+| Platform | Windows 10 / 11                          |
 
 ---
 
@@ -116,6 +153,13 @@ npm run build
 ```bash
 ollama serve
 ollama pull llama3.1:8b
+ollama pull gemma3
+```
+
+Optional — for vision features:
+
+```bash
+ollama pull qwen2.5vl:7b
 ```
 
 > If your local model setup differs, adapt the model name in the app configuration or Rust backend.
@@ -131,14 +175,17 @@ openblob/
 │  └─ src/
 │     ├─ lib.rs
 │     └─ modules/
-│        ├─ app_profiles.rs
+│        ├─ command_router.rs    # intent parsing + routing
+│        ├─ context.rs           # active window / app detection
+│        ├─ screen_capture.rs    # screenshot + snip
+│        ├─ snip_session.rs      # snip session management
 │        ├─ browser_automations.rs
-│        ├─ command_router.rs    # intent parsing
-│        ├─ session_memory.rs
 │        ├─ steam_games.rs
-│        ├─ system.rs
+│        ├─ session_memory.rs
 │        ├─ voice.rs
-│        └─ windows_discovery.rs
+│        ├─ system.rs
+│        ├─ windows_discovery.rs
+│        └─ app_profiles.rs
 ├─ docs/
 │  ├─ architecture.md
 │  ├─ roadmap.md
@@ -166,17 +213,23 @@ openblob/
 **1. Local-first**
 Whenever possible, things run locally on the user's machine.
 
-**2. Privacy-conscious**
+**2. Context > Prompt**
+The assistant should understand your environment — what app you're in, what's on screen — not just what you type.
+
+**3. Privacy-conscious**
 Users should understand what runs locally, what accesses the browser, and what may call external services.
 
-**3. Extensible by design**
+**4. Extensible by design**
 New modules, commands, tools, and UI ideas should be straightforward to add.
 
-**4. Community over gatekeeping**
+**5. Community over gatekeeping**
 This project welcomes contributions from developers, designers, tinkerers, AI enthusiasts, and curious builders.
 
-**5. High-quality UX matters**
+**6. High-quality UX matters**
 A desktop copilot should not just work — it should feel polished, expressive, modern, and enjoyable to use.
+
+**7. Playful, but actually useful**
+Fun interactions and real productivity are not opposites.
 
 ---
 
@@ -185,19 +238,32 @@ A desktop copilot should not just work — it should feel polished, expressive, 
 ### Core
 
 - [ ] Stabilize command routing
-- [ ] Improve app discovery
-- [ ] Improve browser automation reliability
+- [ ] Improve app / context detection
+- [ ] Improve browser automation reliability + consent handling
 - [ ] Improve voice pipeline
 - [ ] Add settings UI
-- [ ] Better error handling
+- [ ] Better error handling across all modules
+
+### AI / Intelligence
+
+- [ ] Persistent long-term memory
+- [ ] Better multi-model routing
+- [ ] Structured reasoning pipeline
+- [ ] Tool-based agent system
 
 ### Avatar / UX
 
-- [ ] Richer blob behaviors
-- [ ] Petting / emotional reactions
-- [ ] Sleep / wake / hide presence states
-- [ ] Music-reactive motion
+- [ ] Richer blob behaviors and reactions
+- [ ] Personality system (persistent character state)
+- [ ] More emotional states and animations
+- [ ] UI polish pass (glassmorphism, motion, feel)
 - [ ] Cleaner onboarding
+
+### Mini Games & Fun
+
+- [ ] More mini game modes beyond Hide & Seek
+- [ ] Score tracking / blob reactions to outcomes
+- [ ] Interactive blob challenges (tap, race, puzzle)
 
 ### Platform
 
@@ -210,8 +276,7 @@ A desktop copilot should not just work — it should feel polished, expressive, 
 
 - [ ] Tests
 - [ ] Contributor docs
-- [ ] Issue templates
-- [ ] CI
+- [ ] CI improvements
 - [ ] Release workflow
 
 ---
@@ -226,7 +291,30 @@ OpenBlob uses Chrome or Edge with remote debugging enabled for advanced browser 
 - typing into inputs
 - YouTube search and play helpers
 
-> Browser automation is powerful — it remains transparent and user-controlled. Future versions will make permissions and status even clearer.
+> Browser automation is powerful — it remains transparent and user-controlled. Future versions will make permissions and consent handling even clearer.
+
+---
+
+## Screenshot / Vision Intelligence
+
+OpenBlob can capture your screen or a selected region and reason about what it sees:
+
+- OCR and text extraction
+- Translation and explanation of on-screen text
+- Game UI, quest log, and error recognition
+- Automatic search query generation based on in-game content
+
+> Example: screenshot a quest log → detect the game → extract the objective → build the perfect search query. All locally.
+
+---
+
+## Mini Games
+
+OpenBlob has a growing interactive side beyond just being an assistant.
+
+**Hide & Seek** — trigger via voice or text command. The blob hides somewhere on screen. You find it.
+
+More game modes are planned as the project grows.
 
 ---
 
@@ -234,13 +322,15 @@ OpenBlob uses Chrome or Edge with remote debugging enabled for advanced browser 
 
 Contributions are welcome — all kinds, not just code.
 
-| Area    | Examples                                                      |
-| ------- | ------------------------------------------------------------- |
-| Code    | bug fixes, refactors, new commands, new modules               |
-| Design  | avatar animations, UI/UX improvements, onboarding             |
-| Docs    | architecture, guides, contribution ideas                      |
-| Ideas   | new integrations, capability proposals, architecture feedback |
-| Quality | tests, CI, issue templates                                    |
+| Area           | Examples                                                      |
+| -------------- | ------------------------------------------------------------- |
+| Code           | bug fixes, refactors, new commands, new modules               |
+| Design         | avatar animations, UI/UX improvements, onboarding             |
+| Docs           | architecture, guides, contribution ideas                      |
+| Ideas          | new integrations, capability proposals, architecture feedback |
+| Quality        | tests, CI, issue templates                                    |
+| Mini games     | new game modes, interaction ideas                             |
+| AI experiments | prompting strategies, model routing, agent ideas              |
 
 Please open an issue before large changes so we can align on direction.
 
@@ -252,7 +342,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for full details.
 
 OpenBlob should feel:
 
-- **alive** — not static, reacts to context
+- **alive** — not static, reacts to context and what's on screen
 - **smooth** — fluid motion, no jank
 - **modern** — glassmorphism, soft motion, minimal clutter
 - **non-intrusive** — stays out of the way when not needed
@@ -266,7 +356,7 @@ Design matters as much as functionality in this project.
 
 **Early-stage, actively evolving.**
 
-Expect rapid changes, rough edges, experimental ideas, and ongoing refactors.
+Expect rapid changes, rough edges, experimental ideas, and ongoing refactors. New features land frequently. Breaking changes happen.
 
 ---
 
@@ -290,7 +380,7 @@ Built with inspiration from:
 
 ## Topics
 
-`desktop-copilot` `tauri` `react` `rust` `ollama` `local-ai` `open-source` `desktop-assistant` `automation` `windows` `voice` `framer-motion`
+`desktop-copilot` `tauri` `react` `rust` `ollama` `local-ai` `open-source` `desktop-assistant` `automation` `windows` `voice` `vision` `screenshot` `framer-motion` `mini-games` `context-aware`
 
 ---
 

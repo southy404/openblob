@@ -1,5 +1,5 @@
 {
-  "name": "companion-v1",
+  "name": "openblob",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -13,6 +13,7 @@
     "@tauri-apps/api": "2.10.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-global-shortcut": "^2.3.1",
+    "@tauri-apps/plugin-opener": "^2.5.3",
     "framer-motion": "^12.10.5",
     "lucide-react": "^0.511.0",
     "react": "^19.1.0",
