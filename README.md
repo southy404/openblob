@@ -17,8 +17,21 @@
 
 ---
 
-> **Build a desktop copilot that feels alive, useful, extensible, and truly personal.**
+> **Build a desktop copilot that feels alive, useful, extensible, and truly personal.** > <br />
 
+<p align="center">
+  <img src="public/1.gif" width="100%" alt="Main Demo" />
+</p>
+
+<p align="center">
+  <img src="public/2.gif" width="100%" alt="Voice + Commands Demo" />
+</p>
+
+<p align="center">
+  <img src="public/3.gif" width="100%" alt="Browser Automation Demo" />
+</p>
+
+<br />
 OpenBlob is a local-first AI companion that lives on your Windows desktop — sees your screen, understands your context, and grows through community-driven features, smarter abilities, better design, and new integrations.
 
 ---
@@ -39,6 +52,117 @@ OpenBlob aims to be different:
 - **high-quality UX** — polished, expressive, and enjoyable to use
 
 ---
+
+## Commands
+
+OpenBlob understands natural language (German + English) and maps it to real system, browser, and AI actions.
+
+Below is a snapshot of currently supported commands:
+
+---
+
+### 🌐 Browser & Web
+
+| Command Example                      | Action           |
+| ------------------------------------ | ---------------- | --- |
+| `google nach wetter in berlin`       | Google search    | ✅  |
+| `search google for best restaurants` | Google search    | ✅  |
+| `youtube michael jackson`            | YouTube search   | ✅  |
+| `play michael jackson on youtube`    | YouTube search   | ✅  |
+| `open youtube`                       | Opens YouTube    | ✅  |
+| `open google.com`                    | Opens URL        | ✅  |
+| `öffne neuen tab`                    | New tab          | ✅  |
+| `close tab` / `schließe tab`         | Close active tab | ✅  |
+| `open new window`                    | New window       | ✅  |
+| `go back` / `zurück`                 | Browser back     |
+| `forward`                            | Browser forward  |
+| `scroll down`                        | Scroll           | ✅  |
+| `click first result`                 | Click result     | ✅  |
+| `type hello world`                   | Type text        |
+| `submit`                             | Press enter      |
+
+---
+
+### 🎬 Streaming & Content
+
+| Command Example                   | Action          |
+| --------------------------------- | --------------- | --- |
+| `play something funny on netflix` | Recommendation  | ✅  |
+| `open stranger things on netflix` | Open title      | ✅  |
+| `more like this`                  | Similar content | ✅  |
+| `next video`                      | YouTube next    | ✅  |
+| `forward 10 seconds`              | Seek forward    | ✅  |
+| `rewind`                          | Seek backward   | ✅  |
+
+---
+
+### 💻 System & Apps
+
+| Command Example | Action            |
+| --------------- | ----------------- | --- |
+| `open vscode`   | Launch app        | ✅  |
+| `open steam`    | Launch Steam      | ✅  |
+| `close app`     | Close current app |
+| `volume up`     | Increase volume   | ✅  |
+| `mute`          | Mute system       | ✅  |
+| `play music`    | Media control     | ✅  |
+| `next track`    | Media next        |
+
+---
+
+### ✂️ Screenshot / Vision
+
+| Command Example   | Action             |
+| ----------------- | ------------------ | --- |
+| `screenshot`      | Start snip mode    | ✅  |
+| `take screenshot` | Capture            | ✅  |
+| `mach screenshot` | German snip        | ✅  |
+| `capture screen`  | Capture            |
+| `explain this`    | Explain screenshot |
+| `translate this`  | Translate text     |
+| `search this`     | Generate search    |
+
+---
+
+### 🧠 AI / Context
+
+| Command Example        | Action                      |
+| ---------------------- | --------------------------- | --- |
+| `what is this`         | Context explanation         | ✅  |
+| `explain selection`    | Explain highlighted content | ✅  |
+| `where am i`           | Page/app context            | ✅  |
+| `what is on this page` | Page analysis               | ✅  |
+
+---
+
+### 🎮 Fun / Blob Interaction
+
+| Command Example | Action               |
+| --------------- | -------------------- | --- |
+| `hide and seek` | Start mini game      | ✅  |
+| `dance`         | Blob reacts to music | ✅  |
+| `sleep`         | Blob idle mode       | ✅  |
+| `wake up`       | Reactivate blob      | ✅  |
+
+---
+
+### ⌨️ Shortcuts
+
+| Shortcut         | Action            |
+| ---------------- | ----------------- | --- |
+| `CTRL + SPACE`   | Toggle companion  | ✅  |
+| `ALT + M`        | Voice input       | ✅  |
+| `CTRL + ALT + S` | Screenshot / snip |
+
+---
+
+> Commands are fuzzy-matched — you don’t need exact wording.
+>
+> Example:  
+> “search youtube for lo-fi beats”  
+> “youtube lofi beats”  
+> “play lofi beats”  
+> → all resolve to the same intent.
 
 ## Features
 
@@ -116,6 +240,58 @@ OpenBlob aims to be different:
 | Vision   | gemma3 / qwen2.5vl / llama vision models |
 | Motion   | Framer Motion                            |
 | Platform | Windows 10 / 11                          |
+
+---
+
+## ⚠️ Security & Antivirus Notice
+
+OpenBlob is a **local-first desktop application with deep system integration**.
+
+Because of its capabilities, some antivirus or Windows security systems may flag or block parts of the application.
+
+This is expected behavior due to:
+
+- global keyboard shortcuts
+- screen capture & snipping
+- input simulation (keyboard / mouse)
+- active window & process inspection
+- browser automation (remote debugging)
+- local AI execution
+
+---
+
+### What this means
+
+- Windows Defender or other antivirus tools **may warn or block execution**
+- SmartScreen may show **“unknown publisher” warnings**
+- Some features (like browser control or input simulation) may be restricted
+
+---
+
+### What you can do
+
+If you trust the project:
+
+- allow the app through Windows Defender
+- add an exclusion/whitelist for the OpenBlob directory
+- ensure Chrome/Edge debugging port (9222) is not blocked
+- run the app with sufficient permissions if needed
+
+---
+
+### Transparency
+
+OpenBlob is:
+
+- **open-source** — you can inspect everything
+- **local-first** — no hidden cloud processing
+- **explicit about system access**
+
+No data is sent externally unless explicitly triggered (e.g. APIs or model calls you configure).
+
+---
+
+> ⚠️ Always review the code before running software that interacts deeply with your system.
 
 ---
 

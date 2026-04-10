@@ -6,17 +6,18 @@ export async function ensureBubbleWindow() {
 
   return new WebviewWindow("bubble", {
     url: "bubble.html",
-    title: "Companion Bubble",
+    title: "OpenBlob Bubble",
     transparent: true,
     decorations: false,
     alwaysOnTop: true,
     shadow: false,
     skipTaskbar: true,
-    resizable: true,
-    width: 1120,
-    height: 340,
-    visible: true,
-    x: 380,
-    y: 720,
+    resizable: false,
+    width: 1320,
+    height: 430,
+    visible: false,
+    focus: false,
+    x: 280,
+    y: 560,
   });
 }

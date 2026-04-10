@@ -27,18 +27,6 @@
         "shadow": false,
         "resizable": false,
         "visible": true
-      },
-      {
-        "label": "snip-panel",
-        "title": "Snip Panel",
-        "url": "snip-panel.html",
-        "transparent": false,
-        "decorations": true,
-        "alwaysOnTop": true,
-        "resizable": true,
-        "width": 520,
-        "height": 760,
-        "visible": false
       }
     ],
     "security": {

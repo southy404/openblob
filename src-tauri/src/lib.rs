@@ -536,31 +536,42 @@ async fn is_debug_browser_running() -> bool {
 
 fn spawn_debug_browser() -> Result<(), String> {
     let chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe";
+    let chrome_path_x86 = r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe";
     let edge_path = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe";
+    let edge_path_alt = r"C:\Program Files\Microsoft\Edge\Application\msedge.exe";
     let user_data = r"D:\companion-browser";
 
-    if std::path::Path::new(chrome_path).exists() {
-        Command::new(chrome_path)
-            .args([
-                "--remote-debugging-port=9222",
-                &format!("--user-data-dir={}", user_data),
-                "--new-window",
-            ])
-            .spawn()
-            .map_err(|e| format!("Chrome konnte nicht gestartet werden: {e}"))?;
-        return Ok(());
+    let chrome_candidates = [chrome_path, chrome_path_x86];
+    for path in chrome_candidates {
+        if std::path::Path::new(path).exists() {
+            Command::new(path)
+                .args([
+                    "--remote-debugging-port=9222",
+                    &format!("--user-data-dir={}", user_data),
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "https://www.google.com",
+                ])
+                .spawn()
+                .map_err(|e| format!("Chrome konnte nicht gestartet werden: {e}"))?;
+            return Ok(());
+        }
     }
 
-    if std::path::Path::new(edge_path).exists() {
-        Command::new(edge_path)
-            .args([
-                "--remote-debugging-port=9222",
-                &format!("--user-data-dir={}", user_data),
-                "--new-window",
-            ])
-            .spawn()
-            .map_err(|e| format!("Edge konnte nicht gestartet werden: {e}"))?;
-        return Ok(());
+    let edge_candidates = [edge_path, edge_path_alt];
+    for path in edge_candidates {
+        if std::path::Path::new(path).exists() {
+            Command::new(path)
+                .args([
+                    "--remote-debugging-port=9222",
+                    &format!("--user-data-dir={}", user_data),
+                    "--no-first-run",
+                    "https://www.google.com",
+                ])
+                .spawn()
+                .map_err(|e| format!("Edge konnte nicht gestartet werden: {e}"))?;
+            return Ok(());
+        }
     }
 
     Err("Kein Chrome oder Edge gefunden.".into())
@@ -809,18 +820,25 @@ async fn browser_open_url(
 ) -> Result<String, String> {
     ensure_debug_browser().await?;
 
+    if incognito {
+        return Err(
+            "Inkognito wird im gesteuerten Debug-Browser absichtlich nicht verwendet, damit derselbe Browser steuerbar bleibt."
+                .into(),
+        );
+    }
+
+    if new_window {
+        modules::browser_automations::new_tab(&url).await?;
+        return Ok("URL im gesteuerten Browser in neuem Tab geöffnet.".into());
+    }
+
     if new_tab {
         modules::browser_automations::new_tab(&url).await?;
         return Ok("URL in neuem Tab geöffnet.".into());
     }
 
-    if new_window || incognito {
-        open_url_prefer_browser(&url, new_window, incognito)?;
-        return Ok("URL im Browser geöffnet.".into());
-    }
-
-    modules::browser_automations::navigate_active_tab(&url).await?;
-    Ok("URL im aktiven Tab geöffnet.".into())
+    modules::browser_automations::navigate_best_tab(&url).await?;
+    Ok("URL im gesteuerten Browser geöffnet.".into())
 }
 
 #[tauri::command]
@@ -1301,7 +1319,10 @@ async fn weather_reply(location: Option<String>) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn handle_voice_command(input: String) -> Result<String, String> {
+async fn handle_voice_command(
+    app: tauri::AppHandle,
+    input: String,
+) -> Result<String, String> {
     modules::session_memory::set_last_command(&input);
 
     let parsed_action = parse_voice_command(&input);
@@ -1489,26 +1510,29 @@ async fn handle_voice_command(input: String) -> Result<String, String> {
             Ok(format!("Neu in {} ausgelöst.", target))
         }
         CompanionAction::Close | CompanionAction::CloseApp => {
-            let target = ensure_external_focus(&active_app)?;
-            shortcut_alt_f4()?;
-            Ok(format!("{} geschlossen.", target))
+            ensure_debug_browser().await?;
+            let tab = modules::browser_automations::get_active_tab().await?;
+            modules::browser_automations::close_tab(&tab.id).await?;
+            Ok("Aktiven Browser-Tab geschlossen.".into())
         }
 
         CompanionAction::NewTab => {
-            let target = ensure_external_focus(&active_app)?;
-            shortcut_ctrl('t')?;
-            Ok(format!("Neuer Tab in {}.", target))
+            ensure_debug_browser().await?;
+            modules::browser_automations::new_tab("https://www.google.com").await?;
+            Ok("Neuer Browser-Tab geöffnet.".into())
         }
+
         CompanionAction::CloseTab => {
-            let target = ensure_external_focus(&active_app)?;
-            shortcut_ctrl('w')?;
-            Ok(format!("Tab in {} geschlossen.", target))
+            ensure_debug_browser().await?;
+            let tab = modules::browser_automations::get_active_tab().await?;
+            modules::browser_automations::close_tab(&tab.id).await?;
+            Ok("Aktiven Browser-Tab geschlossen.".into())
         }
         CompanionAction::CloseTabByIndex { index } => browser_close_tab_by_index(index).await,
         CompanionAction::NewWindow => {
-            let target = ensure_external_focus(&active_app)?;
-            shortcut_ctrl('n')?;
-            Ok(format!("Neues Fenster in {}.", target))
+            ensure_debug_browser().await?;
+            modules::browser_automations::new_tab("https://www.google.com").await?;
+            Ok("Neuer Browser-Tab geöffnet.".into())
         }
         CompanionAction::Incognito => {
             let target = ensure_external_focus(&active_app)?;
@@ -1553,36 +1577,33 @@ async fn handle_voice_command(input: String) -> Result<String, String> {
         }
 
         CompanionAction::GoogleSearch { query } => {
+            ensure_debug_browser().await?;
             let url = format!(
                 "https://www.google.com/search?q={}",
                 urlencoding::encode(&query)
             );
-            open_url_prefer_browser(&url, false, false)?;
+            modules::browser_automations::navigate_best_tab(&url).await?;
             Ok(format!("Suche auf Google nach {}.", query))
         }
 
-        CompanionAction::YouTubeSearch { query } => match youtube_search_and_play(query.clone()).await {
-            Ok(msg) => Ok(msg),
-            Err(_) => {
-                let url = format!(
-                    "https://www.youtube.com/results?search_query={}",
-                    urlencoding::encode(&query)
-                );
-                open_url_prefer_browser(&url, false, false)?;
-                Ok(format!("Suche auf YouTube nach {}.", query))
-            }
-        },
+        CompanionAction::YouTubeSearch { query } => {
+            ensure_debug_browser().await?;
+            let url = format!(
+                "https://www.youtube.com/results?search_query={}",
+                urlencoding::encode(&query)
+            );
+            modules::browser_automations::navigate_best_tab(&url).await?;
+            Ok(format!("Suche auf YouTube nach {}.", query))
+        }
 
-        CompanionAction::YouTubePlayTitle { title } => match youtube_play_title(title.clone()).await {
-            Ok(msg) => Ok(msg),
-            Err(_) => {
-                let url = format!(
-                    "https://www.youtube.com/results?search_query={}",
-                    urlencoding::encode(&title)
-                );
-                open_url_prefer_browser(&url, false, false)?;
-                Ok(format!("Suche auf YouTube nach {}.", title))
-            }
+        CompanionAction::YouTubePlayTitle { title } => {
+            ensure_debug_browser().await?;
+            let url = format!(
+                "https://www.youtube.com/results?search_query={}",
+                urlencoding::encode(&title)
+            );
+            modules::browser_automations::navigate_best_tab(&url).await?;
+            Ok(format!("Suche auf YouTube nach {}.", title))
         },
 
         CompanionAction::BrowserOpenUrl {
@@ -1654,6 +1675,10 @@ async fn handle_voice_command(input: String) -> Result<String, String> {
 
         CompanionAction::WeatherToday { location } => weather_reply(location).await,
         CompanionAction::ExplainSelection => Ok("NO_ACTION".into()),
+        CompanionAction::TakeScreenshot => {
+            let _ = app.emit("companion-snip-hotkey", ());
+            Ok("Snip-Modus geöffnet.".into())
+        }
         CompanionAction::None => Ok("NO_ACTION".into()),
     }
 }
@@ -1663,18 +1688,48 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        let _ = app.emit("companion-toggle", ());
-                    }
-                })
-                .build(),
-        )
+       .plugin(
+        tauri_plugin_global_shortcut::Builder::new()
+            .with_handler(|app, shortcut, event| {
+                use tauri_plugin_global_shortcut::ShortcutState;
+
+                if event.state != ShortcutState::Pressed {
+                    return;
+                }
+
+                let shortcut_str = shortcut.to_string().replace(' ', "").to_lowercase();
+                println!("global shortcut pressed: {}", shortcut_str);
+
+                let is_toggle =
+                    shortcut_str == "control+space" || shortcut_str == "ctrl+space";
+
+                let is_voice =
+                    shortcut_str == "alt+keym" || shortcut_str == "alt+m";
+
+                if is_toggle {
+                    let _ = app.emit("companion-toggle", ());
+                    return;
+                }
+
+                if is_voice {
+                    let _ = app.emit("companion-voice-toggle", ());
+                }
+            })
+            .build(),
+    )
         .setup(|app| {
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
-            app.global_shortcut().register("Ctrl+Space")?;
+
+            let shortcut = app.global_shortcut();
+
+            if !shortcut.is_registered("Ctrl+Space") {
+                shortcut.register("Ctrl+Space")?;
+            }
+
+            if !shortcut.is_registered("Alt+M") {
+                shortcut.register("Alt+M")?;
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

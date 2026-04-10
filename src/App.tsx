@@ -806,8 +806,8 @@ async function positionSpeechWindow() {
 
 async function showBubbleWindow() {
   const bubble = await ensureBubbleWindow();
+  await emitTo("bubble", "bubble-show");
   await bubble.show();
-  await bubble.setFocus();
 }
 
 async function showSpeechWindow(text: string) {
@@ -1221,15 +1221,8 @@ export default function App() {
           markActivity();
           pulseBlob("thinking", 900);
 
-          const bubble = await ensureBubbleWindow();
-          const isVisible = await bubble.isVisible();
-
-          if (isVisible) {
-            await bubble.hide();
-          } else {
-            await bubble.show();
-            await bubble.setFocus();
-          }
+          await ensureBubbleWindow();
+          await emitTo("bubble", "bubble-toggle");
         } catch (error) {
           console.error("toggle bubble failed:", error);
           setHint(`Toggle error: ${String(error)}`);

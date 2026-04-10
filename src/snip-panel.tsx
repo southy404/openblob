@@ -5,6 +5,18 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import {
+  Search,
+  Languages,
+  ScanText,
+  Sparkles,
+  Copy,
+  Send,
+  ExternalLink,
+  Image as ImageIcon,
+  Youtube,
+  X,
+} from "lucide-react";
 
 type SnipMode = "explain" | "translate" | "ocr" | "search";
 
@@ -37,11 +49,8 @@ function extractField(text: string, label: string) {
 
 function parseSearchResult(text: string): SearchData | null {
   const intent = extractField(text, "INTENT");
-
   const gameOrApp =
     extractField(text, "GAME OR APP") || extractField(text, "GAME_OR_APP");
-  const extractedText = extractField(text, "EXTRACTED_TEXT");
-
   const keyText = extractField(text, "KEY_TEXT");
   const searchQuery =
     extractField(text, "SEARCH QUERY") || extractField(text, "SEARCH_QUERY");
@@ -144,7 +153,7 @@ function SnipPanel() {
       });
     };
 
-    setup();
+    void setup();
 
     return () => {
       if (unlisten) unlisten();
@@ -203,342 +212,576 @@ function SnipPanel() {
     }
   };
 
-  const buttonStyle: React.CSSProperties = {
-    border: "1px solid rgba(255,255,255,0.1)",
-    background: "rgba(255,255,255,0.06)",
+  const closePanel = async () => {
+    await getCurrentWindow().hide().catch(console.error);
+  };
+
+  const glassButtonBase: React.CSSProperties = {
+    height: 44,
+    border: "1px solid rgba(255,255,255,0.10)",
+    background: "rgba(255,255,255,0.08)",
     color: "#eef4ff",
-    borderRadius: 14,
-    padding: "12px 14px",
+    borderRadius: 16,
+    padding: "0 14px",
     cursor: "pointer",
     fontWeight: 700,
     fontSize: 13,
     transition: "all 160ms ease",
     backdropFilter: "blur(10px)",
-    boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+    WebkitBackdropFilter: "blur(10px)",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
   };
 
   const primaryButtonStyle: React.CSSProperties = {
-    ...buttonStyle,
+    ...glassButtonBase,
     background:
       "linear-gradient(180deg, rgba(117,163,255,0.22), rgba(117,163,255,0.12))",
-    border: "1px solid rgba(140,180,255,0.28)",
+    border: "1px solid rgba(140,180,255,0.26)",
   };
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background:
-          "radial-gradient(circle at top, rgba(70,100,190,0.18), transparent 30%), linear-gradient(180deg, rgba(8,12,20,0.97), rgba(13,18,30,0.94))",
-        backdropFilter: "blur(24px)",
-        border: "1px solid rgba(255,255,255,0.08)",
-        color: "#eef4ff",
-        padding: 16,
-        boxSizing: "border-box",
-        fontFamily: "Inter, system-ui, sans-serif",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 14,
-        }}
-      >
-        <div>
-          <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: 0.2 }}>
-            Snip to Blob
-          </div>
-          <div style={{ fontSize: 12, opacity: 0.72 }}>{appName}</div>
-          {!!windowTitle && (
-            <div style={{ fontSize: 11, opacity: 0.56, marginTop: 2 }}>
-              {windowTitle}
-            </div>
-          )}
-        </div>
+    <>
+      <style>{`
+        :root {
+          color-scheme: dark;
+          --panel-base: rgba(15, 19, 28, 0.90);
+          --panel-tint-top: rgba(255, 255, 255, 0.18);
+          --panel-tint-bottom: rgba(255, 255, 255, 0.08);
+          --panel-border: rgba(255, 255, 255, 0.14);
+          --panel-border-soft: rgba(255, 255, 255, 0.08);
 
-        <button
-          onClick={() => getCurrentWindow().hide()}
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: 12,
-            border: "1px solid rgba(255,255,255,0.08)",
-            background: "rgba(255,255,255,0.06)",
-            color: "#fff",
-            cursor: "pointer",
-            fontSize: 18,
-            lineHeight: 1,
-          }}
-        >
-          ×
-        </button>
-      </div>
+          --text-main: rgba(238, 244, 255, 0.98);
+          --text-soft: rgba(205, 217, 241, 0.78);
+          --text-dim: rgba(205, 217, 241, 0.56);
 
-      <div
-        style={{
-          borderRadius: 20,
-          overflow: "hidden",
-          border: "1px solid rgba(255,255,255,0.08)",
-          marginBottom: 12,
+          --glass-chip: rgba(255, 255, 255, 0.06);
+          --glass-chip-strong: rgba(255, 255, 255, 0.10);
+          --accent: rgba(117, 163, 255, 1);
+          --accent-soft: rgba(117, 163, 255, 0.16);
+        }
+
+        * {
+          box-sizing: border-box;
+        }
+
+        html, body, #root {
+          width: 100%;
+          height: 100%;
+          margin: 0;
+          overflow: hidden;
+          background: transparent;
+          font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          color: var(--text-main);
+        }
+
+        .snip-shell {
+          width: 100%;
+          height: 100%;
+          padding: 14px;
+          background: transparent;
+        }
+
+        .snip-panel {
+          width: 100%;
+          height: 100%;
+          border-radius: 30px;
+          overflow: hidden;
+          border: 1px solid rgba(255,255,255,0.14);
           background:
-            "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02))",
-          minHeight: 220,
-          display: "grid",
-          placeItems: "center",
-          position: "relative",
-        }}
-      >
-        {!path && (
-          <div style={{ fontSize: 13, opacity: 0.68 }}>No snip loaded yet.</div>
-        )}
+            linear-gradient(
+              180deg,
+              rgba(255,255,255,0.18),
+              rgba(255,255,255,0.08)
+            ),
+            rgba(15, 19, 28, 0.90);
+          backdrop-filter: blur(30px) saturate(145%);
+          -webkit-backdrop-filter: blur(30px) saturate(145%);
+          isolation: isolate;
+        }
 
-        {!!path && previewState === "loading" && (
-          <div style={{ fontSize: 13, opacity: 0.72 }}>Loading preview…</div>
-        )}
+        .snip-panel::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          pointer-events: none;
+          background:
+            radial-gradient(circle at 10% 0%, rgba(255,255,255,0.16), transparent 28%),
+            radial-gradient(circle at 100% 100%, rgba(117,163,255,0.12), transparent 22%);
+        }
 
-        {!!path && previewState === "error" && (
-          <div
-            style={{
-              padding: 14,
-              fontSize: 12,
-              lineHeight: 1.5,
-              opacity: 0.82,
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            {previewError || "Preview failed to load."}
-          </div>
-        )}
+        .snip-panel::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          pointer-events: none;
+          box-shadow:
+            inset 1px 1px 0 rgba(255,255,255,0.24),
+            inset -1px -1px 0 rgba(255,255,255,0.04);
+        }
 
-        {!!path && !!previewUrl && (
-          <img
-            key={previewUrl}
-            src={previewUrl}
-            alt="Snip preview"
-            onLoad={() => setPreviewState("ready")}
-            onError={() => {
-              setPreviewState("error");
-              setPreviewError(
-                `Preview failed to load.\n\nPath:\n${path}\n\nURL:\n${previewUrl}`
-              );
-            }}
-            style={{
-              width: "100%",
-              display: hasPreview ? "block" : "none",
-              maxHeight: 340,
-              objectFit: "contain",
-              background: "rgba(0,0,0,0.18)",
-            }}
-          />
-        )}
-      </div>
+        .snip-header {
+          position: relative;
+          z-index: 1;
+          display: grid;
+          grid-template-columns: 1fr auto;
+          align-items: center;
+          gap: 12px;
+          padding: 14px 16px;
+          border-bottom: 1px solid var(--panel-border-soft);
+        }
 
-      {!!path && (
-        <div
-          style={{
-            marginBottom: 12,
-            padding: 10,
-            borderRadius: 14,
-            fontSize: 11,
-            lineHeight: 1.45,
-            color: "rgba(238,244,255,0.72)",
-            background: "rgba(255,255,255,0.035)",
-            border: "1px solid rgba(255,255,255,0.06)",
-            wordBreak: "break-all",
-          }}
-        >
-          <strong style={{ color: "#eef4ff" }}>Path:</strong> {path}
-          {!!contextDomain && (
-            <>
-              <br />
-              <strong style={{ color: "#eef4ff" }}>Domain:</strong>{" "}
-              {contextDomain}
-            </>
-          )}
-        </div>
-      )}
+        .snip-header-left {
+          min-width: 0;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
 
-      <textarea
-        value={comment}
-        onChange={(e) => setComment(e.target.value)}
-        placeholder="How do I solve this quest? / where is this item? / what does this error mean?"
-        style={{
-          width: "100%",
-          minHeight: 96,
-          resize: "vertical",
-          borderRadius: 16,
-          padding: 12,
-          boxSizing: "border-box",
-          border: "1px solid rgba(255,255,255,0.1)",
-          background: "rgba(255,255,255,0.04)",
-          color: "#eef4ff",
-          outline: "none",
-          marginBottom: 12,
-          font: "500 13px/1.45 Inter, system-ui, sans-serif",
-        }}
-      />
+        .snip-brand {
+          width: 42px;
+          height: 42px;
+          border-radius: 14px;
+          display: grid;
+          place-items: center;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.08);
+          color: var(--text-main);
+          flex-shrink: 0;
+        }
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 8,
-          marginBottom: 12,
-        }}
-      >
-        <button style={buttonStyle} onClick={() => runAction("explain")}>
-          Explain
-        </button>
-        <button style={buttonStyle} onClick={() => runAction("translate")}>
-          Translate
-        </button>
-        <button style={buttonStyle} onClick={() => runAction("ocr")}>
-          Extract Text
-        </button>
-        <button style={primaryButtonStyle} onClick={() => runAction("search")}>
-          Search Help
-        </button>
-      </div>
+        .snip-title {
+          font-size: 15px;
+          font-weight: 800;
+          letter-spacing: 0.01em;
+        }
 
-      {busy && (
-        <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 8 }}>
-          Analyzing…
-        </div>
-      )}
+        .snip-subtitle {
+          margin-top: 2px;
+          font-size: 12px;
+          color: var(--text-soft);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
 
-      {!!result && (
-        <>
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              borderRadius: 16,
-              background: "rgba(255,255,255,0.05)",
-              border: "1px solid rgba(255,255,255,0.08)",
-              whiteSpace: "pre-wrap",
-              lineHeight: 1.55,
-              fontSize: 13,
-            }}
-          >
-            {result}
-          </div>
+        .snip-window-title {
+          margin-top: 2px;
+          font-size: 11px;
+          color: var(--text-dim);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
 
-          {!!searchData?.searchQuery && (
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr",
-                gap: 8,
-                marginTop: 12,
-              }}
-            >
-              <div
-                style={{
-                  padding: 10,
-                  borderRadius: 14,
-                  fontSize: 12,
-                  lineHeight: 1.45,
-                  color: "rgba(238,244,255,0.78)",
-                  background: "rgba(117,163,255,0.08)",
-                  border: "1px solid rgba(140,180,255,0.18)",
-                }}
-              >
-                <strong style={{ color: "#eef4ff" }}>Detected intent:</strong>{" "}
-                {searchData.intent || "unknown"}
-                <br />
-                <strong style={{ color: "#eef4ff" }}>
-                  Detected game/app:
-                </strong>{" "}
-                {searchData.gameOrApp || "unknown"}
-                <br />
-                <strong style={{ color: "#eef4ff" }}>Key text:</strong>{" "}
-                {searchData.keyText || "unknown"}
-                <br />
-                <strong style={{ color: "#eef4ff" }}>Best query:</strong>{" "}
-                {searchData.searchQuery}
+        .snip-close {
+          width: 40px;
+          height: 40px;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.08);
+          color: white;
+          display: grid;
+          place-items: center;
+          cursor: pointer;
+          transition: all 160ms ease;
+        }
+
+        .snip-close:hover {
+          background: rgba(255,255,255,0.14);
+        }
+
+        .snip-content {
+          position: relative;
+          z-index: 1;
+          height: calc(100% - 71px);
+          overflow: auto;
+          padding: 14px;
+          display: grid;
+          gap: 12px;
+        }
+
+        .snip-content::-webkit-scrollbar {
+          width: 10px;
+        }
+
+        .snip-content::-webkit-scrollbar-thumb {
+          background: rgba(255,255,255,0.10);
+          border-radius: 999px;
+        }
+
+        .glass-card {
+          border-radius: 22px;
+          border: 1px solid rgba(255,255,255,0.08);
+          background:
+            linear-gradient(
+              180deg,
+              rgba(255,255,255,0.08),
+              rgba(255,255,255,0.04)
+            ),
+            rgba(255,255,255,0.02);
+          overflow: hidden;
+        }
+
+        .preview-card {
+          min-height: 260px;
+          display: grid;
+          place-items: center;
+          position: relative;
+        }
+
+        .preview-empty {
+          font-size: 13px;
+          color: var(--text-soft);
+          padding: 20px;
+          text-align: center;
+        }
+
+        .preview-error {
+          padding: 16px;
+          font-size: 12px;
+          line-height: 1.55;
+          color: var(--text-soft);
+          white-space: pre-wrap;
+        }
+
+        .preview-image {
+          width: 100%;
+          display: block;
+          max-height: 360px;
+          object-fit: contain;
+          background: rgba(0,0,0,0.18);
+        }
+
+        .info-chip {
+          padding: 12px 14px;
+          border-radius: 18px;
+          font-size: 11px;
+          line-height: 1.5;
+          color: var(--text-soft);
+          background: rgba(255,255,255,0.04);
+          border: 1px solid rgba(255,255,255,0.06);
+          word-break: break-word;
+        }
+
+        .info-chip strong {
+          color: var(--text-main);
+        }
+
+        .comment-box {
+          width: 100%;
+          min-height: 100px;
+          resize: vertical;
+          border-radius: 18px;
+          padding: 14px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.05);
+          color: var(--text-main);
+          outline: none;
+          font: 500 13px/1.5 Inter, system-ui, sans-serif;
+        }
+
+        .comment-box::placeholder {
+          color: var(--text-dim);
+        }
+
+        .comment-box:focus {
+          border-color: rgba(140,180,255,0.26);
+          box-shadow: 0 0 0 4px rgba(117,163,255,0.10);
+        }
+
+        .actions-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+        }
+
+        .result-box {
+          padding: 14px;
+          border-radius: 20px;
+          background: rgba(255,255,255,0.05);
+          border: 1px solid rgba(255,255,255,0.08);
+          white-space: pre-wrap;
+          line-height: 1.6;
+          font-size: 13px;
+        }
+
+        .search-box {
+          display: grid;
+          gap: 8px;
+        }
+
+        .search-summary {
+          padding: 12px 14px;
+          border-radius: 18px;
+          font-size: 12px;
+          line-height: 1.5;
+          color: rgba(238,244,255,0.82);
+          background: rgba(117,163,255,0.08);
+          border: 1px solid rgba(140,180,255,0.18);
+        }
+
+        .search-summary strong {
+          color: var(--text-main);
+        }
+
+        .bottom-links {
+          display: flex;
+          justify-content: center;
+          gap: 14px;
+          flex-wrap: wrap;
+          min-height: 16px;
+        }
+
+        .tiny-link {
+          appearance: none;
+          border: 0;
+          background: transparent;
+          padding: 0;
+          font-size: 11px;
+          color: rgba(255,255,255,0.68);
+          cursor: pointer;
+        }
+
+        .tiny-link:hover {
+          color: rgba(255,255,255,0.94);
+        }
+
+        .tiny-link-static {
+          cursor: default;
+        }
+
+        .busy-line {
+          font-size: 12px;
+          color: var(--text-soft);
+          padding: 0 2px;
+        }
+
+        @media (max-width: 640px) {
+          .actions-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+      `}</style>
+
+      <div className="snip-shell">
+        <div className="snip-panel">
+          <div className="snip-header">
+            <div className="snip-header-left">
+              <div className="snip-brand">
+                <Sparkles size={18} />
               </div>
+
+              <div style={{ minWidth: 0 }}>
+                <div className="snip-title">Snip to Blob</div>
+                <div className="snip-subtitle">{appName}</div>
+                {!!windowTitle && (
+                  <div className="snip-window-title">{windowTitle}</div>
+                )}
+              </div>
+            </div>
+
+            <button
+              className="snip-close"
+              onClick={closePanel}
+              title="Schließen"
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          <div className="snip-content">
+            <div className="glass-card preview-card">
+              {!path && (
+                <div className="preview-empty">No snip loaded yet.</div>
+              )}
+
+              {!!path && previewState === "loading" && (
+                <div className="preview-empty">Loading preview…</div>
+              )}
+
+              {!!path && previewState === "error" && (
+                <div className="preview-error">
+                  {previewError || "Preview failed to load."}
+                </div>
+              )}
+
+              {!!path && !!previewUrl && (
+                <img
+                  key={previewUrl}
+                  src={previewUrl}
+                  alt="Snip preview"
+                  onLoad={() => setPreviewState("ready")}
+                  onError={() => {
+                    setPreviewState("error");
+                    setPreviewError(
+                      `Preview failed to load.\n\nPath:\n${path}\n\nURL:\n${previewUrl}`
+                    );
+                  }}
+                  className="preview-image"
+                  style={{ display: hasPreview ? "block" : "none" }}
+                />
+              )}
+            </div>
+
+            {!!path && (
+              <div className="info-chip">
+                <strong>Path:</strong> {path}
+                {!!contextDomain && (
+                  <>
+                    <br />
+                    <strong>Domain:</strong> {contextDomain}
+                  </>
+                )}
+              </div>
+            )}
+
+            <textarea
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder="How do I solve this quest? / where is this item? / what does this error mean?"
+              className="comment-box"
+            />
+
+            <div className="actions-grid">
+              <button
+                style={glassButtonBase}
+                onClick={() => runAction("explain")}
+              >
+                <Sparkles size={16} />
+                Explain
+              </button>
+
+              <button
+                style={glassButtonBase}
+                onClick={() => runAction("translate")}
+              >
+                <Languages size={16} />
+                Translate
+              </button>
+
+              <button style={glassButtonBase} onClick={() => runAction("ocr")}>
+                <ScanText size={16} />
+                Extract Text
+              </button>
 
               <button
                 style={primaryButtonStyle}
-                onClick={() => openWebSearch(searchData.searchQuery)}
+                onClick={() => runAction("search")}
               >
-                Open Best Guide Search
+                <Search size={16} />
+                Search Help
               </button>
-
-              {!!searchData.altQuery1 && searchData.altQuery1 !== "unknown" && (
-                <button
-                  style={buttonStyle}
-                  onClick={() => openWebSearch(searchData.altQuery1)}
-                >
-                  Open Broader Search
-                </button>
-              )}
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 8,
-                }}
-              >
-                <button
-                  style={buttonStyle}
-                  onClick={() =>
-                    openImageSearch(
-                      searchData.altQuery2 || searchData.searchQuery
-                    )
-                  }
-                >
-                  Image Search
-                </button>
-
-                <button
-                  style={buttonStyle}
-                  onClick={() =>
-                    openYouTubeSearch(
-                      searchData.altQuery2 || searchData.searchQuery
-                    )
-                  }
-                >
-                  YouTube Search
-                </button>
-              </div>
             </div>
-          )}
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 8,
-              marginTop: 12,
-            }}
-          >
-            <button
-              style={buttonStyle}
-              onClick={async () => {
-                await writeText(result).catch(console.error);
-              }}
-            >
-              Copy Result
-            </button>
+            {busy && <div className="busy-line">Analyzing…</div>}
 
-            <button
-              style={buttonStyle}
-              onClick={async () => {
-                await invoke("emit_snip_result_to_bubble", {
-                  text: result,
-                }).catch(console.error);
-              }}
-            >
-              Send to Bubble
-            </button>
+            {!!result && (
+              <>
+                <div className="result-box">{result}</div>
+
+                {!!searchData?.searchQuery && (
+                  <div className="search-box">
+                    <div className="search-summary">
+                      <strong>Detected intent:</strong>{" "}
+                      {searchData.intent || "unknown"}
+                      <br />
+                      <strong>Detected game/app:</strong>{" "}
+                      {searchData.gameOrApp || "unknown"}
+                      <br />
+                      <strong>Key text:</strong>{" "}
+                      {searchData.keyText || "unknown"}
+                      <br />
+                      <strong>Best query:</strong> {searchData.searchQuery}
+                    </div>
+
+                    <button
+                      style={primaryButtonStyle}
+                      onClick={() => openWebSearch(searchData.searchQuery)}
+                    >
+                      <ExternalLink size={16} />
+                      Open Best Guide Search
+                    </button>
+
+                    {!!searchData.altQuery1 &&
+                      searchData.altQuery1 !== "unknown" && (
+                        <button
+                          style={glassButtonBase}
+                          onClick={() => openWebSearch(searchData.altQuery1)}
+                        >
+                          <ExternalLink size={16} />
+                          Open Broader Search
+                        </button>
+                      )}
+
+                    <div className="actions-grid">
+                      <button
+                        style={glassButtonBase}
+                        onClick={() =>
+                          openImageSearch(
+                            searchData.altQuery2 || searchData.searchQuery
+                          )
+                        }
+                      >
+                        <ImageIcon size={16} />
+                        Image Search
+                      </button>
+
+                      <button
+                        style={glassButtonBase}
+                        onClick={() =>
+                          openYouTubeSearch(
+                            searchData.altQuery2 || searchData.searchQuery
+                          )
+                        }
+                      >
+                        <Youtube size={16} />
+                        YouTube Search
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="actions-grid">
+                  <button
+                    style={glassButtonBase}
+                    onClick={async () => {
+                      await writeText(result).catch(console.error);
+                    }}
+                  >
+                    <Copy size={16} />
+                    Copy Result
+                  </button>
+
+                  <button
+                    style={glassButtonBase}
+                    onClick={async () => {
+                      await invoke("emit_snip_result_to_bubble", {
+                        text: result,
+                      }).catch(console.error);
+                    }}
+                  >
+                    <Send size={16} />
+                    Send to Bubble
+                  </button>
+                </div>
+              </>
+            )}
+
+            <div className="bottom-links">
+              <span className="tiny-link tiny-link-static">snip panel</span>
+              <span className="tiny-link tiny-link-static">
+                later: screenshot shortcut link
+              </span>
+            </div>
           </div>
-        </>
-      )}
-    </div>
+        </div>
+      </div>
+    </>
   );
 }
 

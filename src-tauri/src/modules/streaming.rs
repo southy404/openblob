@@ -33,8 +33,15 @@ pub struct RecommendationResult {
 }
 
 fn data_path(service: &str) -> PathBuf {
-    let file_name = match normalize_service(service).as_str() {
+    let normalized = normalize_service(service);
+
+    let file_name = match normalized.as_str() {
         "netflix" => "netflix_titles.json",
+        "youtube" => "youtube_titles.json",
+        "spotify" => "spotify_titles.json",
+        "twitch" => "twitch_titles.json",
+        "prime" => "prime_titles.json",
+        "disney" => "disney_titles.json",
         _ => "netflix_titles.json",
     };
 
@@ -56,7 +63,6 @@ fn data_path(service: &str) -> PathBuf {
         }
     }
 
-    // fallback for debug visibility
     let fallback = PathBuf::from("src-tauri/data").join(file_name);
     println!(
         "[streaming] data path fallback used (file not found yet): {}",
@@ -70,7 +76,12 @@ fn normalize_service(service: &str) -> String {
 
     match s.as_str() {
         "netflix" | "netflx" | "netfliks" | "netflxk" => "netflix".into(),
-        _ => "netflix".into(),
+        "youtube" | "yt" | "youtub" | "jutube" => "youtube".into(),
+        "spotify" | "spotfy" => "spotify".into(),
+        "twitch" | "twuicth" | "twich" => "twitch".into(),
+        "prime" | "prime video" | "amazon prime" => "prime".into(),
+        "disney" | "disney plus" | "disneyplus" => "disney".into(),
+        _ => service.trim().to_lowercase(),
     }
 }
 
