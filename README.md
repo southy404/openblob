@@ -204,7 +204,7 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 | Session memory for recent interactions                 | ✅     |
 | Natural command parsing (German + English)             | ✅     |
 | Speech bubble / companion bubble windows               | ✅     |
-| Global shortcut: CTRL + SPACE to toggle UI             | ✅ ⚠️  |
+| Global shortcut: CTRL + SPACE to toggle UI             | ✅     |
 | Hide & Seek mini game mode                             | ✅     |
 
 > ⚠️ = feature exists but is still unstable or in active refinement
