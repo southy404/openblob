@@ -17,22 +17,13 @@
 
 ---
 
-> **Build a desktop copilot that feels alive, useful, extensible, and truly personal.** > <br />
+> **Build a desktop copilot that feels alive, useful, extensible, and truly personal.**  <br />
+
+OpenBlob is a local-first AI companion that lives on your Windows desktop — sees your screen, understands your context, and grows through community-driven features, smarter abilities, better design, and new integrations.
 
 <p align="center">
   <img src="public/1.gif" width="100%" alt="Main Demo" />
 </p>
-
-<p align="center">
-  <img src="public/2.gif" width="100%" alt="Voice + Commands Demo" />
-</p>
-
-<p align="center">
-  <img src="public/3.gif" width="100%" alt="Browser Automation Demo" />
-</p>
-
-<br />
-OpenBlob is a local-first AI companion that lives on your Windows desktop — sees your screen, understands your context, and grows through community-driven features, smarter abilities, better design, and new integrations.
 
 ---
 
@@ -53,116 +44,136 @@ OpenBlob aims to be different:
 
 ---
 
-## Commands
+## Command Reference
 
-OpenBlob understands natural language (German + English) and maps it to real system, browser, and AI actions.
-
-Below is a snapshot of currently supported commands:
-
----
-
-### 🌐 Browser & Web
-
-| Command Example                      | Action           |
-| ------------------------------------ | ---------------- | --- |
-| `google nach wetter in berlin`       | Google search    | ✅  |
-| `search google for best restaurants` | Google search    | ✅  |
-| `youtube michael jackson`            | YouTube search   | ✅  |
-| `play michael jackson on youtube`    | YouTube search   | ✅  |
-| `open youtube`                       | Opens YouTube    | ✅  |
-| `open google.com`                    | Opens URL        | ✅  |
-| `öffne neuen tab`                    | New tab          | ✅  |
-| `close tab` / `schließe tab`         | Close active tab | ✅  |
-| `open new window`                    | New window       | ✅  |
-| `go back` / `zurück`                 | Browser back     |
-| `forward`                            | Browser forward  |
-| `scroll down`                        | Scroll           | ✅  |
-| `click first result`                 | Click result     | ✅  |
-| `type hello world`                   | Type text        |
-| `submit`                             | Press enter      |
+OpenBlob uses natural language command parsing.  
+Commands are grouped by capability and interpreted contextually (German + English supported).
 
 ---
 
-### 🎬 Streaming & Content
+### 🌐 Browser & Navigation
 
-| Command Example                   | Action          |
-| --------------------------------- | --------------- | --- |
-| `play something funny on netflix` | Recommendation  | ✅  |
-| `open stranger things on netflix` | Open title      | ✅  |
-| `more like this`                  | Similar content | ✅  |
-| `next video`                      | YouTube next    | ✅  |
-| `forward 10 seconds`              | Seek forward    | ✅  |
-| `rewind`                          | Seek backward   | ✅  |
+**Search**
 
----
+| Command | Description |
+|--------|-------------|
+| `google <query>` / `google nach <query>` | Perform a Google search |
+| `search google for <query>` | Perform a Google search |
+| `youtube <query>` | Search on YouTube |
+| `search youtube for <query>` | Search on YouTube |
 
-### 💻 System & Apps
+**Open & Navigation**
 
-| Command Example | Action            |
-| --------------- | ----------------- | --- |
-| `open vscode`   | Launch app        | ✅  |
-| `open steam`    | Launch Steam      | ✅  |
-| `close app`     | Close current app |
-| `volume up`     | Increase volume   | ✅  |
-| `mute`          | Mute system       | ✅  |
-| `play music`    | Media control     | ✅  |
-| `next track`    | Media next        |
+| Command | Description |
+|--------|-------------|
+| `open <url>` | Open a website |
+| `open youtube` | Open YouTube homepage |
+| `go back` / `zurück` | Navigate back |
+| `forward` | Navigate forward |
+| `scroll down` / `scroll up` | Scroll page |
 
----
+**Tab & Window Control**
 
-### ✂️ Screenshot / Vision
+| Command | Description |
+|--------|-------------|
+| `open new tab` / `öffne neuen tab` | Open a new tab |
+| `close tab` / `schließe tab` | Close active tab |
+| `open new window` | Open new window |
 
-| Command Example   | Action             |
-| ----------------- | ------------------ | --- |
-| `screenshot`      | Start snip mode    | ✅  |
-| `take screenshot` | Capture            | ✅  |
-| `mach screenshot` | German snip        | ✅  |
-| `capture screen`  | Capture            |
-| `explain this`    | Explain screenshot |
-| `translate this`  | Translate text     |
-| `search this`     | Generate search    |
+**Interaction**
+
+| Command | Description |
+|--------|-------------|
+| `click first result` | Click first visible result |
+| `type <text>` | Type into active input |
+| `submit` | Confirm input (Enter) |
 
 ---
 
-### 🧠 AI / Context
+### 🎬 Streaming & Media
 
-| Command Example        | Action                      |
-| ---------------------- | --------------------------- | --- |
-| `what is this`         | Context explanation         | ✅  |
-| `explain selection`    | Explain highlighted content | ✅  |
-| `where am i`           | Page/app context            | ✅  |
-| `what is on this page` | Page analysis               | ✅  |
+| Command | Description |
+|--------|-------------|
+| `play <title> on netflix` | Open title |
+| `play something <mood> on netflix` | Get recommendation |
+| `more like this` | Show similar content |
+| `next video` | Play next video |
+| `forward <seconds>` | Seek forward |
+| `rewind` | Seek backward |
 
 ---
 
-### 🎮 Fun / Blob Interaction
+### 💻 System Control
 
-| Command Example | Action               |
-| --------------- | -------------------- | --- |
-| `hide and seek` | Start mini game      | ✅  |
-| `dance`         | Blob reacts to music | ✅  |
-| `sleep`         | Blob idle mode       | ✅  |
-| `wake up`       | Reactivate blob      | ✅  |
+| Command | Description |
+|--------|-------------|
+| `open <app>` | Launch application |
+| `close app` | Close active application |
+| `volume up / down` | Adjust system volume |
+| `mute / unmute` | Toggle audio |
+| `play music` | Media control |
+| `next track / previous track` | Media navigation |
+
+---
+
+### ✂️ Screenshot & Vision
+
+| Command | Description |
+|--------|-------------|
+| `screenshot` | Start snip mode |
+| `take screenshot` | Capture screen |
+| `mach screenshot` | German variant |
+| `capture screen` | Capture screen |
+| `explain this` | Analyze screenshot |
+| `translate this` | Translate text |
+| `search this` | Generate search query |
+
+---
+
+### 🧠 Context & AI
+
+| Command | Description |
+|--------|-------------|
+| `what is this` | Explain current context |
+| `explain selection` | Explain selected content |
+| `where am i` | Detect current app/page |
+| `what is on this page` | Analyze visible UI |
+
+---
+
+### 🎮 Interaction & Modes
+
+| Command | Description |
+|--------|-------------|
+| `hide and seek` | Start mini game |
+| `dance` | React to music |
+| `sleep` | Enter idle state |
+| `wake up` | Reactivate companion |
 
 ---
 
 ### ⌨️ Shortcuts
 
-| Shortcut         | Action            |
-| ---------------- | ----------------- | --- |
-| `CTRL + SPACE`   | Toggle companion  | ✅  |
-| `ALT + M`        | Voice input       | ✅  |
+| Shortcut | Description |
+|---------|-------------|
+| `CTRL + SPACE` | Toggle companion UI |
+| `ALT + M` | Voice input |
 | `CTRL + ALT + S` | Screenshot / snip |
 
 ---
 
-> Commands are fuzzy-matched — you don’t need exact wording.
->
+### Notes
+
+- Commands are **fuzzy matched** — exact wording is not required  
+- Language can be mixed (German + English)  
+- Context is used to resolve intent (e.g. browser vs app vs game)  
+- Some commands adapt based on the current active application  
+
 > Example:  
-> “search youtube for lo-fi beats”  
-> “youtube lofi beats”  
-> “play lofi beats”  
-> → all resolve to the same intent.
+> `youtube lofi beats`  
+> `play lofi beats on youtube`  
+> `search youtube for lofi beats`  
+> → all resolve to the same action
 
 ## Features
 
