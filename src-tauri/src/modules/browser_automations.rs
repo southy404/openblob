@@ -3,6 +3,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use crate::modules::session_memory;
 
 const DEBUG_PORT: u16 = 9222;
 
@@ -52,12 +53,16 @@ pub async fn new_tab(target_url: &str) -> Result<(), String> {
     let url = debug_json_url(&format!("/json/new?{target_url}"));
     let client = Client::new();
 
-    client
+    let created = client
         .put(url)
         .send()
         .await
-        .map_err(|e| format!("Neuer Tab konnte nicht geöffnet werden: {e}"))?;
+        .map_err(|e| format!("Neuer Tab konnte nicht geöffnet werden: {e}"))?
+        .json::<BrowserTab>()
+        .await
+        .map_err(|e| format!("Neuer Tab konnte nicht gelesen werden: {e}"))?;
 
+    activate_tab(&created.id).await?;
     Ok(())
 }
 
@@ -90,16 +95,56 @@ pub async fn close_tab(tab_id: &str) -> Result<(), String> {
 pub async fn get_active_tab() -> Result<BrowserTab, String> {
     let tabs = list_tabs().await?;
 
-    let tab = tabs
+    let page_tabs: Vec<BrowserTab> = tabs
         .into_iter()
-        .find(|t| {
+        .filter(|t| {
             t.tab_type.as_deref() == Some("page")
                 && t.websocket_debugger_url.is_some()
                 && !t.url.starts_with("devtools://")
+                && !t.url.starts_with("chrome://")
+                && !t.url.starts_with("edge://")
+                && !t.url.starts_with("about:blank")
         })
-        .ok_or("Kein aktiver Browser-Tab gefunden.")?;
+        .collect();
 
-    Ok(tab)
+    if page_tabs.is_empty() {
+        return Err("Kein steuerbarer Browser-Tab gefunden.".into());
+    }
+
+    let state = session_memory::get_state();
+
+    if !state.last_browser_url.trim().is_empty() {
+        if let Some(tab) = page_tabs
+            .iter()
+            .find(|t| t.url == state.last_browser_url)
+            .cloned()
+        {
+            return Ok(tab);
+        }
+    }
+
+    if !state.last_browser_title.trim().is_empty() {
+        if let Some(tab) = page_tabs
+            .iter()
+            .find(|t| t.title.trim() == state.last_browser_title.trim())
+            .cloned()
+        {
+            return Ok(tab);
+        }
+    }
+
+    page_tabs
+        .last()
+        .cloned()
+        .ok_or("Kein aktiver Browser-Tab gefunden.".into())
+}
+
+pub async fn navigate_best_tab(url: &str) -> Result<(), String> {
+    let tab = get_active_tab().await?;
+    activate_tab(&tab.id).await?;
+    let js = format!("window.location.href = {:?}", url);
+    let _ = eval_js(&tab, &js).await?;
+    Ok(())
 }
 
 pub async fn eval_js(tab: &BrowserTab, expression: &str) -> Result<Value, String> {

@@ -86,6 +86,7 @@ pub enum CompanionAction {
     YouTubeSeekBackward,
     WeatherToday { location: Option<String> },
     ExplainSelection,
+    TakeScreenshot,
     None,
 }
 
@@ -139,6 +140,7 @@ enum IntentKind {
     YouTubeSeekBackward,
     WeatherToday,
     ExplainSelection,
+    TakeScreenshot,
     None,
 }
 
@@ -197,7 +199,26 @@ const SCROLL_UP_WORDS: &[&str] = &["scroll hoch", "hoch scrollen", "scroll up"];
 const TYPE_WORDS: &[&str] = &["tippe", "type", "schreibe", "enter text"];
 const SUBMIT_WORDS: &[&str] = &["submit", "abschicken", "absenden", "drueck enter"];
 const CONTEXT_WORDS: &[&str] = &["wo bin ich", "seitenkontext", "browser context", "was ist auf der seite"];
-
+const SCREENSHOT_WORDS: &[&str] = &[
+    "screenshot",
+    "screen shot",
+    "snip",
+    "snapshot",
+    "capture",
+    "screen capture",
+    "take screenshot",
+    "take a screenshot",
+    "make screenshot",
+    "mach screenshot",
+    "mach einen screenshot",
+    "mach ein screenshot",
+    "mach einen screen",
+    "bildschirmfoto",
+    "bildschirm foto",
+    "aufnahme",
+    "screenie",
+    "snipping",
+];
 const KNOWN_TARGETS: &[(&str, &[&str])] = &[
     ("discord", &["discord", "discrod", "discort", "disord"]),
     ("spotify", &["spotify", "spotfy", "spoti"]),
@@ -457,6 +478,59 @@ fn extract_open_target(normalized: &str, toks: &[&str]) -> (String, bool) {
     (normalized.to_string(), prefer_browser)
 }
 
+fn is_exact_open_known_site(normalized: &str) -> Option<&'static str> {
+    match normalized.trim() {
+        "open youtube" | "oeffne youtube" | "start youtube" | "launch youtube" | "run youtube" => {
+            Some("https://www.youtube.com")
+        }
+        "open netflix" | "oeffne netflix" | "start netflix" | "launch netflix" | "run netflix" => {
+            Some("https://www.netflix.com")
+        }
+        "open spotify" | "oeffne spotify" | "start spotify" | "launch spotify" | "run spotify" => {
+            Some("https://open.spotify.com")
+        }
+        "open twitch" | "oeffne twitch" | "start twitch" | "launch twitch" | "run twitch" => {
+            Some("https://www.twitch.tv")
+        }
+        "open github" | "oeffne github" | "start github" | "launch github" | "run github" => {
+            Some("https://github.com")
+        }
+        "open reddit" | "oeffne reddit" | "start reddit" | "launch reddit" | "run reddit" => {
+            Some("https://www.reddit.com")
+        }
+        "open google" | "oeffne google" | "start google" | "launch google" | "run google" => {
+            Some("https://www.google.com")
+        }
+        _ => None,
+    }
+}
+
+fn is_direct_open_service_without_title(normalized: &str) -> bool {
+    matches!(
+        normalized.trim(),
+        "open youtube"
+            | "oeffne youtube"
+            | "start youtube"
+            | "launch youtube"
+            | "run youtube"
+            | "open netflix"
+            | "oeffne netflix"
+            | "start netflix"
+            | "launch netflix"
+            | "run netflix"
+            | "open spotify"
+            | "oeffne spotify"
+            | "start spotify"
+            | "launch spotify"
+            | "run spotify"
+            | "open twitch"
+            | "oeffne twitch"
+            | "start twitch"
+            | "launch twitch"
+            | "run twitch"
+    )
+}
+
 fn extract_weather_location(normalized: &str) -> Option<String> {
     for prefix in [" in ", " for ", " fuer ", " für "] {
         if let Some(pos) = normalized.find(prefix) {
@@ -552,10 +626,45 @@ fn extract_stream_title(normalized: &str, service: &str) -> Option<String> {
     if cleaned.is_empty() { None } else { Some(cleaned) }
 }
 
+fn is_direct_service_open_command(normalized: &str) -> bool {
+    matches!(
+        normalized.trim(),
+        "open youtube"
+            | "oeffne youtube"
+            | "start youtube"
+            | "starte youtube"
+            | "launch youtube"
+            | "run youtube"
+            | "open netflix"
+            | "oeffne netflix"
+            | "start netflix"
+            | "starte netflix"
+            | "launch netflix"
+            | "run netflix"
+            | "open spotify"
+            | "oeffne spotify"
+            | "start spotify"
+            | "starte spotify"
+            | "launch spotify"
+            | "run spotify"
+            | "open twitch"
+            | "oeffne twitch"
+            | "start twitch"
+            | "starte twitch"
+            | "launch twitch"
+            | "run twitch"
+    )
+}
+
 fn parse_media_command(normalized: &str) -> Option<CompanionAction> {
     let toks = tokens(normalized);
     let service = detect_streaming_service(normalized, &toks);
-
+        if is_direct_service_open_command(normalized) {
+        return None;
+    }
+    if is_direct_open_service_without_title(normalized) {
+        return None;
+    }
     if normalized == "yes"
     || normalized == "ja"
     || normalized == "yeah"
@@ -726,6 +835,10 @@ fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
         IntentScore { kind: IntentKind::YouTubeSearch, score: score(toks, YOUTUBE_WORDS, 0.86, 2.0) + score(toks, &["search", "suche", "such", "find"], 0.86, 0.9) },
         IntentScore { kind: IntentKind::YouTubePlayTitle, score: score(toks, PLAY_WORDS, 0.84, 1.7) + score(toks, YOUTUBE_WORDS, 0.84, 0.6) + score(toks, RESULT_WORDS, 0.84, 0.3) },
         IntentScore {
+            kind: IntentKind::TakeScreenshot,
+            score: score(toks, SCREENSHOT_WORDS, 0.84, 2.6),
+        },
+        IntentScore {
             kind: IntentKind::OpenApp,
             score:
                 score(toks, OPEN_WORDS, 0.88, 1.8)
@@ -781,11 +894,75 @@ fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
     }
 }
 
+fn parse_explicit_search_command(normalized: &str) -> Option<CompanionAction> {
+    for prefix in [
+        "google nach ",
+        "google ",
+        "suche auf google nach ",
+        "search google for ",
+        "search on google for ",
+    ] {
+        if let Some(rest) = normalized.strip_prefix(prefix) {
+            let query = rest.trim();
+            if !query.is_empty() {
+                return Some(CompanionAction::GoogleSearch {
+                    query: query.to_string(),
+                });
+            }
+        }
+    }
+
+    for prefix in [
+        "youtube nach ",
+        "youtube ",
+        "suche auf youtube nach ",
+        "search youtube for ",
+        "search on youtube for ",
+    ] {
+        if let Some(rest) = normalized.strip_prefix(prefix) {
+            let query = rest.trim();
+            if !query.is_empty() {
+                return Some(CompanionAction::YouTubeSearch {
+                    query: query.to_string(),
+                });
+            }
+        }
+    }
+
+    None
+}
+
+fn parse_explicit_browser_window_command(normalized: &str) -> Option<CompanionAction> {
+    match normalized.trim() {
+        "öffne neuen tab" | "oeffne neuen tab" | "open new tab" | "new tab" | "neuer tab" => {
+            Some(CompanionAction::NewTab)
+        }
+        "schließe tab" | "schliesse tab" | "close tab" | "tab schließen" | "tab schliessen" => {
+            Some(CompanionAction::CloseTab)
+        }
+        "öffne neues fenster" | "oeffne neues fenster" | "open new window" | "new window" | "neues fenster" => {
+            Some(CompanionAction::NewWindow)
+        }
+        "schließe fenster" | "schliesse fenster" | "close window" | "fenster schließen" | "fenster schliessen" => {
+            Some(CompanionAction::Close)
+        }
+        _ => None,
+    }
+}
+
 pub fn parse_voice_command(input: &str) -> CompanionAction {
     let normalized = normalize(input);
 
     if normalized.is_empty() {
         return CompanionAction::None;
+    }
+
+    if let Some(action) = parse_explicit_search_command(&normalized) {
+        return action;
+    }
+
+    if let Some(action) = parse_explicit_browser_window_command(&normalized) {
+        return action;
     }
 
     if let Some(action) = parse_media_command(&normalized) {
@@ -973,6 +1150,7 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
         },
 
         IntentKind::ExplainSelection => CompanionAction::ExplainSelection,
+        IntentKind::TakeScreenshot => CompanionAction::TakeScreenshot,
         IntentKind::None => CompanionAction::None,
     }
 }

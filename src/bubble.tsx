@@ -1,20 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
+import { listen, emit, emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  MessageCircleQuestion,
-  X,
-  Volume2,
-  VolumeX,
-  Mic,
-  MicOff,
-  Send,
-  Sparkles,
-  Bot,
-  Command,
-} from "lucide-react";
+import { Mic, MicOff, Send, Volume2, VolumeX } from "lucide-react";
+import { ensureDevWindow } from "./openDevWindow";
 
 type ContextPayload = {
   text: string;
@@ -44,9 +34,7 @@ type SpeechRecognitionEventLike = {
   resultIndex: number;
   results: ArrayLike<{
     isFinal?: boolean;
-    0: {
-      transcript: string;
-    };
+    0: { transcript: string };
   }>;
 };
 
@@ -57,9 +45,59 @@ declare global {
   }
 }
 
+const STORAGE_KEYS = {
+  model: "openblob-bubble-model",
+  voiceShortcut: "openblob-bubble-voice-shortcut",
+  speakEnabled: "openblob-bubble-speak-enabled",
+};
+
+function readLocalStorageString(key: string, fallback: string) {
+  try {
+    const value = window.localStorage.getItem(key);
+    return value ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function readLocalStorageBool(key: string, fallback: boolean) {
+  try {
+    const value = window.localStorage.getItem(key);
+    if (value === null) return fallback;
+    return value === "true";
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeShortcutLabel(input: string) {
+  return input
+    .replace(/\s+/g, " ")
+    .replace(/control/gi, "Ctrl")
+    .replace(/escape/gi, "Esc")
+    .replace(/command/gi, "Cmd")
+    .trim();
+}
+
+function speak(text: string) {
+  if (!("speechSynthesis" in window) || !text.trim()) return;
+  window.speechSynthesis.cancel();
+
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.rate = 1;
+  utter.pitch = 1;
+  utter.lang = "de-DE";
+  window.speechSynthesis.speak(utter);
+}
+
+function stopSpeaking() {
+  if ("speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
+  }
+}
+
 function isHideAndSeekCommand(input: string) {
   const q = input.trim().toLowerCase();
-
   return (
     q.includes("hide and seek") ||
     q.includes("lets play hide and seek") ||
@@ -69,214 +107,339 @@ function isHideAndSeekCommand(input: string) {
   );
 }
 
-function speak(text: string) {
-  if (!("speechSynthesis" in window)) return;
-  window.speechSynthesis.cancel();
-  const utter = new SpeechSynthesisUtterance(text);
-  utter.rate = 1;
-  utter.pitch = 1;
-  utter.lang = "de-DE";
-  window.speechSynthesis.speak(utter);
+function looksLikeDirectCommand(input: string) {
+  const q = input.trim().toLowerCase();
+
+  return (
+    q.startsWith("open ") ||
+    q.startsWith("öffne ") ||
+    q.startsWith("oeffne ") ||
+    q.startsWith("start ") ||
+    q.startsWith("starte ") ||
+    q.startsWith("launch ") ||
+    q.startsWith("run ") ||
+    q.startsWith("mute") ||
+    q.startsWith("unmute") ||
+    q.startsWith("save") ||
+    q.startsWith("new tab") ||
+    q.startsWith("close tab") ||
+    q.startsWith("reload") ||
+    q.startsWith("google ") ||
+    q.startsWith("youtube ")
+  );
+}
+
+function getDirectKnownUrl(input: string): string | null {
+  const q = input.trim().toLowerCase();
+
+  switch (q) {
+    case "open youtube":
+    case "oeffne youtube":
+    case "start youtube":
+    case "starte youtube":
+    case "launch youtube":
+    case "run youtube":
+      return "https://www.youtube.com";
+
+    case "open netflix":
+    case "oeffne netflix":
+    case "start netflix":
+    case "starte netflix":
+    case "launch netflix":
+    case "run netflix":
+      return "https://www.netflix.com";
+
+    case "open spotify":
+    case "oeffne spotify":
+    case "start spotify":
+    case "starte spotify":
+    case "launch spotify":
+    case "run spotify":
+      return "https://open.spotify.com";
+
+    case "open twitch":
+    case "oeffne twitch":
+    case "start twitch":
+    case "starte twitch":
+    case "launch twitch":
+    case "run twitch":
+      return "https://www.twitch.tv";
+
+    case "open github":
+    case "oeffne github":
+    case "start github":
+    case "starte github":
+    case "launch github":
+    case "run github":
+      return "https://github.com";
+
+    case "open google":
+    case "oeffne google":
+    case "start google":
+    case "starte google":
+    case "launch google":
+    case "run google":
+      return "https://www.google.com";
+
+    default:
+      return null;
+  }
 }
 
 function BubbleApp() {
-  const [copiedText, setCopiedText] = useState("");
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
+  const [displayedAnswer, setDisplayedAnswer] = useState("");
   const [hint, setHint] = useState("Bereit.");
-  const [model, setModel] = useState("llama3.1:8b");
+  const [model, setModel] = useState(
+    readLocalStorageString(STORAGE_KEYS.model, "llama3.1:8b")
+  );
   const [busy, setBusy] = useState(false);
-  const [ollamaReady, setOllamaReady] = useState<boolean | null>(null);
-  const [speakEnabled, setSpeakEnabled] = useState(true);
-
-  const [voiceSupported, setVoiceSupported] = useState(false);
+  const [visible, setVisible] = useState(false);
   const [listening, setListening] = useState(false);
   const [interimText, setInterimText] = useState("");
-  const [autoSendVoice, setAutoSendVoice] = useState(true);
-  const [recording, setRecording] = useState(false);
+  const [lastRoute, setLastRoute] = useState<"command" | "ollama" | "none">(
+    "none"
+  );
+  const [voiceShortcut, setVoiceShortcut] = useState(
+    readLocalStorageString(STORAGE_KEYS.voiceShortcut, "Alt + M")
+  );
+  const [speakEnabled, setSpeakEnabled] = useState(
+    readLocalStorageBool(STORAGE_KEYS.speakEnabled, true)
+  );
+  const [subtitleVisible, setSubtitleVisible] = useState(false);
 
-  const [visible, setVisible] = useState(false);
-  const [mounted, setMounted] = useState(true);
-  const [showAnswer, setShowAnswer] = useState(false);
-  const [showContext, setShowContext] = useState(false);
-
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  const micStreamRef = useRef<MediaStream | null>(null);
-  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const revealTimerRef = useRef<number | null>(null);
+  const subtitleFadeTimerRef = useRef<number | null>(null);
 
   const SpeechRecognitionCtor = useMemo(
     () => window.SpeechRecognition || window.webkitSpeechRecognition || null,
     []
   );
 
-  const stopMicTracks = () => {
-    if (micStreamRef.current) {
-      micStreamRef.current.getTracks().forEach((track) => track.stop());
-      micStreamRef.current = null;
+  const clearRevealTimer = () => {
+    if (revealTimerRef.current !== null) {
+      window.clearInterval(revealTimerRef.current);
+      revealTimerRef.current = null;
+    }
+  };
+
+  const clearSubtitleFadeTimer = () => {
+    if (subtitleFadeTimerRef.current !== null) {
+      window.clearTimeout(subtitleFadeTimerRef.current);
+      subtitleFadeTimerRef.current = null;
     }
   };
 
   const focusInputSoon = () => {
     window.setTimeout(() => {
       inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(
-        inputRef.current.value.length,
-        inputRef.current.value.length
-      );
-    }, 120);
+      const len = inputRef.current?.value.length ?? 0;
+      inputRef.current?.setSelectionRange(len, len);
+    }, 110);
+  };
+
+  const fadeInAndShow = async () => {
+    const win = getCurrentWindow();
+    await win.show();
+    requestAnimationFrame(() => setVisible(true));
+    await win.setFocus().catch(() => {});
+    focusInputSoon();
   };
 
   const fadeOutAndHide = async () => {
     setVisible(false);
     window.setTimeout(async () => {
-      await getCurrentWindow().hide();
+      await getCurrentWindow()
+        .hide()
+        .catch(() => {});
     }, 180);
   };
 
-  const fadeInAndShow = async () => {
-    await getCurrentWindow().show();
-    setMounted(true);
-    requestAnimationFrame(() => {
-      setVisible(true);
-    });
-    await getCurrentWindow().setFocus();
-    focusInputSoon();
+  const closeBubble = async () => {
+    stopVoiceInput();
+    await fadeOutAndHide();
   };
 
-  const runMode = async (
-    mode: "translate_de" | "translate_en" | "explain" | "ask",
-    textOverride?: string,
-    questionOverride?: string
+  const emitBlobState = async (
+    state: "thinking" | "listening",
+    active: boolean
   ) => {
-    const sourceText = (textOverride ?? copiedText).trim();
-    const sourceQuestion = (questionOverride ?? question).trim();
+    try {
+      await emit("blob-state", { state, active });
+    } catch {}
+  };
 
-    if (!sourceText && mode !== "ask") {
-      setHint("Kein Kontext vorhanden.");
+  const revealAnswerWordByWord = (text: string, holdMs = 4200) => {
+    clearRevealTimer();
+    clearSubtitleFadeTimer();
+
+    const trimmed = text.trim();
+    setAnswer(trimmed);
+    setDisplayedAnswer("");
+
+    if (!trimmed) {
+      setSubtitleVisible(false);
       return;
     }
 
-    if (mode === "ask" && !sourceQuestion) {
-      setHint("Bitte zuerst etwas eingeben.");
-      return;
-    }
+    const words = trimmed.split(/\s+/);
+    let index = 0;
 
-    setBusy(true);
-    setAnswer("");
-    setShowAnswer(true);
+    setSubtitleVisible(true);
+
+    revealTimerRef.current = window.setInterval(() => {
+      index += 1;
+      setDisplayedAnswer(words.slice(0, index).join(" "));
+
+      if (index >= words.length) {
+        clearRevealTimer();
+
+        subtitleFadeTimerRef.current = window.setTimeout(() => {
+          setSubtitleVisible(false);
+        }, holdMs);
+      }
+    }, 34);
+  };
+
+  const showSubtitle = (text: string, holdMs = 5200) => {
+    revealAnswerWordByWord(text, holdMs);
+  };
+
+  const openDevWindow = async () => {
+    const dev = await ensureDevWindow();
+    await dev.show();
+    await dev.setFocus().catch(() => {});
+    await emitTo("bubble-dev", "bubble-dev-data", {
+      lastRoute,
+      voiceShortcut,
+      model,
+    });
+  };
+
+  const runOllamaAsk = async (prompt: string) => {
+    await emitBlobState("thinking", true);
 
     try {
       const result = await invoke<OllamaResult>("ask_ollama", {
-        mode,
-        text: sourceText || sourceQuestion,
-        question: mode === "ask" ? sourceQuestion : null,
+        mode: "ask",
+        text: prompt,
+        question: prompt,
         model,
       });
 
-      setAnswer(result.content);
+      showSubtitle(result.content, 5600);
       setHint(`Antwort von ${result.model}`);
+      setLastRoute("ollama");
 
-      const shortSpeech = result.content.slice(0, 140);
-      await emit("companion-speech", shortSpeech);
+      await emit("companion-speech", result.content.slice(0, 180));
 
       if (speakEnabled) {
-        speak(result.content.slice(0, 220));
+        speak(result.content.slice(0, 260));
       }
-    } catch (error) {
-      setHint(String(error));
     } finally {
-      setBusy(false);
+      await emitBlobState("thinking", false);
     }
   };
 
   const executeCommandOrAsk = async (rawInput: string) => {
     const input = rawInput.trim();
 
-    if (!input) {
+    if (!input || busy) {
       setHint("Bitte gib etwas ein.");
       return;
     }
 
     setQuestion(input);
-    setShowAnswer(true);
+    setBusy(true);
 
-    if (isHideAndSeekCommand(input)) {
-      await emit("start-hide-and-seek");
-      setAnswer("Okay, hide and seek started. Find me.");
-      setHint("Hide and seek started.");
-      return;
-    }
+    const directUrl = getDirectKnownUrl(input);
 
     try {
+      if (directUrl) {
+        await invoke<string>("handle_voice_command", {
+          input: `open ${directUrl}`,
+        });
+
+        showSubtitle(`Öffne ${directUrl}.`, 4200);
+        setHint("Bekannte Seite direkt geöffnet.");
+        setLastRoute("command");
+
+        if (speakEnabled) {
+          speak(`Öffne ${directUrl}.`);
+        }
+        return;
+      }
+
+      if (isHideAndSeekCommand(input)) {
+        await emit("start-hide-and-seek");
+        showSubtitle("Okay, hide and seek started. Find me.", 4200);
+        setHint("Hide and seek started.");
+        setLastRoute("command");
+
+        if (speakEnabled) {
+          speak("Okay, hide and seek started. Find me.");
+        }
+        return;
+      }
+
       const actionResult = await invoke<string>("handle_voice_command", {
         input,
       });
 
       if (actionResult !== "NO_ACTION") {
-        setAnswer(actionResult);
+        showSubtitle(actionResult, 4200);
         setHint("Befehl ausgeführt.");
+        setLastRoute("command");
 
         await emit("companion-speech", actionResult);
 
         if (speakEnabled) {
-          speak(actionResult);
+          speak(actionResult.slice(0, 220));
+        }
+
+        return;
+      }
+
+      if (looksLikeDirectCommand(input)) {
+        const message = `Konnte den lokalen Befehl nicht ausführen: "${input}"`;
+        showSubtitle(message, 4200);
+        setHint("Befehl erkannt, aber lokal nichts Passendes gefunden.");
+        setLastRoute("command");
+
+        if (speakEnabled) {
+          speak(message);
         }
         return;
       }
+
+      setHint("Kein lokaler Befehl erkannt. Frage Ollama...");
+      await runOllamaAsk(input);
     } catch (error) {
       const message = String(error);
 
-      if (message.includes("Prozent-Lautstärke")) {
-        setAnswer(message);
-        setHint("Befehl erkannt, aber noch nicht exakt implementiert.");
-        return;
+      showSubtitle(message, 4800);
+
+      if (looksLikeDirectCommand(input)) {
+        setHint("Lokaler Befehl fehlgeschlagen.");
+        setLastRoute("command");
+      } else {
+        setHint(`Fehler: ${message}`);
       }
 
-      setHint(`Command-Fehler: ${message}`);
-      return;
+      if (speakEnabled) {
+        speak(message.slice(0, 220));
+      }
+    } finally {
+      setBusy(false);
     }
-
-    setHint("Kein Systembefehl erkannt. Frage die KI...");
-    await runMode("ask", input, input);
-  };
-
-  const handleTranscript = async (transcriptRaw: string) => {
-    const transcript = transcriptRaw.trim();
-    if (!transcript) {
-      setHint("Keine Sprache erkannt.");
-      return;
-    }
-    await executeCommandOrAsk(transcript);
   };
 
   const handleTypedSubmit = async () => {
     if (busy) return;
     await executeCommandOrAsk(question);
-  };
-
-  const runLocalVoiceInput = async () => {
-    if (recording || busy) return;
-
-    try {
-      setRecording(true);
-      setHint("Nehme lokal auf...");
-
-      const transcript = await invoke<string>("record_and_transcribe_voice", {
-        seconds: 5,
-      });
-
-      if (!transcript.trim()) {
-        setHint("Keine Sprache erkannt.");
-        return;
-      }
-
-      setHint("Lokale Transkription fertig.");
-      await handleTranscript(transcript);
-    } catch (error) {
-      setHint(`Voice-Fehler: ${String(error)}`);
-    } finally {
-      setRecording(false);
-    }
   };
 
   const startVoiceInput = async () => {
@@ -285,32 +448,23 @@ function BubbleApp() {
       return;
     }
 
-    if (listening) return;
+    if (listening || busy) return;
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
-        video: false,
-      });
-
-      micStreamRef.current = stream;
-
       const recognition = new SpeechRecognitionCtor();
       recognition.lang = "de-DE";
       recognition.interimResults = true;
       recognition.continuous = false;
       recognition.maxAlternatives = 1;
 
-      recognition.onstart = () => {
+      recognition.onstart = async () => {
         setListening(true);
         setInterimText("");
-        setHint("Ich höre zu...");
+        setHint("Ich höre zu …");
+        await emitBlobState("listening", true);
       };
 
-      recognition.onresult = async (event) => {
+      recognition.onresult = (event) => {
         let finalTranscript = "";
         let liveTranscript = "";
 
@@ -326,527 +480,599 @@ function BubbleApp() {
         setInterimText(liveTranscript);
 
         if (finalTranscript.trim()) {
-          const cleaned = finalTranscript.trim();
-          setInterimText("");
-          setHint("Sprache erkannt.");
-
-          if (autoSendVoice) {
-            await handleTranscript(cleaned);
-          } else {
-            setQuestion(cleaned);
-            focusInputSoon();
-          }
+          setQuestion(finalTranscript.trim());
         }
       };
 
-      recognition.onerror = (event) => {
+      recognition.onend = async () => {
         setListening(false);
-        stopMicTracks();
-        setHint(`Voice-Fehler: ${event.error ?? "unbekannt"}`);
-      };
-
-      recognition.onend = () => {
-        setListening(false);
-        stopMicTracks();
         recognitionRef.current = null;
         setInterimText("");
+        await emitBlobState("listening", false);
+
+        const finalText = (inputRef.current?.value ?? question).trim();
+        if (finalText) {
+          await executeCommandOrAsk(finalText);
+        }
+      };
+
+      recognition.onerror = async (event) => {
+        setListening(false);
+        recognitionRef.current = null;
+        setInterimText("");
+        setHint(`Voice error: ${event.error ?? "unbekannt"}`);
+        await emitBlobState("listening", false);
       };
 
       recognitionRef.current = recognition;
       recognition.start();
     } catch (error) {
-      stopMicTracks();
       setListening(false);
-      setHint(`Mikrofon nicht verfügbar: ${String(error)}`);
+      setInterimText("");
+      setHint(`Mikrofonfehler: ${String(error)}`);
+      await emitBlobState("listening", false);
     }
   };
 
   const stopVoiceInput = () => {
-    recognitionRef.current?.stop();
+    try {
+      recognitionRef.current?.stop();
+    } catch {}
     recognitionRef.current = null;
-    stopMicTracks();
     setListening(false);
     setInterimText("");
-    setHint("Voice gestoppt.");
+    void emitBlobState("listening", false);
   };
 
   useEffect(() => {
-    setVoiceSupported(Boolean(SpeechRecognitionCtor));
-  }, [SpeechRecognitionCtor]);
+    try {
+      window.localStorage.setItem(STORAGE_KEYS.model, model);
+    } catch {}
+  }, [model]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        STORAGE_KEYS.voiceShortcut,
+        normalizeShortcutLabel(voiceShortcut)
+      );
+    } catch {}
+  }, [voiceShortcut]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        STORAGE_KEYS.speakEnabled,
+        String(speakEnabled)
+      );
+    } catch {}
+  }, [speakEnabled]);
 
   useEffect(() => {
     let unlistenContext: null | (() => void) = null;
-    let unlistenHotkey: null | (() => void) = null;
+    let unlistenToggle: null | (() => void) = null;
+    let unlistenShow: null | (() => void) = null;
+    let unlistenHide: null | (() => void) = null;
+    let unlistenVoiceToggle: null | (() => void) = null;
 
     const setup = async () => {
       unlistenContext = await listen<ContextPayload>(
         "companion-context",
         async (event) => {
           const payload = event.payload;
-          const text = payload.text || "";
+
+          if (payload.text?.trim()) {
+            showSubtitle(payload.text.trim(), 5200);
+          }
+
+          if (payload.hint) {
+            setHint(payload.hint);
+          }
+
+          if (payload.autoRun && payload.text?.trim()) {
+            setQuestion(payload.text.trim());
+          }
 
           await fadeInAndShow();
-
-          setCopiedText(text);
-          if (payload.hint) setHint(payload.hint);
-
-          if (payload.autoRun && text.trim()) {
-            setShowAnswer(true);
-            await runMode("explain", text);
-          }
         }
       );
+
+      unlistenToggle = await listen("bubble-toggle", async () => {
+        const win = getCurrentWindow();
+        const isVisible = await win.isVisible();
+
+        if (isVisible && visible) {
+          stopVoiceInput();
+          await fadeOutAndHide();
+        } else {
+          await fadeInAndShow();
+        }
+      });
+
+      unlistenShow = await listen("bubble-show", async () => {
+        await fadeInAndShow();
+      });
+
+      unlistenHide = await listen("bubble-hide", async () => {
+        stopVoiceInput();
+        await fadeOutAndHide();
+      });
+
+      unlistenVoiceToggle = await listen("companion-voice-toggle", async () => {
+        await fadeInAndShow();
+
+        if (listening) {
+          stopVoiceInput();
+        } else {
+          await startVoiceInput();
+        }
+      });
     };
 
-    setup();
+    void setup();
 
     return () => {
       if (unlistenContext) unlistenContext();
-      if (unlistenHotkey) unlistenHotkey();
+      if (unlistenToggle) unlistenToggle();
+      if (unlistenShow) unlistenShow();
+      if (unlistenHide) unlistenHide();
+      if (unlistenVoiceToggle) unlistenVoiceToggle();
     };
-  }, [visible, model, speakEnabled]);
+  }, [visible, listening, question, busy]);
 
   useEffect(() => {
-    const checkOllama = async () => {
-      try {
-        const ready = await invoke<boolean>("ping_ollama");
-        setOllamaReady(ready);
-      } catch {
-        setOllamaReady(false);
+    const onKeyDown = (event: KeyboardEvent) => {
+      const combo = [
+        event.ctrlKey ? "Ctrl" : "",
+        event.altKey ? "Alt" : "",
+        event.shiftKey ? "Shift" : "",
+        event.metaKey ? "Cmd" : "",
+        event.key.length === 1 ? event.key.toUpperCase() : event.key,
+      ]
+        .filter(Boolean)
+        .join(" + ");
+
+      if (
+        normalizeShortcutLabel(combo).toLowerCase() ===
+        normalizeShortcutLabel(voiceShortcut).toLowerCase()
+      ) {
+        event.preventDefault();
+
+        if (listening) stopVoiceInput();
+        else void startVoiceInput();
       }
     };
 
-    checkOllama();
-  }, []);
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [listening, voiceShortcut, busy]);
 
   useEffect(() => {
     return () => {
+      clearRevealTimer();
+      clearSubtitleFadeTimer();
+      stopSpeaking();
+
       try {
         recognitionRef.current?.stop();
       } catch {}
-      stopMicTracks();
     };
   }, []);
 
-  const closeBubble = async () => {
-    stopVoiceInput();
-    await fadeOutAndHide();
-  };
-
   return (
-    <div
-      className="bubble-window-shell"
-      style={{
-        opacity: visible ? 1 : 0,
-        transform: visible ? "translateY(0px)" : "translateY(24px)",
-        transition: "opacity 220ms ease, transform 220ms ease",
-        pointerEvents: visible ? "auto" : "none",
-      }}
-    >
-      <div className="bubble-window-card glass-panel bubble-no-drag">
+    <>
+      <style>{`
+        :root {
+          color-scheme: dark;
+          --glass-base: rgba(16, 20, 28, 0.84);
+          --glass-tint: rgba(255, 255, 255, 0.16);
+          --glass-tint-soft: rgba(255, 255, 255, 0.09);
+          --glass-border: rgba(255, 255, 255, 0.18);
+          --glass-border-soft: rgba(255, 255, 255, 0.10);
+
+          --text-main: rgba(255, 255, 255, 0.98);
+          --text-soft: rgba(236, 240, 248, 0.82);
+          --text-dim: rgba(236, 240, 248, 0.56);
+
+          --subtitle-stroke: rgba(0, 0, 0, 0.92);
+          --button-bg: rgba(255, 255, 255, 0.10);
+          --button-bg-hover: rgba(255, 255, 255, 0.16);
+        }
+
+        html,
+        body,
+        #root {
+          width: 100%;
+          height: 100%;
+          margin: 0;
+          background: transparent;
+          overflow: hidden;
+          font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          color: var(--text-main);
+        }
+
+        * {
+          box-sizing: border-box;
+        }
+
+        .bubble-stage {
+          width: 100%;
+          height: 100%;
+          padding: 24px 18px 26px;
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
+          align-items: center;
+          background: transparent;
+        }
+
+        .subtitle-stage {
+          width: min(1180px, calc(100vw - 56px));
+          min-height: 170px;
+          display: flex;
+          align-items: flex-end;
+          justify-content: center;
+          pointer-events: none;
+          padding-top: 8px;
+        }
+
+        .subtitle-text {
+          width: 100%;
+          text-align: center;
+          color: #fff;
+          font-size: clamp(24px, 2.15vw, 38px);
+          line-height: 1.24;
+          font-weight: 800;
+          letter-spacing: 0.01em;
+          white-space: pre-wrap;
+          word-break: break-word;
+          text-shadow:
+            0 1px 0 var(--subtitle-stroke),
+            0 2px 0 var(--subtitle-stroke),
+            0 3px 0 var(--subtitle-stroke),
+            0 0 18px rgba(0, 0, 0, 0.32);
+        }
+
+        .subtitle-placeholder {
+          color: rgba(255, 255, 255, 0);
+        }
+
+        .bottom-stack {
+          width: min(1040px, calc(100vw - 28px));
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 9px;
+        }
+
+        .bubble-shell {
+          width: 100%;
+          position: relative;
+          border-radius: 999px;
+          overflow: hidden;
+          isolation: isolate;
+          background:
+            linear-gradient(
+              180deg,
+              rgba(255,255,255,0.18),
+              rgba(255,255,255,0.08)
+            ),
+            var(--glass-base);
+          border: 1px solid var(--glass-border);
+          backdrop-filter: blur(24px) saturate(145%);
+          -webkit-backdrop-filter: blur(24px) saturate(145%);
+        }
+
+        .bubble-shell::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          background:
+            radial-gradient(circle at 18% 0%, rgba(255,255,255,0.18), transparent 34%),
+            radial-gradient(circle at 80% 100%, rgba(255,255,255,0.08), transparent 30%);
+          pointer-events: none;
+          z-index: 0;
+        }
+
+        .bubble-shell::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          pointer-events: none;
+          z-index: 0;
+          box-shadow:
+            inset 1px 1px 0 rgba(255,255,255,0.28),
+            inset -1px -1px 0 rgba(255,255,255,0.05);
+        }
+
+        .bubble-row {
+          position: relative;
+          z-index: 1;
+          display: grid;
+          grid-template-columns: 1fr auto auto auto;
+          align-items: center;
+          gap: 10px;
+          min-height: 82px;
+          padding: 11px 12px;
+        }
+
+        .input-wrap {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          gap: 7px;
+        }
+
+        .bubble-input {
+          width: 100%;
+          height: 48px;
+          border: 0;
+          outline: none;
+          background: transparent;
+          color: var(--text-main);
+          font-size: 16px;
+          font-weight: 540;
+          padding: 0 10px;
+          text-shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
+        }
+
+        .bubble-input::placeholder {
+          color: var(--text-dim);
+        }
+
+        .bubble-meta {
+          display: flex;
+          gap: 10px;
+          align-items: center;
+          flex-wrap: wrap;
+          padding-left: 10px;
+          min-height: 16px;
+        }
+
+        .bubble-hint {
+          font-size: 11px;
+          color: var(--text-soft);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: 100%;
+        }
+
+        .bubble-live {
+          font-size: 11px;
+          color: rgba(206, 223, 255, 0.92);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: 340px;
+        }
+
+        .icon-btn {
+          width: 52px;
+          height: 52px;
+          border-radius: 999px;
+          border: 1px solid var(--glass-border-soft);
+          background: var(--button-bg);
+          color: var(--text-main);
+          display: grid;
+          place-items: center;
+          cursor: pointer;
+          transition:
+            transform 0.14s ease,
+            background 0.14s ease,
+            border-color 0.14s ease,
+            opacity 0.14s ease;
+        }
+
+        .icon-btn:hover {
+          background: var(--button-bg-hover);
+          border-color: rgba(255,255,255,0.18);
+        }
+
+        .icon-btn:active {
+          transform: scale(0.98);
+        }
+
+        .icon-btn:disabled {
+          opacity: 0.55;
+          cursor: default;
+        }
+
+        .icon-btn-active {
+          background: rgba(255,255,255,0.18);
+          border-color: rgba(255,255,255,0.20);
+        }
+
+        .tiny-links {
+          width: 100%;
+          display: flex;
+          justify-content: center;
+          gap: 14px;
+          min-height: 16px;
+          flex-wrap: wrap;
+        }
+
+        .tiny-link {
+          appearance: none;
+          border: 0;
+          background: transparent;
+          padding: 0;
+          font-size: 11px;
+          color: rgba(255,255,255,0.68);
+          cursor: pointer;
+        }
+
+        .tiny-link:hover {
+          color: rgba(255,255,255,0.94);
+        }
+
+        .tiny-link-static {
+          cursor: default;
+        }
+
+        @media (max-width: 820px) {
+          .subtitle-stage {
+            width: calc(100vw - 24px);
+            min-height: 130px;
+          }
+
+          .subtitle-text {
+            font-size: clamp(18px, 4vw, 28px);
+          }
+
+          .bottom-stack {
+            width: calc(100vw - 16px);
+          }
+
+          .bubble-row {
+            grid-template-columns: 1fr auto auto;
+          }
+
+          .sound-btn {
+            display: none;
+          }
+        }
+      `}</style>
+
+      <div
+        className="bubble-stage"
+        style={{
+          opacity: visible ? 1 : 0,
+          transform: visible
+            ? "translateY(0px) scale(1)"
+            : "translateY(14px) scale(0.992)",
+          transition: "opacity 180ms ease, transform 180ms ease",
+          pointerEvents: visible ? "auto" : "none",
+        }}
+      >
         <div
+          className="subtitle-stage"
           style={{
-            position: "relative",
-            zIndex: 1,
-            display: "grid",
-            gridTemplateColumns: "1fr auto",
-            gap: 12,
-            alignItems: "center",
+            opacity: subtitleVisible ? 1 : 0,
+            transform: subtitleVisible
+              ? "translateY(0px) scale(1)"
+              : "translateY(8px) scale(0.995)",
+            transition: "opacity 320ms ease, transform 320ms ease",
+            pointerEvents: "none",
           }}
         >
-          <div
-            data-tauri-drag-region
-            className="bubble-drag-region"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              minHeight: 42,
-              padding: "0 4px",
-            }}
-          >
-            <div
-              style={{
-                width: 40,
-                height: 40,
-                borderRadius: 14,
-                background:
-                  "linear-gradient(180deg, rgba(126,167,255,0.24), rgba(126,167,255,0.08))",
-                border: "1px solid rgba(146,184,255,0.24)",
-                display: "grid",
-                placeItems: "center",
-                boxShadow: "0 10px 30px rgba(78,117,217,0.24)",
-                flexShrink: 0,
-              }}
-            >
-              <Sparkles size={18} />
-            </div>
-
-            <div style={{ minWidth: 0 }}>
-              <div
-                style={{
-                  fontSize: 15,
-                  fontWeight: 800,
-                  letterSpacing: 0.2,
-                }}
-              >
-                Ask anything
-              </div>
-              <div
-                style={{
-                  fontSize: 12,
-                  opacity: 0.62,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {ollamaReady === null
-                  ? "prüfe ollama..."
-                  : ollamaReady
-                  ? `online · ${model}`
-                  : "ollama offline"}
-              </div>
-            </div>
-          </div>
-
-          <div
-            className="bubble-no-drag"
-            style={{ display: "flex", gap: 8, alignItems: "center" }}
-          >
-            <button
-              onClick={() => setShowContext((v) => !v)}
-              style={topGhostButtonStyle}
-              title="Kontext ein-/ausblenden"
-            >
-              <Command size={16} />
-            </button>
-
-            <button
-              onClick={() => setSpeakEnabled((v) => !v)}
-              style={topGhostButtonStyle}
-              title="Audio an/aus"
-            >
-              {speakEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
-            </button>
-
-            <button
-              onClick={closeBubble}
-              style={topGhostButtonStyle}
-              title="Ausblenden"
-            >
-              <X size={16} />
-            </button>
+          <div className="subtitle-text">
+            {displayedAnswer || <span className="subtitle-placeholder">.</span>}
           </div>
         </div>
 
-        {showContext && (
-          <div
-            style={{
-              position: "relative",
-              zIndex: 1,
-              marginTop: 12,
-            }}
-          >
-            <div className="glass-section">
-              <div style={labelStyle}>Kontext</div>
-              <div className="glass-scroll" style={contextBoxStyle}>
-                {copiedText || "Noch kein Kontext."}
-              </div>
-            </div>
-          </div>
-        )}
+        <div className="bottom-stack">
+          <div className="bubble-shell">
+            <div className="bubble-row">
+              <div className="input-wrap">
+                <input
+                  ref={inputRef}
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  className="bubble-input"
+                  placeholder="open youtube, open arc raiders, mute, oder frag mich etwas …"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void handleTypedSubmit();
+                    }
 
-        <div
-          style={{
-            position: "relative",
-            zIndex: 1,
-            marginTop: 12,
-          }}
-        >
-          <div className="glass-section" style={{ padding: 14 }}>
-            <textarea
-              ref={inputRef}
-              className="glass-input"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              placeholder='"Search [X] on YouTube", "Play Rick and Morty on Netflix", "Start Arc Raiders"'
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void handleTypedSubmit();
-                }
-              }}
-              style={{
-                minHeight: 112,
-                maxHeight: 112,
-                lineHeight: 1.5,
-                border: "none",
-                boxShadow: "none",
-                padding: 0,
-                background: "transparent",
-                fontSize: 18,
-                resize: "none",
-              }}
-            />
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      void closeBubble();
+                    }
+                  }}
+                />
 
-            <div
-              style={{
-                marginTop: 14,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 12,
-                flexWrap: "wrap",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  gap: 8,
-                  alignItems: "center",
-                  flexWrap: "wrap",
-                }}
-              >
-                <button
-                  onClick={runLocalVoiceInput}
-                  disabled={busy || recording}
-                  style={bottomIconButtonStyle}
-                  title="Lokale Sprachaufnahme"
-                >
-                  {recording ? <MicOff size={17} /> : <Mic size={17} />}
-                </button>
+                <div className="bubble-meta">
+                  <span className="bubble-hint">
+                    {busy ? "Verarbeite..." : hint}
+                  </span>
 
-                <button
-                  onClick={listening ? stopVoiceInput : startVoiceInput}
-                  disabled={!voiceSupported || busy}
-                  style={bottomGhostChipStyle}
-                >
-                  {listening ? <MicOff size={14} /> : <Mic size={14} />}
-                  {listening ? "Stop" : "Voice"}
-                </button>
-
-                <button
-                  onClick={() => setAutoSendVoice((v) => !v)}
-                  disabled={!voiceSupported}
-                  style={bottomGhostChipStyle}
-                >
-                  <Send size={14} />
-                  {autoSendVoice ? "Auto-Send an" : "Auto-Send aus"}
-                </button>
-
-                <button
-                  onClick={() => runMode("ask")}
-                  disabled={busy}
-                  style={bottomGhostChipStyle}
-                >
-                  <Bot size={14} />
-                  KI fragen
-                </button>
-              </div>
-
-              <div
-                style={{
-                  display: "flex",
-                  gap: 8,
-                  alignItems: "center",
-                  marginLeft: "auto",
-                }}
-              >
-                <button
-                  onClick={handleTypedSubmit}
-                  disabled={busy}
-                  style={primaryPillStyle}
-                >
-                  <MessageCircleQuestion size={15} />
-                  {busy ? "Arbeite..." : "Ausführen"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {(showAnswer || answer) && (
-          <div
-            style={{
-              position: "relative",
-              zIndex: 1,
-              marginTop: 12,
-            }}
-          >
-            <div className="glass-section">
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: 8,
-                }}
-              >
-                <div style={labelStyle}>Antwort</div>
-                <button
-                  onClick={() => setShowAnswer((v) => !v)}
-                  style={miniFlatButtonStyle}
-                >
-                  {showAnswer ? "Einklappen" : "Ausklappen"}
-                </button>
-              </div>
-
-              {showAnswer && (
-                <div className="glass-scroll" style={answerBoxStyle}>
-                  {answer || "Noch keine Antwort."}
+                  {interimText ? (
+                    <span className="bubble-live">… {interimText}</span>
+                  ) : null}
                 </div>
-              )}
+              </div>
+
+              <button
+                className={`icon-btn sound-btn ${
+                  speakEnabled ? "icon-btn-active" : ""
+                }`}
+                onClick={() => {
+                  setSpeakEnabled((prev) => {
+                    const next = !prev;
+                    if (!next) stopSpeaking();
+                    return next;
+                  });
+                }}
+                title={speakEnabled ? "Sprachausgabe an" : "Sprachausgabe aus"}
+                aria-label="Sprachausgabe"
+                type="button"
+              >
+                {speakEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+              </button>
+
+              <button
+                className={`icon-btn ${listening ? "icon-btn-active" : ""}`}
+                onClick={() => {
+                  if (listening) stopVoiceInput();
+                  else void startVoiceInput();
+                }}
+                title={`Spracherkennung (${voiceShortcut})`}
+                disabled={busy}
+                aria-label="Spracherkennung"
+                type="button"
+              >
+                {listening ? <MicOff size={18} /> : <Mic size={18} />}
+              </button>
+
+              <button
+                className="icon-btn"
+                onClick={() => void handleTypedSubmit()}
+                title="Senden"
+                disabled={busy}
+                aria-label="Senden"
+                type="button"
+              >
+                <Send size={18} />
+              </button>
             </div>
           </div>
-        )}
 
-        <div
-          style={{
-            position: "relative",
-            zIndex: 1,
-            marginTop: 10,
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 12,
-            flexWrap: "wrap",
-          }}
-        >
-          <div
-            style={{
-              fontSize: 12,
-              opacity: 0.72,
-              minHeight: 18,
-            }}
-          >
-            {listening
-              ? interimText || "Ich höre zu..."
-              : recording
-              ? "Lokale Aufnahme läuft..."
-              : hint}
-          </div>
+          <div className="tiny-links">
+            <button
+              className="tiny-link"
+              onClick={() => void openDevWindow()}
+              type="button"
+            >
+              dev mode
+            </button>
 
-          <div
-            style={{
-              fontSize: 11,
-              opacity: 0.48,
-            }}
-          >
-            Shortcut: Ctrl + Space
+            <span
+              className="tiny-link tiny-link-static"
+              title={`route: ${lastRoute}`}
+            >
+              {lastRoute === "command"
+                ? "befehl ausgeführt"
+                : lastRoute === "ollama"
+                ? "ollama antwort"
+                : "bereit"}
+            </span>
+
+            <span className="tiny-link tiny-link-static">
+              voice {voiceShortcut}
+            </span>
+
+            <span className="tiny-link tiny-link-static">model {model}</span>
           </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
-
-const labelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 700,
-  opacity: 0.82,
-  marginBottom: 8,
-  letterSpacing: 0.2,
-};
-
-const contextBoxStyle: React.CSSProperties = {
-  maxHeight: 88,
-  overflow: "auto",
-  borderRadius: 16,
-  padding: "12px 14px",
-  background: "rgba(255,255,255,0.03)",
-  border: "1px solid rgba(255,255,255,0.06)",
-  fontSize: 13,
-  lineHeight: 1.45,
-  color: "rgba(238,244,255,0.88)",
-  whiteSpace: "pre-wrap",
-};
-
-const answerBoxStyle: React.CSSProperties = {
-  minHeight: 138,
-  maxHeight: 220,
-  overflow: "auto",
-  borderRadius: 16,
-  padding: "12px 14px",
-  background: "rgba(255,255,255,0.03)",
-  border: "1px solid rgba(255,255,255,0.06)",
-  fontSize: 13,
-  lineHeight: 1.55,
-  whiteSpace: "pre-wrap",
-  color: "rgba(238,244,255,0.92)",
-};
-
-const topGhostButtonStyle: React.CSSProperties = {
-  width: 38,
-  height: 38,
-  display: "grid",
-  placeItems: "center",
-  borderRadius: 14,
-  border: "1px solid rgba(255,255,255,0.08)",
-  background: "rgba(255,255,255,0.05)",
-  color: "#eef4ff",
-  cursor: "pointer",
-};
-
-const bottomIconButtonStyle: React.CSSProperties = {
-  width: 42,
-  height: 42,
-  display: "grid",
-  placeItems: "center",
-  borderRadius: 999,
-  border: "1px solid rgba(255,255,255,0.08)",
-  background:
-    "linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04))",
-  color: "#eef4ff",
-  cursor: "pointer",
-  flexShrink: 0,
-};
-
-const bottomGhostChipStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  height: 40,
-  padding: "0 14px",
-  borderRadius: 999,
-  border: "1px solid rgba(255,255,255,0.08)",
-  background: "rgba(255,255,255,0.05)",
-  color: "#eef4ff",
-  cursor: "pointer",
-  fontSize: 13,
-  fontWeight: 700,
-};
-
-const primaryPillStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  height: 42,
-  padding: "0 16px",
-  borderRadius: 999,
-  border: "1px solid rgba(140,180,255,0.24)",
-  background:
-    "linear-gradient(180deg, rgba(117,163,255,0.24), rgba(117,163,255,0.12))",
-  color: "#eef4ff",
-  cursor: "pointer",
-  fontSize: 13,
-  fontWeight: 800,
-  boxShadow: "0 10px 30px rgba(62,106,214,0.2)",
-};
-
-const miniFlatButtonStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  height: 30,
-  padding: "0 10px",
-  borderRadius: 999,
-  border: "1px solid rgba(255,255,255,0.08)",
-  background: "rgba(255,255,255,0.04)",
-  color: "#eef4ff",
-  cursor: "pointer",
-  fontSize: 12,
-  fontWeight: 700,
-};
 
 createRoot(document.getElementById("root")!).render(<BubbleApp />);

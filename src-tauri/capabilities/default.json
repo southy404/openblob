@@ -2,7 +2,14 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capability for companion",
-  "windows": ["main", "bubble", "speech", "snip-overlay", "snip-panel"],
+  "windows": [
+    "main",
+    "bubble",
+    "bubble-dev",
+    "speech",
+    "snip-overlay",
+    "snip-panel"
+  ],
   "permissions": [
     "core:default",
     "core:event:allow-listen",
