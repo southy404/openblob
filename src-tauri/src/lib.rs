@@ -9,6 +9,7 @@ use std::time::Duration;
 use tauri::Emitter;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::fs; 
+use chrono::{Datelike, Local, Timelike};
 
 mod modules {
     pub mod app_profiles;
@@ -26,9 +27,10 @@ mod modules {
 }
 
 use modules::app_profiles::resolve_app_action;
-use modules::command_router::{parse_voice_command, CompanionAction};
+use modules::command_router::{CompanionAction, parse_voice_command_with_context};
 use modules::context::{resolve_active_context, is_internal_companion_app};
-use modules::snip_session::{set_snip};
+use modules::snip_session::set_snip;
+
 
 static LAST_EXTERNAL_APP: OnceLock<Mutex<String>> = OnceLock::new();
 
@@ -1310,11 +1312,261 @@ fn parse_key(key: &str) -> Key {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct OpenMeteoGeocodingResponse {
+    results: Option<Vec<OpenMeteoGeocodingResult>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenMeteoGeocodingResult {
+    name: String,
+    country: Option<String>,
+    admin1: Option<String>,
+    latitude: f64,
+    longitude: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenMeteoForecastResponse {
+    current: Option<OpenMeteoCurrent>,
+    daily: Option<OpenMeteoDaily>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenMeteoCurrent {
+    temperature_2m: f32,
+    apparent_temperature: Option<f32>,
+    weather_code: Option<i32>,
+    wind_speed_10m: Option<f32>,
+    is_day: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenMeteoDaily {
+    temperature_2m_max: Vec<f32>,
+    temperature_2m_min: Vec<f32>,
+    precipitation_probability_max: Option<Vec<i32>>,
+    weather_code: Option<Vec<i32>>,
+}
+
+fn weather_code_label(code: i32) -> &'static str {
+    match code {
+        0 => "klar",
+        1 | 2 | 3 => "teilweise bewölkt",
+        45 | 48 => "neblig",
+        51 | 53 | 55 => "leichter Nieselregen",
+        56 | 57 => "gefrierender Nieselregen",
+        61 | 63 | 65 => "regnerisch",
+        66 | 67 => "gefrierender Regen",
+        71 | 73 | 75 | 77 => "schneit",
+        80 | 81 | 82 => "Schauer",
+        85 | 86 => "Schneeschauer",
+        95 => "Gewitter",
+        96 | 99 => "Gewitter mit Hagel",
+        _ => "wechselhaft",
+    }
+}
+
+fn build_clothing_advice(
+    temp_now: f32,
+    temp_max: f32,
+    rain_prob: i32,
+    wind_kmh: f32,
+) -> String {
+    let mut items: Vec<&str> = Vec::new();
+
+    if temp_now <= 5.0 || temp_max <= 8.0 {
+        items.push("eine warme Jacke");
+    } else if temp_now <= 12.0 || temp_max <= 15.0 {
+        items.push("eine leichte Jacke oder einen Hoodie");
+    } else if temp_max >= 24.0 {
+        items.push("leichte Kleidung");
+    } else {
+        items.push("normale Übergangskleidung");
+    }
+
+    if rain_prob >= 55 {
+        items.push("einen Regenschirm");
+    }
+
+    if wind_kmh >= 30.0 {
+        items.push("etwas Windfestes");
+    }
+
+    match items.len() {
+        0 => "Kleidungsmäßig ist heute nichts Besonderes nötig.".to_string(),
+        1 => format!("Ich würde dir heute {} empfehlen.", items[0]),
+        _ => {
+            let last = items.pop().unwrap_or("etwas Passendes");
+            format!(
+                "Ich würde dir heute {} und {} empfehlen.",
+                items.join(", "),
+                last
+            )
+        }
+    }
+}
+
+fn german_weekday_name(weekday: chrono::Weekday) -> &'static str {
+    match weekday {
+        chrono::Weekday::Mon => "Montag",
+        chrono::Weekday::Tue => "Dienstag",
+        chrono::Weekday::Wed => "Mittwoch",
+        chrono::Weekday::Thu => "Donnerstag",
+        chrono::Weekday::Fri => "Freitag",
+        chrono::Weekday::Sat => "Samstag",
+        chrono::Weekday::Sun => "Sonntag",
+    }
+}
+
+fn german_month_name(month: u32) -> &'static str {
+    match month {
+        1 => "Januar",
+        2 => "Februar",
+        3 => "März",
+        4 => "April",
+        5 => "Mai",
+        6 => "Juni",
+        7 => "Juli",
+        8 => "August",
+        9 => "September",
+        10 => "Oktober",
+        11 => "November",
+        12 => "Dezember",
+        _ => "Unbekannt",
+    }
+}
+
+fn german_time_phrase(hour: u32, minute: u32) -> String {
+    match minute {
+        0 => format!("Es ist {} Uhr.", hour),
+        15 => format!("Es ist Viertel nach {}.", hour),
+        30 => format!("Es ist halb {}.", (hour + 1) % 24),
+        45 => format!("Es ist Viertel vor {}.", (hour + 1) % 24),
+        _ => format!("Es ist {:02}:{:02} Uhr.", hour, minute),
+    }
+}
+
 async fn weather_reply(location: Option<String>) -> Result<String, String> {
-    let place = location.unwrap_or_else(|| "Hamburg".to_string());
+    let place = location
+        .unwrap_or_else(|| "Berlin".to_string())
+        .trim()
+        .to_string();
+
+    if place.is_empty() {
+        return Err("Kein Ort angegeben.".into());
+    }
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Weather client konnte nicht erstellt werden: {e}"))?;
+
+    let geo_url = format!(
+        "https://geocoding-api.open-meteo.com/v1/search?name={}&count=1&language=de&format=json",
+        urlencoding::encode(&place)
+    );
+
+    let geo = client
+        .get(&geo_url)
+        .send()
+        .await
+        .map_err(|e| format!("Geocoding fehlgeschlagen: {e}"))?;
+
+    if !geo.status().is_success() {
+        let status = geo.status();
+        let text = geo.text().await.unwrap_or_default();
+        return Err(format!("Geocoding Fehler {}: {}", status, text));
+    }
+
+    let geo_data: OpenMeteoGeocodingResponse = geo
+        .json()
+        .await
+        .map_err(|e| format!("Geocoding-Antwort konnte nicht gelesen werden: {e}"))?;
+
+    let location_hit = geo_data
+        .results
+        .and_then(|mut results| results.drain(..).next())
+        .ok_or_else(|| format!("Ich konnte keinen Ort für '{}' finden.", place))?;
+
+    let forecast_url = format!(
+        concat!(
+            "https://api.open-meteo.com/v1/forecast",
+            "?latitude={}",
+            "&longitude={}",
+            "&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,is_day",
+            "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code",
+            "&timezone=auto",
+            "&forecast_days=1"
+        ),
+        location_hit.latitude,
+        location_hit.longitude
+    );
+
+    let forecast = client
+        .get(&forecast_url)
+        .send()
+        .await
+        .map_err(|e| format!("Wetterabfrage fehlgeschlagen: {e}"))?;
+
+    if !forecast.status().is_success() {
+        let status = forecast.status();
+        let text = forecast.text().await.unwrap_or_default();
+        return Err(format!("Wetter API Fehler {}: {}", status, text));
+    }
+
+    let forecast_data: OpenMeteoForecastResponse = forecast
+        .json()
+        .await
+        .map_err(|e| format!("Wetterdaten konnten nicht gelesen werden: {e}"))?;
+
+    let current = forecast_data
+        .current
+        .ok_or_else(|| "Keine aktuellen Wetterdaten erhalten.".to_string())?;
+
+    let daily = forecast_data
+        .daily
+        .ok_or_else(|| "Keine Tagesvorhersage erhalten.".to_string())?;
+
+    let temp_now = current.temperature_2m;
+    let feels_like = current.apparent_temperature.unwrap_or(temp_now);
+    let wind = current.wind_speed_10m.unwrap_or(0.0);
+
+    let temp_max = daily.temperature_2m_max.first().copied().unwrap_or(temp_now);
+    let temp_min = daily.temperature_2m_min.first().copied().unwrap_or(temp_now);
+    let rain_prob = daily
+        .precipitation_probability_max
+        .as_ref()
+        .and_then(|v| v.first().copied())
+        .unwrap_or(0);
+
+    let weather_code = current
+        .weather_code
+        .or_else(|| daily.weather_code.as_ref().and_then(|v| v.first().copied()))
+        .unwrap_or(-1);
+
+    let summary = weather_code_label(weather_code);
+    let advice = build_clothing_advice(temp_now, temp_max, rain_prob, wind);
+
+    let pretty_place = match (&location_hit.admin1, &location_hit.country) {
+        (Some(admin1), Some(country)) if !admin1.is_empty() => {
+            format!("{}, {}, {}", location_hit.name, admin1, country)
+        }
+        (_, Some(country)) => format!("{}, {}", location_hit.name, country),
+        _ => location_hit.name.clone(),
+    };
+
     Ok(format!(
-        "Live-Wetter ist in V5.5 noch nicht angebunden. Für '{}' kann ich als Nächstes echte Wetterdaten einbauen.",
-        place
+        "{}: Gerade sind es {:.0}°C, gefühlt {:.0}°C und es ist {}. Heute liegt die Temperatur ungefähr zwischen {:.0}°C und {:.0}°C, Regenwahrscheinlichkeit bis {}%, Wind etwa {:.0} km/h. {}",
+        pretty_place,
+        temp_now,
+        feels_like,
+        summary,
+        temp_min,
+        temp_max,
+        rain_prob,
+        wind,
+        advice
     ))
 }
 
@@ -1325,8 +1577,27 @@ async fn handle_voice_command(
 ) -> Result<String, String> {
     modules::session_memory::set_last_command(&input);
 
-    let parsed_action = parse_voice_command(&input);
+    let mut ctx = resolve_active_context();
     let active_app = get_active_app();
+
+    if is_internal_companion_app(&ctx.app_name) && active_app != "unknown" {
+        ctx.app_name = active_app.clone();
+
+        if ctx.domain == "companion" || ctx.domain == "desktop" {
+            ctx.domain = "browser".to_string();
+        }
+
+        if ctx.window_title.trim().is_empty() || is_internal_companion_app(&ctx.window_title) {
+            ctx.window_title = active_app.clone();
+        }
+    }
+
+    let parsed_action = parse_voice_command_with_context(
+        &input,
+        &ctx.app_name,
+        &ctx.window_title,
+        &ctx.domain,
+    );
 
     let action = if let Some(mapped) = resolve_app_action(parsed_action.clone(), &active_app) {
         mapped
@@ -1335,6 +1606,39 @@ async fn handle_voice_command(
     };
 
     match action {
+        CompanionAction::YouTubePlay => {
+            let target = ensure_external_focus(&active_app)?;
+            press_key("k")?;
+            Ok(format!("YouTube-Play/Pause in {} ausgelöst.", target))
+        }
+
+        CompanionAction::YouTubePause => {
+            let target = ensure_external_focus(&active_app)?;
+            press_key("k")?;
+            Ok(format!("YouTube-Play/Pause in {} ausgelöst.", target))
+        }
+
+        CompanionAction::YouTubeSkipAd => {
+            ensure_debug_browser().await?;
+
+            if browser_click_best_match("skip ads".to_string()).await.is_ok() {
+                return Ok("Werbung übersprungen.".into());
+            }
+
+            if browser_click_best_match("skip ad".to_string()).await.is_ok() {
+                return Ok("Werbung übersprungen.".into());
+            }
+
+            if browser_click_best_match("überspringen".to_string()).await.is_ok() {
+                return Ok("Werbung übersprungen.".into());
+            }
+
+            if browser_click_best_match("ueberspringen".to_string()).await.is_ok() {
+                return Ok("Werbung übersprungen.".into());
+            }
+
+            Ok("Kein Skip-Button gefunden.".into())
+        }
         CompanionAction::StreamOpenTitle {
             service,
             title,
@@ -1562,9 +1866,11 @@ async fn handle_voice_command(
         CompanionAction::BrowserTypeText { text } => browser_type_text(text).await,
         CompanionAction::BrowserSubmit => browser_submit().await,
         CompanionAction::BrowserClickBestMatch { text } => browser_click_best_match(text).await,
-
+        CompanionAction::BrowserClickButtonByText { text } => {
+            browser_click_best_match(text).await
+        },
         CompanionAction::BrowserContext => {
-            let ctx = browser_get_context().await?;
+            let ctx = browser_get_context().await?; 
             Ok(format!(
                 "Seite: {} | URL: {} | Typ: {} | Links: {} | Buttons: {} | Inputs: {}",
                 ctx.title,
@@ -1667,10 +1973,26 @@ async fn handle_voice_command(
             press_key("l")?;
             Ok(format!("YouTube in {} vorgespult.", target))
         }
-        CompanionAction::YouTubeSeekBackward => {
+                CompanionAction::YouTubeSeekBackward => {
             let target = ensure_external_focus(&active_app)?;
             press_key("j")?;
             Ok(format!("YouTube in {} zurückgespult.", target))
+        }
+
+        CompanionAction::CurrentTime => {
+            let now = Local::now();
+            Ok(german_time_phrase(now.hour(), now.minute()))
+        }
+
+        CompanionAction::CurrentDate => {
+            let now = Local::now();
+            Ok(format!(
+                "Heute ist {}, der {}. {} {}.",
+                german_weekday_name(now.weekday()),
+                now.day(),
+                german_month_name(now.month()),
+                now.year()
+            ))
         }
 
         CompanionAction::WeatherToday { location } => weather_reply(location).await,

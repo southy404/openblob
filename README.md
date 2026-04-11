@@ -22,7 +22,7 @@
 OpenBlob is a local-first AI companion that lives on your Windows desktop — sees your screen, understands your context, and grows through community-driven features, smarter abilities, better design, and new integrations.
 
 <p align="center">
-  <img src="public/1.gif" width="100%" alt="Main Demo" />
+  <img src="public/1.gif" width="100%" alt="Screenshot" />
 </p>
 
 ---

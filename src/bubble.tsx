@@ -213,6 +213,7 @@ function BubbleApp() {
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const revealTimerRef = useRef<number | null>(null);
   const subtitleFadeTimerRef = useRef<number | null>(null);
+  const finalVoiceTextRef = useRef("");
 
   const SpeechRecognitionCtor = useMemo(
     () => window.SpeechRecognition || window.webkitSpeechRecognition || null,
@@ -344,6 +345,17 @@ function BubbleApp() {
     }
   };
 
+  const clearComposer = () => {
+    setQuestion("");
+    setInterimText("");
+
+    window.setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.value = "";
+      }
+    }, 0);
+  };
+
   const executeCommandOrAsk = async (rawInput: string) => {
     const input = rawInput.trim();
 
@@ -352,7 +364,6 @@ function BubbleApp() {
       return;
     }
 
-    setQuestion(input);
     setBusy(true);
 
     const directUrl = getDirectKnownUrl(input);
@@ -439,7 +450,15 @@ function BubbleApp() {
 
   const handleTypedSubmit = async () => {
     if (busy) return;
-    await executeCommandOrAsk(question);
+
+    const text = question.trim();
+    if (!text) {
+      setHint("Bitte gib etwas ein.");
+      return;
+    }
+
+    clearComposer();
+    await executeCommandOrAsk(text);
   };
 
   const startVoiceInput = async () => {
@@ -458,6 +477,7 @@ function BubbleApp() {
       recognition.maxAlternatives = 1;
 
       recognition.onstart = async () => {
+        finalVoiceTextRef.current = "";
         setListening(true);
         setInterimText("");
         setHint("Ich höre zu …");
@@ -480,17 +500,23 @@ function BubbleApp() {
         setInterimText(liveTranscript);
 
         if (finalTranscript.trim()) {
-          setQuestion(finalTranscript.trim());
+          const text = finalTranscript.trim();
+          finalVoiceTextRef.current = text;
+          setQuestion(text);
         }
       };
 
       recognition.onend = async () => {
         setListening(false);
         recognitionRef.current = null;
-        setInterimText("");
+
         await emitBlobState("listening", false);
 
-        const finalText = (inputRef.current?.value ?? question).trim();
+        const finalText = finalVoiceTextRef.current.trim();
+        finalVoiceTextRef.current = "";
+
+        clearComposer();
+
         if (finalText) {
           await executeCommandOrAsk(finalText);
         }
@@ -500,6 +526,7 @@ function BubbleApp() {
         setListening(false);
         recognitionRef.current = null;
         setInterimText("");
+        finalVoiceTextRef.current = "";
         setHint(`Voice error: ${event.error ?? "unbekannt"}`);
         await emitBlobState("listening", false);
       };
@@ -509,6 +536,7 @@ function BubbleApp() {
     } catch (error) {
       setListening(false);
       setInterimText("");
+      finalVoiceTextRef.current = "";
       setHint(`Mikrofonfehler: ${String(error)}`);
       await emitBlobState("listening", false);
     }
