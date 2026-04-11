@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <img src="public/3.gif" width="100%" alt="Browser Automation Demo" />
+  <img src="public/3.gif" width="100%" alt="Screenshot" />
 </p>
 
 <br />

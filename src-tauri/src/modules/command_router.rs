@@ -61,6 +61,9 @@ pub enum CompanionAction {
         text: String,
         new_tab: bool,
     },
+    BrowserClickButtonByText {
+        text: String,
+    },
     BrowserClickFirstResult,
     BrowserClickNthResult { index: usize },
     BrowserBack,
@@ -71,6 +74,9 @@ pub enum CompanionAction {
     BrowserSubmit,
     BrowserClickBestMatch { text: String },
     BrowserContext,
+    YouTubePlay,
+    YouTubePause,
+    YouTubeSkipAd,
 
     InsertText(String),
     KeyCombo(Vec<&'static str>),
@@ -84,6 +90,8 @@ pub enum CompanionAction {
     YouTubeNextVideo,
     YouTubeSeekForward,
     YouTubeSeekBackward,
+    CurrentTime,
+    CurrentDate,
     WeatherToday { location: Option<String> },
     ExplainSelection,
     TakeScreenshot,
@@ -138,6 +146,8 @@ enum IntentKind {
     YouTubeNextVideo,
     YouTubeSeekForward,
     YouTubeSeekBackward,
+    CurrentTime,
+    CurrentDate,
     WeatherToday,
     ExplainSelection,
     TakeScreenshot,
@@ -165,6 +175,22 @@ const WEATHER_WORDS: &[&str] = &[
     "sun",
     "sonne",
     "forecast",
+];
+const TIME_WORDS: &[&str] = &[
+    "uhr",
+    "uhrzeit",
+    "spaet",
+    "spät",
+    "zeit",
+    "time",
+];
+
+const DATE_WORDS: &[&str] = &[
+    "datum",
+    "date",
+    "heute",
+    "tag",
+    "today",
 ];
 const EXPLAIN_WORDS: &[&str] = &["erklaer", "erklaere", "explain", "meaning", "bedeutet", "mean"];
 const VOLUME_UP_WORDS: &[&str] = &["lauter", "louder", "increase", "up", "hoch"];
@@ -447,6 +473,123 @@ fn extract_search_query(normalized: &str, toks: &[&str], remove_aliases: &[&str]
     }
 }
 
+fn extract_generic_search_query(input: &str) -> Option<String> {
+    let normalized = normalize(input);
+
+    for prefix in [
+        "suche nach ",
+        "suche ",
+        "search for ",
+        "search ",
+        "finde ",
+        "find ",
+    ] {
+        if let Some(rest) = normalized.strip_prefix(prefix) {
+            let q = rest.trim();
+            if !q.is_empty() {
+                return Some(q.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+pub fn parse_voice_command_with_context(
+    input: &str,
+    app_name: &str,
+    window_title: &str,
+    domain: &str,
+) -> CompanionAction {
+    let normalized = normalize(input);
+
+    match normalized.trim() {
+        "wie viel uhr ist es"
+        | "wie spaet ist es"
+        | "wie spät ist es"
+        | "uhrzeit"
+        | "what time is it"
+        | "current time" => {
+            return CompanionAction::CurrentTime;
+        }
+
+        "welcher tag ist heute"
+        | "welches datum haben wir"
+        | "welches datum ist heute"
+        | "heutiges datum"
+        | "what date is it"
+        | "current date" => {
+            return CompanionAction::CurrentDate;
+        }
+
+        _ => {}
+    }
+
+    let app = app_name.to_lowercase();
+    let title = window_title.to_lowercase();
+    let dom = domain.to_lowercase();
+
+    let on_youtube = app.contains("youtube") || title.contains("youtube");
+
+    let in_browser = dom == "browser"
+        || app.contains("chrome")
+        || app.contains("edge")
+        || app.contains("firefox")
+        || app.contains("brave")
+        || title.contains("google")
+        || title.contains("youtube");
+
+    if on_youtube {
+        match normalized.trim() {
+            "play" | "spiele" | "video starten" | "start video" => {
+                return CompanionAction::YouTubePlay;
+            }
+            "pause" | "pausiere" | "video pausieren" => {
+                return CompanionAction::YouTubePause;
+            }
+            "skip"
+            | "skip ad"
+            | "skip ads"
+            | "ueberspringen"
+            | "überspringen"
+            | "werbung ueberspringen"
+            | "werbung überspringen" => {
+                return CompanionAction::YouTubeSkipAd;
+            }
+            "klick erstes video" | "click first video" => {
+                return CompanionAction::BrowserClickFirstResult;
+            }
+            _ => {}
+        }
+
+        if let Some(query) = extract_generic_search_query(input) {
+            return CompanionAction::YouTubeSearch { query };
+        }
+
+        if let Some(text) = extract_quoted_text(input) {
+            if !text.trim().is_empty() {
+                return CompanionAction::BrowserClickBestMatch {
+                    text: text.trim().to_string(),
+                };
+            }
+        }
+    }
+
+    if in_browser {
+        if let Some(query) = extract_generic_search_query(input) {
+            return CompanionAction::GoogleSearch { query };
+        }
+    }
+
+    let parsed = parse_voice_command(input);
+
+    if !matches!(parsed, CompanionAction::None) {
+        return parsed;
+    }
+
+    CompanionAction::None
+}
+
 fn extract_open_target(normalized: &str, toks: &[&str]) -> (String, bool) {
     let prefer_browser = fuzzy_has_any(toks, BROWSER_WORDS, 0.86);
 
@@ -659,6 +802,9 @@ fn is_direct_service_open_command(normalized: &str) -> bool {
 fn parse_media_command(normalized: &str) -> Option<CompanionAction> {
     let toks = tokens(normalized);
     let service = detect_streaming_service(normalized, &toks);
+    if matches!(service.as_deref(), Some("youtube")) {
+        return None;
+    }
         if is_direct_service_open_command(normalized) {
         return None;
     }
@@ -824,6 +970,19 @@ fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
     }
 
     let mut scores = vec![
+        IntentScore {
+            kind: IntentKind::CurrentTime,
+            score: score(toks, TIME_WORDS, 0.84, 2.4),
+        },
+        IntentScore {
+            kind: IntentKind::CurrentDate,
+            score: score(toks, DATE_WORDS, 0.84, 2.0)
+                + if normalized.contains("datum") || normalized.contains("date") {
+                    0.8
+                } else {
+                    0.0
+                },
+        },
         IntentScore { kind: IntentKind::VolumeUp, score: score(toks, VOLUME_UP_WORDS, 0.84, 1.8) + score(toks, VOLUME_WORDS, 0.84, 0.8) },
         IntentScore { kind: IntentKind::VolumeDown, score: score(toks, VOLUME_DOWN_WORDS, 0.84, 1.8) + score(toks, VOLUME_WORDS, 0.84, 0.8) },
         IntentScore { kind: IntentKind::Mute, score: score(toks, MUTE_WORDS, 0.84, 1.7) + score(toks, VOLUME_WORDS, 0.82, 0.5) },
@@ -836,7 +995,7 @@ fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
         IntentScore { kind: IntentKind::YouTubePlayTitle, score: score(toks, PLAY_WORDS, 0.84, 1.7) + score(toks, YOUTUBE_WORDS, 0.84, 0.6) + score(toks, RESULT_WORDS, 0.84, 0.3) },
         IntentScore {
             kind: IntentKind::TakeScreenshot,
-            score: score(toks, SCREENSHOT_WORDS, 0.84, 2.6),
+            score: score(toks, SCREENSHOT_WORDS, 0.90, 2.6),
         },
         IntentScore {
             kind: IntentKind::OpenApp,
@@ -967,6 +1126,27 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
 
     if let Some(action) = parse_media_command(&normalized) {
         return action;
+    }
+
+    match normalized.trim() {
+        "wie viel uhr ist es"
+        | "wie spaet ist es"
+        | "wie spät ist es"
+        | "uhrzeit"
+        | "what time is it"
+        | "current time" => {
+            return CompanionAction::CurrentTime;
+        }
+
+        "welcher tag ist heute"
+        | "welches datum haben wir"
+        | "welches datum ist heute"
+        | "heutiges datum"
+        | "what date is it"
+        | "current date" => {
+            return CompanionAction::CurrentDate;
+        }
+        _ => {}
     }
 
     let toks = tokens(&normalized);
@@ -1144,6 +1324,9 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
         IntentKind::YouTubeNextVideo => CompanionAction::YouTubeNextVideo,
         IntentKind::YouTubeSeekForward => CompanionAction::YouTubeSeekForward,
         IntentKind::YouTubeSeekBackward => CompanionAction::YouTubeSeekBackward,
+
+        IntentKind::CurrentTime => CompanionAction::CurrentTime,
+        IntentKind::CurrentDate => CompanionAction::CurrentDate,
 
         IntentKind::WeatherToday => CompanionAction::WeatherToday {
             location: extract_weather_location(&normalized),
