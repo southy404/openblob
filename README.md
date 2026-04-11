@@ -141,6 +141,21 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 
 ---
 
+### 🌦️ Daily Info & Smart Replies (NEW)
+
+| Command                  | Description             |
+| ------------------------ | ----------------------- |
+| `wie viel uhr ist es`    | Get current time        |
+| `what time is it`        | Get current time        |
+| `welcher tag ist heute`  | Get current date        |
+| `what date is it`        | Get current date        |
+| `wie ist das wetter`     | Get current weather     |
+| `weather today`          | Get weather             |
+| `brauche ich eine jacke` | Clothing recommendation |
+| `was soll ich anziehen`  | Outfit suggestion       |
+
+---
+
 ### 🎮 Interaction & Modes
 
 | Command | Description |
@@ -167,7 +182,10 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 - Commands are **fuzzy matched** — exact wording is not required  
 - Language can be mixed (German + English)  
 - Context is used to resolve intent (e.g. browser vs app vs game)  
-- Some commands adapt based on the current active application  
+- Some commands adapt based on the current active application
+- Some actions (like YouTube playback) use **keyboard-level control** instead of UI clicking for higher reliability
+- Commands like `play`, `pause`, or `skip` adapt based on current context (e.g. active YouTube tab)
+- Daily queries (time, weather, clothing) are handled locally and designed for quick interactions
 
 > Example:  
 > `youtube lofi beats`  
