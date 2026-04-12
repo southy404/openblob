@@ -371,7 +371,7 @@ ollama pull qwen2.5vl:7b
 
 ---
 
-## Project Structure
+## Project Structure (new structure will follow soon)
 
 ```
 openblob/
