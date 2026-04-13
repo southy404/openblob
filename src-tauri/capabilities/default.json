@@ -9,7 +9,8 @@
     "speech",
     "snip-overlay",
     "snip-panel",
-    "quick-menu"
+    "quick-menu",
+    "timer-overlay"
   ],
   "permissions": [
     "core:default",

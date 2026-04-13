@@ -233,8 +233,8 @@ pub fn parse_voice_command_with_context(
     }
 
     if matches_any(&normalized, &locale.timer_phrases) {
-        let minutes = extract_timer_minutes(&normalized).unwrap_or(5);
-        return CompanionAction::SetTimer { minutes };
+        let seconds = extract_timer_seconds(&normalized).unwrap_or(5 * 60);
+        return CompanionAction::SetTimer { seconds };
     }
 
     if matches_any(&normalized, &locale.screenshot_words) {
@@ -549,7 +549,8 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
         IntentKind::TakeScreenshot => CompanionAction::TakeScreenshot,
         IntentKind::CoinFlip => CompanionAction::CoinFlip,
         IntentKind::RollDice => CompanionAction::RollDice,
-        IntentKind::SetTimer { minutes } => CompanionAction::SetTimer { minutes },
+        IntentKind::CancelTimer => CompanionAction::CancelTimer,
+        IntentKind::SetTimer { seconds } => CompanionAction::SetTimer { seconds },
         IntentKind::None => CompanionAction::None,
     }
 }

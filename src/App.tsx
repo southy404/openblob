@@ -9,6 +9,11 @@ import { openSnipOverlay } from "./windows/snip-overlay/open";
 import { ensureSnipPanelWindow } from "./windows/snip-panel/open";
 import { ensureBubbleWindow } from "./windows/bubble/open";
 import {
+  ensureTimerOverlayWindow,
+  showTimerOverlayWindow,
+} from "./windows/timer-overlay/open";
+
+import {
   showQuickMenuWindow,
   hideQuickMenuWindow,
 } from "./windows/quick-menu/open";
@@ -1082,6 +1087,55 @@ export default function App() {
       setHint(`Snip overlay error: ${String(error)}`);
     });
   };
+
+  useEffect(() => {
+    let unlistenStarted: null | (() => void) = null;
+    let unlistenFinished: null | (() => void) = null;
+
+    const setup = async () => {
+      unlistenStarted = await listen<{
+        seconds: number;
+        label: string;
+        startedAt: number;
+      }>("companion-timer-started", async (event) => {
+        const win = await ensureTimerOverlayWindow();
+
+        await showTimerOverlayWindow().catch(console.error);
+
+        await emitTo(
+          "timer-overlay",
+          "timer-overlay-start",
+          event.payload
+        ).catch(console.error);
+
+        markActivity();
+        setHint("Timer gestartet");
+        pulseBlob("thinking", 900, "happy");
+      });
+
+      unlistenFinished = await listen<{
+        seconds: number;
+        text: string;
+      }>("companion-timer-finished", async (event) => {
+        await emitTo(
+          "timer-overlay",
+          "timer-overlay-finished",
+          event.payload
+        ).catch(console.error);
+
+        markActivity();
+        setHint(event.payload?.text || "Timer fertig");
+        pulseBlob("happy", 1800, "idle");
+      });
+    };
+
+    void setup();
+
+    return () => {
+      unlistenStarted?.();
+      unlistenFinished?.();
+    };
+  }, []);
 
   useEffect(() => {
     markActivity();
