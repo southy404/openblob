@@ -1,0 +1,167 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type")]
+pub enum CompanionAction {
+    VolumeUp,
+    VolumeDown,
+    SetVolume { percent: u8 },
+    Mute,
+    Unmute,
+    ToggleMute,
+    MediaPlayPause,
+    MediaNext,
+    MediaPrev,
+
+    GoogleSearch { query: String },
+    YouTubeSearch { query: String },
+    YouTubePlayTitle { title: String },
+
+    StreamOpenTitle {
+        service: String,
+        title: String,
+        autoplay: bool,
+    },
+    StreamRecommend {
+        service: Option<String>,
+        mood: Option<String>,
+        genre: Option<String>,
+        kind: Option<String>,
+        trending: bool,
+    },
+    StreamOpenLastSuggestion,
+    StreamMoreLikeLast,
+    StreamCapability {
+        service: Option<String>,
+    },
+
+    OpenApp { target: String, prefer_browser: bool },
+
+    Save,
+    SaveAs,
+    OpenFile,
+    NewFile,
+    Close,
+
+    NewTab,
+    CloseTab,
+    CloseTabByIndex { index: usize },
+    NewWindow,
+    Incognito,
+    Reload,
+
+    BrowserOpenUrl {
+        url: String,
+        new_tab: bool,
+        new_window: bool,
+        incognito: bool,
+    },
+    BrowserClickLinkByText {
+        text: String,
+        new_tab: bool,
+    },
+    BrowserClickButtonByText {
+        text: String,
+    },
+    BrowserClickFirstResult,
+    BrowserClickNthResult { index: usize },
+    BrowserBack,
+    BrowserForward,
+    BrowserScrollDown,
+    BrowserScrollUp,
+    BrowserTypeText { text: String },
+    BrowserSubmit,
+    BrowserClickBestMatch { text: String },
+    BrowserContext,
+    YouTubePlay,
+    YouTubePause,
+    YouTubeSkipAd,
+
+    InsertText(String),
+    InsertSnippet { key: String },
+    KeyCombo(Vec<&'static str>),
+    KeyPress(&'static str),
+
+    Confirm,
+    Clear,
+    CloseApp,
+    Undo,
+    Redo,
+    YouTubeNextVideo,
+    YouTubeSeekForward,
+    YouTubeSeekBackward,
+    CurrentTime,
+    CurrentDate,
+    WeatherToday { location: Option<String> },
+    ExplainSelection,
+    TakeScreenshot,
+    CoinFlip,
+    RollDice,
+    SetTimer { minutes: u64 },
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntentKind {
+    VolumeUp,
+    VolumeDown,
+    SetVolume,
+    Mute,
+    Unmute,
+    MediaPlayPause,
+    MediaNext,
+    MediaPrev,
+
+    GoogleSearch,
+    YouTubeSearch,
+    YouTubePlayTitle,
+
+    OpenApp,
+
+    Save,
+    SaveAs,
+    OpenFile,
+    NewFile,
+    Close,
+
+    NewTab,
+    CloseTab,
+    CloseTabByIndex,
+    NewWindow,
+    Incognito,
+    Reload,
+
+    BrowserOpenUrl,
+    BrowserClickLinkByText,
+    BrowserClickFirstResult,
+    BrowserClickNthResult,
+    BrowserBack,
+    BrowserForward,
+    BrowserScrollDown,
+    BrowserScrollUp,
+    BrowserTypeText,
+    BrowserSubmit,
+    BrowserClickBestMatch,
+    BrowserContext,
+
+    Undo,
+    Redo,
+    YouTubeNextVideo,
+    YouTubeSeekForward,
+    YouTubeSeekBackward,
+    CurrentTime,
+    CurrentDate,
+    WeatherToday,
+    ExplainSelection,
+    TakeScreenshot,
+    CoinFlip,
+    RollDice,
+    SetTimer { minutes: u64 },
+    None,
+}
+
+#[derive(Debug)]
+pub struct IntentScore {
+    pub kind: IntentKind,
+    pub score: f32,
+}

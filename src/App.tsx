@@ -4,10 +4,14 @@ import { getCurrentWindow, LogicalPosition } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { openSnipOverlay } from "./openSnipOverlay";
-import { ensureSnipPanelWindow } from "./openSnipPanel";
-import { ensureBubbleWindow } from "./openBubbleWindow";
+import { readText } from "@tauri-apps/plugin-clipboard-manager";
+import { openSnipOverlay } from "./windows/snip-overlay/open";
+import { ensureSnipPanelWindow } from "./windows/snip-panel/open";
+import { ensureBubbleWindow } from "./windows/bubble/open";
+import {
+  showQuickMenuWindow,
+  hideQuickMenuWindow,
+} from "./windows/quick-menu/open";
 
 type ContextPayload = {
   text: string;
@@ -784,12 +788,18 @@ async function ensureSpeechWindow() {
 
 async function positionBubbleWindow() {
   const bubble = await ensureBubbleWindow();
-  const main = getCurrentWindow();
 
-  const pos = await main.outerPosition();
-  const size = await main.outerSize();
+  const bubbleWidth = 1040;
+  const bubbleHeight = 320;
+  const bottomMargin = 22;
 
-  await bubble.setPosition(new LogicalPosition(380, 720));
+  const screenWidth = window.screen.availWidth;
+  const screenHeight = window.screen.availHeight;
+
+  const x = Math.round((screenWidth - bubbleWidth) / 2);
+  const y = Math.round(screenHeight - bubbleHeight - bottomMargin);
+
+  await bubble.setPosition(new LogicalPosition(x, y));
 }
 
 async function positionSpeechWindow() {
@@ -806,8 +816,17 @@ async function positionSpeechWindow() {
 
 async function showBubbleWindow() {
   const bubble = await ensureBubbleWindow();
-  await emitTo("bubble", "bubble-show");
+
   await bubble.show();
+  await bubble.setFocus().catch(() => {});
+
+  window.setTimeout(async () => {
+    try {
+      await emitTo("bubble", "bubble-show");
+    } catch (error) {
+      console.error("bubble-show emit failed", error);
+    }
+  }, 80);
 }
 
 async function showSpeechWindow(text: string) {
@@ -822,20 +841,6 @@ async function sendContextToBubble(payload: ContextPayload) {
   await emitTo("bubble", "companion-context", payload);
 }
 
-function clampContextMenuPosition(x: number, y: number) {
-  const menuWidth = 236;
-  const menuHeight = 520;
-  const padding = 12;
-
-  const maxX = window.innerWidth - menuWidth - padding;
-  const maxY = window.innerHeight - menuHeight - padding;
-
-  return {
-    x: Math.max(padding, Math.min(x, maxX)),
-    y: Math.max(padding, Math.min(y, maxY)),
-  };
-}
-
 export default function App() {
   const [copiedText, setCopiedText] = useState("Nothing copied yet");
   const [activeApp, setActiveApp] = useState("unknown");
@@ -845,14 +850,8 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const [pinned, setPinned] = useState(true);
   const [presenceState, setPresenceState] = useState<PresenceState>("visible");
-  const [contextMenu, setContextMenu] = useState({
-    open: false,
-    x: 0,
-    y: 0,
-  });
   const [hideGameState, setHideGameState] = useState<HideGameState>("idle");
   const [peekVisible, setPeekVisible] = useState(false);
-  const [hideSpot, setHideSpot] = useState({ x: 20, y: 20 });
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const speechTimerRef = useRef<number | null>(null);
@@ -896,24 +895,6 @@ export default function App() {
     }
 
     setPeekVisible(false);
-  };
-
-  const getRandomHideSpot = () => {
-    const avatarSize = 82;
-    const margin = 16;
-
-    const safeWidth = Math.max(avatarSize + margin * 2, window.innerWidth);
-    const safeHeight = Math.max(avatarSize + margin * 2, window.innerHeight);
-
-    const x = Math.floor(
-      margin + Math.random() * (safeWidth - avatarSize - margin * 2)
-    );
-
-    const y = Math.floor(
-      margin + Math.random() * (safeHeight - avatarSize - margin * 2)
-    );
-
-    return { x, y };
   };
 
   const moveWindowToHideSpot = async () => {
@@ -994,9 +975,9 @@ export default function App() {
     await win.setPosition(new LogicalPosition(nextX, nextY));
   };
 
-  const startHideAndSeek = () => {
+  const startHideAndSeek = async () => {
     stopHideAndSeek();
-    closeMenu();
+    await closeMenu();
 
     setHideGameState("seeking");
     setPresenceState("hidden_peek");
@@ -1027,18 +1008,6 @@ export default function App() {
     }, 45000);
   };
 
-  const isHideAndSeekCommand = (input: string) => {
-    const q = input.trim().toLowerCase();
-
-    return (
-      q.includes("hide and seek") ||
-      q.includes("lets play hide and seek") ||
-      q.includes("let's play hide and seek") ||
-      q.includes("lass uns verstecken spielen") ||
-      q.includes("verstecken spielen")
-    );
-  };
-
   const markActivity = () => {
     if (presenceState === "hidden" || presenceState === "sleeping") {
       setPresenceState("entering");
@@ -1063,8 +1032,8 @@ export default function App() {
     }, 6 * 60 * 1000);
   };
 
-  const closeMenu = () => {
-    setContextMenu({ open: false, x: 0, y: 0 });
+  const closeMenu = async () => {
+    await hideQuickMenuWindow().catch(() => {});
   };
 
   const mediaPlayPause = async () => {
@@ -1105,7 +1074,7 @@ export default function App() {
 
   const openSnip = async () => {
     markActivity();
-    closeMenu();
+    await closeMenu();
     setHint("Snip mode opened");
     pulseBlob("thinking", 1000);
     await openSnipOverlay().catch((error) => {
@@ -1152,7 +1121,10 @@ export default function App() {
   }, [pinned]);
 
   useEffect(() => {
-    const onWindowClick = () => closeMenu();
+    const onWindowClick = () => {
+      void closeMenu();
+    };
+
     window.addEventListener("click", onWindowClick);
     return () => window.removeEventListener("click", onWindowClick);
   }, []);
@@ -1217,15 +1189,36 @@ export default function App() {
 
     const setupHotkeyListener = async () => {
       unlistenToggle = await listen("companion-toggle", async () => {
+        console.log("[main] companion-toggle received");
+
         try {
           markActivity();
           pulseBlob("thinking", 900);
 
-          await ensureBubbleWindow();
-          await emitTo("bubble", "bubble-toggle");
+          const bubble = await ensureBubbleWindow();
+          const isVisible = await bubble.isVisible();
+
+          console.log("[main] bubble visible before toggle:", isVisible);
+
+          if (isVisible) {
+            await emitTo("bubble", "bubble-hide");
+            console.log("[main] bubble-hide emitted");
+          } else {
+            await positionBubbleWindow().catch(console.error);
+            await bubble.show();
+            await bubble.setFocus().catch(() => {});
+
+            window.setTimeout(async () => {
+              try {
+                await emitTo("bubble", "bubble-show");
+                console.log("[main] bubble-show emitted");
+              } catch (error) {
+                console.error("bubble-show emit failed", error);
+              }
+            }, 80);
+          }
         } catch (error) {
-          console.error("toggle bubble failed:", error);
-          setHint(`Toggle error: ${String(error)}`);
+          console.error("toggle bubble failed", error);
         }
       });
 
@@ -1234,7 +1227,7 @@ export default function App() {
       });
     };
 
-    setupHotkeyListener();
+    void setupHotkeyListener();
 
     return () => {
       if (unlistenToggle) unlistenToggle();
@@ -1248,7 +1241,7 @@ export default function App() {
     const setup = async () => {
       unlistenHideAndSeek = await listen("start-hide-and-seek", async () => {
         markActivity();
-        startHideAndSeek();
+        await startHideAndSeek();
       });
     };
 
@@ -1373,6 +1366,94 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [presenceState]);
 
+  useEffect(() => {
+    let unlistenQuickMenu: null | (() => void) = null;
+
+    const setup = async () => {
+      unlistenQuickMenu = await listen<{ action: string }>(
+        "quick-menu-action",
+        async (event) => {
+          const action = event.payload?.action;
+          console.log("[APP] quick-menu-action received:", action);
+
+          try {
+            switch (action) {
+              case "open-bubble":
+                await openBubble();
+                break;
+
+              case "capture-clipboard":
+                await refreshClipboard();
+                break;
+
+              case "snip-screen":
+                await openSnip();
+                break;
+
+              case "media-play-pause":
+                await mediaPlayPause();
+                break;
+
+              case "media-prev":
+                await mediaPrev();
+                break;
+
+              case "media-next":
+                await mediaNext();
+                break;
+
+              case "volume-down":
+                await volumeDown();
+                break;
+
+              case "volume-up":
+                await volumeUp();
+                break;
+
+              case "toggle-mute":
+                await toggleMute();
+                break;
+
+              case "toggle-pin":
+                setPinned((p) => !p);
+                markActivity();
+                break;
+
+              case "sleep-now":
+                if (sleepTimerRef.current) {
+                  window.clearTimeout(sleepTimerRef.current);
+                }
+                if (hideTimerRef.current) {
+                  window.clearTimeout(hideTimerRef.current);
+                }
+
+                setPresenceState("sleeping");
+                setBlobMood("sleepy");
+                setHint("Sleeping...");
+                break;
+
+              case "close-app":
+                await handleClose();
+                break;
+
+              case "close-menu":
+              default:
+                break;
+            }
+          } catch (error) {
+            console.error("quick-menu action failed", error);
+          }
+        }
+      );
+    };
+
+    void setup();
+
+    return () => {
+      unlistenQuickMenu?.();
+    };
+  }, []);
+
   const refreshClipboard = async () => {
     try {
       markActivity();
@@ -1410,11 +1491,20 @@ export default function App() {
 
   const handleClose = async () => {
     try {
+      const quickMenu = await WebviewWindow.getByLabel("quick-menu");
+      if (quickMenu) await quickMenu.close();
+
       const bubble = await WebviewWindow.getByLabel("bubble");
       if (bubble) await bubble.close();
 
       const speech = await WebviewWindow.getByLabel("speech");
       if (speech) await speech.close();
+
+      const snipPanel = await WebviewWindow.getByLabel("snip-panel");
+      if (snipPanel) await snipPanel.close();
+
+      const snipOverlay = await WebviewWindow.getByLabel("snip-overlay");
+      if (snipOverlay) await snipOverlay.close();
 
       await getCurrentWindow().close();
     } catch (error) {
@@ -1465,20 +1555,37 @@ export default function App() {
     }
   };
 
-  const handleAvatarContextMenu = (
+  const handleAvatarContextMenu = async (
     event: React.MouseEvent<HTMLCanvasElement>
   ) => {
     event.preventDefault();
     event.stopPropagation();
     markActivity();
 
-    const pos = clampContextMenuPosition(event.clientX, event.clientY);
+    try {
+      const win = getCurrentWindow();
+      const winPos = await win.outerPosition();
 
-    setContextMenu({
-      open: true,
-      x: pos.x,
-      y: pos.y,
-    });
+      const screenX = winPos.x + event.clientX;
+      const screenY = winPos.y + event.clientY;
+
+      await closeMenu();
+      await showQuickMenuWindow(screenX, screenY);
+
+      window.setTimeout(async () => {
+        try {
+          await emitTo("quick-menu", "quick-menu-data", {
+            hint,
+            activeApp,
+            pinned,
+          });
+        } catch (error) {
+          console.error("quick-menu-data emit failed", error);
+        }
+      }, 90);
+    } catch (error) {
+      console.error("open quick menu failed", error);
+    }
   };
 
   return (
@@ -1499,7 +1606,7 @@ export default function App() {
         animate={{
           opacity:
             presenceState === "hidden"
-              ? 0.18
+              ? 0
               : presenceState === "hidden_peek"
               ? peekVisible
                 ? 0.22
@@ -1507,47 +1614,63 @@ export default function App() {
               : presenceState === "sleeping"
               ? 0.72
               : 1,
+
           x:
             presenceState === "hidden"
-              ? 92
+              ? 0
               : presenceState === "exiting"
-              ? 48
+              ? 18
               : presenceState === "entering"
               ? [-24, 8, 0]
               : 0,
+
           y:
             presenceState === "hidden"
-              ? 34
+              ? 0
               : presenceState === "sleeping"
               ? [0, -2, 0]
-              : [0, -8, 0],
+              : presenceState === "exiting"
+              ? 16
+              : presenceState === "entering"
+              ? [10, -4, 0]
+              : 0,
+
           scale:
             presenceState === "hidden"
-              ? 0.72
+              ? 0.5
               : presenceState === "hidden_peek"
               ? 0.34
               : presenceState === "entering"
               ? [0.75, 1.08, 1]
               : presenceState === "sleeping"
               ? 0.9
+              : presenceState === "exiting"
+              ? 0.82
               : 1,
-          rotate:
-            presenceState === "sleeping"
-              ? -6
-              : presenceState === "hidden_peek"
-              ? 0
-              : 0,
+
+          rotate: presenceState === "sleeping" ? -6 : 0,
         }}
         transition={{
-          opacity: { duration: 0.4 },
-          scale: { duration: 0.45 },
+          opacity: { duration: 0.35 },
+          scale: { duration: 0.4 },
           rotate: { duration: 0.5 },
-          x: { duration: 0.42, ease: "easeOut" },
-          y: {
-            duration: presenceState === "sleeping" ? 4.5 : 3.2,
-            repeat: Infinity,
-            ease: "easeInOut",
-          },
+          x: { duration: 0.4, ease: "easeOut" },
+          y:
+            presenceState === "sleeping"
+              ? {
+                  duration: 4.5,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                }
+              : presenceState === "entering"
+              ? {
+                  duration: 0.45,
+                  ease: "easeOut",
+                }
+              : {
+                  duration: 0.3,
+                  ease: "easeOut",
+                },
         }}
         style={{
           position: "absolute",
@@ -1557,7 +1680,7 @@ export default function App() {
           height: hideGameState === "seeking" ? 82 : 250,
           display: "grid",
           placeItems: "center",
-          pointerEvents: "auto",
+          pointerEvents: presenceState === "hidden" ? "none" : "auto",
         }}
       >
         {hideGameState !== "seeking" && (
@@ -1591,146 +1714,6 @@ export default function App() {
           onActivity={markActivity}
         />
       </motion.div>
-
-      {contextMenu.open && (
-        <div
-          className="context-menu"
-          style={{
-            left: contextMenu.x,
-            top: contextMenu.y,
-          }}
-          onClick={(e) => e.stopPropagation()}
-          onMouseLeave={closeMenu}
-        >
-          <button
-            className="menu-btn"
-            onClick={async () => {
-              closeMenu();
-              await openBubble();
-            }}
-          >
-            Open Bubble
-          </button>
-
-          <button
-            className="menu-btn"
-            onClick={async () => {
-              closeMenu();
-              await refreshClipboard();
-            }}
-          >
-            Capture Clipboard
-          </button>
-
-          <button
-            className="menu-btn"
-            onClick={async () => {
-              await openSnip();
-            }}
-          >
-            Snip Screen
-          </button>
-
-          <button
-            className="menu-btn"
-            onClick={async () => {
-              closeMenu();
-              await mediaPlayPause();
-            }}
-          >
-            Play / Pause
-          </button>
-
-          <button
-            className="menu-btn"
-            onClick={async () => {
-              closeMenu();
-              await mediaPrev();
-            }}
-          >
-            Previous Track
-          </button>
-
-          <button
-            className="menu-btn"
-            onClick={async () => {
-              closeMenu();
-              await mediaNext();
-            }}
-          >
-            Next Track
-          </button>
-
-          <button
-            className="menu-btn"
-            onClick={async () => {
-              closeMenu();
-              await volumeDown();
-            }}
-          >
-            Volume Down
-          </button>
-
-          <button
-            className="menu-btn"
-            onClick={async () => {
-              closeMenu();
-              await volumeUp();
-            }}
-          >
-            Volume Up
-          </button>
-
-          <button
-            className="menu-btn"
-            onClick={async () => {
-              closeMenu();
-              await toggleMute();
-            }}
-          >
-            Toggle Mute
-          </button>
-
-          <button
-            className="menu-btn"
-            onClick={() => {
-              closeMenu();
-              setPinned((p) => !p);
-              markActivity();
-            }}
-          >
-            {pinned ? "Disable Always on Top" : "Enable Always on Top"}
-          </button>
-
-          <button
-            className="menu-btn"
-            onClick={() => {
-              closeMenu();
-              setPresenceState("sleeping");
-              setBlobMood("sleepy");
-              markActivity();
-            }}
-          >
-            Sleep Now
-          </button>
-
-          <button
-            className="menu-btn"
-            onClick={async () => {
-              closeMenu();
-              await handleClose();
-            }}
-          >
-            Close
-          </button>
-
-          <div className="menu-meta">
-            {hint}
-            <br />
-            {activeApp}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
