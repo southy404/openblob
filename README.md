@@ -384,48 +384,143 @@ ollama pull qwen2.5vl:7b
 ## Project Structure
 
 ```text
-openblob/
-├─ public/                       # static assets, gifs, branding
-├─ src/                          # React frontend
-│  ├─ windows/                   # multi-window UI entries
-│  │  ├─ bubble/
-│  │  ├─ quick-menu/
-│  │  ├─ snip-overlay/
-│  │  └─ snip-panel/
-│  ├─ components/                # shared UI pieces (growing)
-│  ├─ i18n/                      # language groundwork / localization setup
-│  ├─ App.tsx                    # main companion window
-│  └─ ...
-├─ src-tauri/
-│  ├─ capabilities/              # Tauri v2 window/capability permissions
-│  └─ src/
-│     ├─ lib.rs
-│     └─ modules/
-│        ├─ command_router/      # intent parsing + routing
-│        ├─ context/             # active window / app detection
-│        ├─ screen_capture/      # screenshot + snip
-│        ├─ browser_automation/  # browser automation / debugging helpers
-│        ├─ session_memory/
-│        ├─ voice/
-│        ├─ system/
-│        ├─ streaming/
-│        ├─ tts/
-│        └─ ...
-├─ docs/
-│  ├─ architecture.md
-│  ├─ roadmap.md
-│  └─ design.md
-├─ .github/
-│  ├─ ISSUE_TEMPLATE/
-│  ├─ workflows/
-│  └─ PULL_REQUEST_TEMPLATE.md
-├─ quick-menu.html
-├─ snip-panel.html
-├─ snip-overlay.html
-├─ speech.html
-├─ LICENSE
-├─ README.md
-└─ SECURITY.md
+
+    openblob/
+    ├── README.md
+    ├── bubble-dev.html
+    ├── bubble.html
+    ├── CHANGELOG.md
+    ├── index.html
+    ├── LICENSE
+    ├── package.json
+    ├── quick-menu.html
+    ├── rust-toolchain.toml
+    ├── SECURITY.md
+    ├── snip-overlay.html
+    ├── snip-panel.html
+    ├── speech.html
+    ├── timer-overlay.html
+    ├── tsconfig.app.json
+    ├── tsconfig.json
+    ├── tsconfig.node.json
+    ├── vite.config.ts
+    ├── docs/
+    │   ├── architecture.md
+    │   ├── design.md
+    │   ├── roadmap.md
+    │   └── old/
+    │       └── _____command_router old.rs
+    ├── src/
+    │   ├── App.tsx
+    │   ├── index.css
+    │   ├── main.tsx
+    │   ├── speech.tsx
+    │   ├── vite-env.d.ts
+    │   └── windows/
+    │       ├── bubble/
+    │       │   ├── app.tsx
+    │       │   └── open.ts
+    │       ├── bubble-dev/
+    │       │   ├── app.tsx
+    │       │   └── open.ts
+    │       ├── quick-menu/
+    │       │   ├── app.tsx
+    │       │   └── open.ts
+    │       ├── snip-overlay/
+    │       │   ├── app.tsx
+    │       │   ├── open.ts
+    │       │   └── snip-overlay.css
+    │       ├── snip-panel/
+    │       │   ├── app.tsx
+    │       │   └── open.ts
+    │       └── timer-overlay/
+    │           ├── app.tsx
+    │           └── open.ts
+    ├── src-tauri/
+    │   ├── 2
+    │   ├── build.rs
+    │   ├── Cargo.toml
+    │   ├── openblob - Verknüpfung.lnk
+    │   ├── tauri.conf.json
+    │   ├── capabilities/
+    │   │   ├── default.json
+    │   │   └── desktop.json
+    │   ├── gen/
+    │   │   └── schemas/
+    │   │       └── capabilities.json
+    │   ├── models/
+    │   │   ├── de_DE-thorsten-medium.onnx.json
+    │   │   └── en_US-lessac-high.onnx.json
+    │   └── src/
+    │       ├── main.rs
+    │       ├── i18n/
+    │       │   └── commands/
+    │       │       ├── de.json
+    │       │       └── en.json
+    │       └── modules/
+    │           ├── app_profiles.rs
+    │           ├── browser_automations.rs
+    │           ├── context.rs
+    │           ├── context_resolver.rs
+    │           ├── mod.rs
+    │           ├── screen_capture.rs
+    │           ├── session_memory.rs
+    │           ├── snip_session.rs
+    │           ├── steam_games.rs
+    │           ├── streaming.rs
+    │           ├── system.rs
+    │           ├── voice.rs
+    │           ├── windows_discovery.rs
+    │           ├── command_router/
+    │           │   ├── constants.rs
+    │           │   ├── extract.rs
+    │           │   ├── fuzzy.rs
+    │           │   ├── intents.rs
+    │           │   ├── matchers.rs
+    │           │   ├── media.rs
+    │           │   ├── mod.rs
+    │           │   ├── normalize.rs
+    │           │   ├── parser.rs
+    │           │   ├── types.rs
+    │           │   └── utilities.rs
+    │           ├── companion/
+    │           │   ├── bonding.rs
+    │           │   ├── mod.rs
+    │           │   └── personality.rs
+    │           ├── i18n/
+    │           │   ├── command_locale.rs
+    │           │   └── mod.rs
+    │           ├── memory/
+    │           │   ├── episodic_memory.rs
+    │           │   ├── mod.rs
+    │           │   └── semantic_memory.rs
+    │           ├── profile/
+    │           │   ├── companion_config.rs
+    │           │   ├── mod.rs
+    │           │   ├── onboarding_state.rs
+    │           │   └── user_profile.rs
+    │           ├── snippets/
+    │           │   └── mod.rs
+    │           ├── storage/
+    │           │   ├── json_store.rs
+    │           │   ├── mod.rs
+    │           │   └── paths.rs
+    │           └── tts/
+    │               ├── kokoro.rs
+    │               ├── manager.rs
+    │               ├── mod.rs
+    │               ├── piper.rs
+    │               └── tts_config.rs
+    ├── tools/
+    │   └── piper/
+    └── .github/
+        ├── PULL_REQUEST_TEMPLATE.md
+        ├── ISSUE_TEMPLATE/
+        │   ├── bug_report.md
+        │   └── feature_request.md
+        └── workflows/
+            └── ci.yml
+
 ```
 
 ---
