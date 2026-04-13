@@ -136,6 +136,13 @@
     "set timer",
     "start timer"
   ],
+  "timer_cancel_phrases": [
+    "stop timer",
+    "schließe timer",
+    "timer stoppen",
+    "timer abbrechen",
+    "timer aus"
+  ],
   "search_words": ["suche"],
   "find_words": ["find", "finde"],
   "tab_words": ["tab"],

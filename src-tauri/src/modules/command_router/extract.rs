@@ -105,6 +105,49 @@ pub fn extract_generic_search_query(input: &str) -> Option<String> {
     None
 }
 
+pub fn extract_timer_seconds(normalized: &str) -> Option<u64> {
+    let text = normalized.trim();
+
+    for token in text.split_whitespace() {
+        if let Some((left, right)) = token.split_once(':') {
+            if let (Ok(minutes), Ok(seconds)) = (left.parse::<u64>(), right.parse::<u64>()) {
+                if seconds < 60 {
+                    return Some(minutes * 60 + seconds);
+                }
+            }
+        }
+    }
+
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+
+    let mut total_seconds = 0u64;
+    let mut found = false;
+
+    for i in 0..tokens.len() {
+        if let Ok(value) = tokens[i].parse::<u64>() {
+            if let Some(unit) = tokens.get(i + 1) {
+                match *unit {
+                    "m" | "min" | "mins" | "minute" | "minuten" => {
+                        total_seconds += value * 60;
+                        found = true;
+                    }
+                    "s" | "sec" | "secs" | "second" | "seconds" | "sek" | "sekunde" | "sekunden" => {
+                        total_seconds += value;
+                        found = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    if found {
+        Some(total_seconds.max(1))
+    } else {
+        None
+    }
+}
+
 pub fn extract_timer_minutes(input: &str) -> Option<u64> {
     let tokens: Vec<&str> = input.split_whitespace().collect();
 

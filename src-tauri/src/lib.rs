@@ -52,6 +52,34 @@ use modules::context::{is_internal_companion_app, resolve_active_context};
 use modules::snip_session::set_snip;
 
 static LAST_EXTERNAL_APP: OnceLock<Mutex<String>> = OnceLock::new();
+static ACTIVE_TIMER_ID: OnceLock<Mutex<u64>> = OnceLock::new();
+
+fn active_timer_id_store() -> &'static Mutex<u64> {
+    ACTIVE_TIMER_ID.get_or_init(|| Mutex::new(0))
+}
+
+fn next_timer_id() -> u64 {
+    if let Ok(mut guard) = active_timer_id_store().lock() {
+        *guard += 1;
+        *guard
+    } else {
+        1
+    }
+}
+
+fn current_timer_id() -> u64 {
+    if let Ok(guard) = active_timer_id_store().lock() {
+        *guard
+    } else {
+        0
+    }
+}
+
+fn cancel_active_timer() {
+    if let Ok(mut guard) = active_timer_id_store().lock() {
+        *guard += 1;
+    }
+}
 
 fn default_text_model() -> String {
     "llama3.1:8b".to_string()
@@ -1766,23 +1794,65 @@ async fn handle_voice_command(app: tauri::AppHandle, input: String) -> Result<St
             )
         },
 
-        CompanionAction::SetTimer { minutes } => {
-            let minutes = minutes.max(1);
-            let app_handle = app.clone();
+        CompanionAction::CancelTimer => {
+            cancel_active_timer();
 
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_secs(minutes * 60));
-                let text = format!("Dein Timer über {} Minute(n) ist fertig.", minutes);
-                let _ = modules::tts::manager::speak(&text, Some("de"));
-                let _ = app_handle.emit("companion-timer-finished", text);
+            let _ = app.emit(
+                "companion-timer-finished",
+                serde_json::json!({
+                    "seconds": 0,
+                    "text": "Timer gestoppt.",
+                }),
+            );
+
+            ok_and_remember!(&input, ctx, "Timer gestoppt.".into())
+        },
+
+        CompanionAction::SetTimer { seconds } => {
+            let seconds = seconds.max(1);
+            let app_handle = app.clone();
+            let timer_id = next_timer_id();
+
+            let _ = app.emit(
+                "companion-timer-started",
+                serde_json::json!({
+                    "seconds": seconds,
+                    "label": format!("{}:{:02} timer", seconds / 60, seconds % 60),
+                    "startedAt": chrono::Utc::now().timestamp(),
+                }),
+            );
+
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(seconds)).await;
+
+                if current_timer_id() != timer_id {
+                    return;
+                }
+
+                let text = format!(
+                    "Dein Timer über {} Minute(n) und {} Sekunde(n) ist fertig.",
+                    seconds / 60,
+                    seconds % 60
+                );
+
+                let _ = app_handle.emit(
+                    "companion-timer-finished",
+                    serde_json::json!({
+                        "seconds": seconds,
+                        "text": text,
+                    }),
+                );
+
+                let _ = modules::tts::manager::speak(&text, Some("de")).await;
             });
 
             ok_and_remember!(
                 &input,
                 ctx,
-                format!("Timer für {} Minute(n) gestartet.", minutes)
+                format!("Timer für {}:{:02} gestartet.", seconds / 60, seconds % 60)
             )
         },
+
         CompanionAction::YouTubePlay => {
             let target = ensure_external_focus(&active_app)?;
             press_key("k")?;

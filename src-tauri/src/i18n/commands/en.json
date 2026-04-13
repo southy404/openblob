@@ -105,6 +105,7 @@
   "coin_flip_phrases": ["flip a coin", "coin flip"],
   "roll_dice_phrases": ["roll a dice", "roll dice", "roll a die"],
   "timer_phrases": ["set timer", "start timer", "timer"],
+  "timer_cancel_phrases": ["stop timer", "cancel timer", "close timer"],
   "search_words": ["search"],
   "find_words": ["find"],
   "tab_words": ["tab"],

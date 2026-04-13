@@ -97,7 +97,8 @@ pub enum CompanionAction {
     TakeScreenshot,
     CoinFlip,
     RollDice,
-    SetTimer { minutes: u64 },
+    SetTimer { seconds: u64 },
+    CancelTimer,
     None,
 }
 
@@ -156,7 +157,8 @@ pub enum IntentKind {
     TakeScreenshot,
     CoinFlip,
     RollDice,
-    SetTimer { minutes: u64 },
+    SetTimer { seconds: u64 },
+    CancelTimer,
     None,
 }
 

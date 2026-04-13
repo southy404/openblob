@@ -60,6 +60,7 @@ pub struct CommandLocale {
     pub coin_flip_phrases: Vec<String>,
     pub roll_dice_phrases: Vec<String>,
     pub timer_phrases: Vec<String>,
+    pub timer_cancel_phrases: Vec<String>,
 
     pub search_words: Vec<String>,
     pub find_words: Vec<String>,

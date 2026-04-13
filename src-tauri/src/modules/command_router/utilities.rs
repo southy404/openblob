@@ -1,4 +1,4 @@
-use super::extract::extract_timer_minutes;
+use super::extract::extract_timer_seconds;
 use super::types::CompanionAction;
 use crate::modules::i18n::command_locale::command_locale;
 
@@ -30,9 +30,13 @@ pub fn parse_utility_command(normalized: &str) -> Option<CompanionAction> {
         return Some(CompanionAction::RollDice);
     }
 
+    if matches_any_contains(normalized, &locale.timer_cancel_phrases) {
+        return Some(CompanionAction::CancelTimer);
+    }
+
     if matches_any_contains(normalized, &locale.timer_phrases) {
-        let minutes = extract_timer_minutes(normalized).unwrap_or(5);
-        return Some(CompanionAction::SetTimer { minutes });
+        let seconds = extract_timer_seconds(normalized).unwrap_or(5 * 60);
+        return Some(CompanionAction::SetTimer { seconds });
     }
 
     if matches_any_contains(normalized, &locale.screenshot_words) {
