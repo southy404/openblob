@@ -66,13 +66,21 @@ function QuickMenuApp() {
       }
     };
 
+    const onBlur = async () => {
+      await getCurrentWindow()
+        .hide()
+        .catch(() => {});
+    };
+
     window.addEventListener("keydown", onKey);
+    window.addEventListener("blur", onBlur);
 
     return () => {
       mountedRef.current = false;
       unlistenData?.();
       unlistenHide?.();
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", onBlur);
     };
   }, []);
 
@@ -151,25 +159,22 @@ function QuickMenuApp() {
         }
 
         .quick-menu {
-          position: relative;
-          width: 100%;
-          height: 100%;
-          overflow: hidden;
-          border-radius: 30px;
-          border: 1px solid rgba(255,255,255,0.18);
-          background:
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        border-radius: 30px;
+        border: 1px solid rgba(255,255,255,0.18);
+        background:
             linear-gradient(
-              180deg,
-              rgba(255,255,255,0.18),
-              rgba(255,255,255,0.08)
+            180deg,
+            rgba(255,255,255,0.18),
+            rgba(255,255,255,0.08)
             ),
             rgba(16,20,28,0.84);
-          backdrop-filter: blur(24px) saturate(145%);
-          -webkit-backdrop-filter: blur(24px) saturate(145%);
-          box-shadow:
-            0 22px 60px rgba(0,0,0,0.34),
-            inset 1px 1px 0 rgba(255,255,255,0.20),
-            inset -1px -1px 0 rgba(255,255,255,0.04);
+        backdrop-filter: blur(24px) saturate(145%);
+        -webkit-backdrop-filter: blur(24px) saturate(145%);
+        box-shadow: none;
         }
 
         .quick-menu::before {
@@ -211,15 +216,16 @@ function QuickMenuApp() {
         }
 
         .quick-close {
-          width: 40px;
-          height: 40px;
-          border-radius: 14px;
-          border: 1px solid rgba(255,255,255,0.10);
-          background: rgba(255,255,255,0.08);
-          color: white;
-          display: grid;
-          place-items: center;
-          cursor: pointer;
+        width: 40px;
+        height: 40px;
+        border-radius: 14px;
+        border: 1px solid rgba(255,255,255,0.10);
+        background: rgba(255,255,255,0.08);
+        color: white;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        box-shadow: none;
         }
 
         .quick-close:hover {
