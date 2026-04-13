@@ -2150,11 +2150,7 @@ async fn handle_voice_command(app: tauri::AppHandle, input: String) -> Result<St
 
         CompanionAction::YouTubeSearch { query } => {
             ensure_debug_browser().await?;
-            let url = format!(
-                "https://www.youtube.com/results?search_query={}",
-                urlencoding::encode(&query)
-            );
-            modules::browser_automations::navigate_best_tab(&url).await?;
+            modules::browser_automations::youtube_search(&query, false).await?;
             ok_and_remember!(&input, ctx, format!("Suche auf YouTube nach {}.", query))
         }
 

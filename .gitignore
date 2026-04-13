@@ -28,6 +28,8 @@ Cargo.lock
 # Tauri
 src-tauri/target/
 src-tauri/.tauri/
+src-tauri/models/*.onnx
+src-tauri/models/*.json
 
 # IDE
 .vscode/
@@ -35,4 +37,4 @@ src-tauri/.tauri/
 
 # Misc
 *.tmp
-*.baksrc-tauri/models/*.onnx
+*.bak

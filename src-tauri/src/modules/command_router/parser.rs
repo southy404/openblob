@@ -45,6 +45,69 @@ fn remove_words(mut text: String, words: &[String]) -> String {
     text
 }
 
+fn trim_leading_search_fillers(mut text: String) -> String {
+    loop {
+        let trimmed = text.trim().to_string();
+
+        let next = if let Some(rest) = trimmed.strip_prefix("nach ") {
+            rest.trim().to_string()
+        } else if let Some(rest) = trimmed.strip_prefix("for ") {
+            rest.trim().to_string()
+        } else if let Some(rest) = trimmed.strip_prefix("auf ") {
+            rest.trim().to_string()
+        } else if let Some(rest) = trimmed.strip_prefix("on ") {
+            rest.trim().to_string()
+        } else if let Some(rest) = trimmed.strip_prefix("in ") {
+            rest.trim().to_string()
+        } else if let Some(rest) = trimmed.strip_prefix("im ") {
+            rest.trim().to_string()
+        } else {
+            break;
+        };
+
+        if next == trimmed {
+            break;
+        }
+
+        text = next;
+    }
+
+    text.trim().to_string()
+}
+
+fn trim_search_service_suffix(mut text: String, service_words: &[String]) -> String {
+    let original = text.clone();
+
+    for service_word in service_words {
+        for suffix in [
+            format!(" auf {service_word}"),
+            format!(" on {service_word}"),
+            format!(" in {service_word}"),
+            format!(" im {service_word}"),
+        ] {
+            if text.ends_with(&suffix) {
+                text = text[..text.len() - suffix.len()].trim().to_string();
+                break;
+            }
+        }
+    }
+
+    for dangling in [" auf", " on", " in", " im", " nach", " for"] {
+        if text.ends_with(dangling) {
+            text = text[..text.len() - dangling.len()].trim().to_string();
+            break;
+        }
+    }
+
+    text = trim_leading_search_fillers(text);
+
+    if text.is_empty() {
+        original.trim().to_string()
+    } else {
+        text
+    }
+}
+
 fn parse_explicit_search_command(normalized: &str) -> Option<CompanionAction> {
     let locale = command_locale();
 
@@ -62,10 +125,17 @@ fn parse_explicit_search_command(normalized: &str) -> Option<CompanionAction> {
                 prefixes.push(format!("{google_word} {search_word} "));
                 prefixes.push(format!("{search_word} on {google_word} "));
                 prefixes.push(format!("{search_word} auf {google_word} "));
+                prefixes.push(format!("{search_word} auf {google_word} nach "));
+                prefixes.push(format!("{search_word} on {google_word} for "));
+                prefixes.push(format!("{search_word} {google_word} nach "));
+                prefixes.push(format!("{search_word} {google_word} for "));
             }
         }
 
-        let query = strip_first_prefix_str(normalized, &prefixes);
+        let query = trim_search_service_suffix(
+            strip_first_prefix_str(normalized, &prefixes),
+            &locale.google_words,
+        );
 
         if !query.is_empty() && query != normalized {
             return Some(CompanionAction::GoogleSearch { query });
@@ -75,16 +145,23 @@ fn parse_explicit_search_command(normalized: &str) -> Option<CompanionAction> {
     if has_youtube && has_search {
         let mut prefixes = Vec::new();
 
-        for search_word in &locale.search_words {
-            for youtube_word in &locale.youtube_words {
-                prefixes.push(format!("{search_word} {youtube_word} "));
-                prefixes.push(format!("{youtube_word} {search_word} "));
-                prefixes.push(format!("{search_word} on {youtube_word} "));
-                prefixes.push(format!("{search_word} auf {youtube_word} "));
-            }
+    for search_word in &locale.search_words {
+        for youtube_word in &locale.youtube_words {
+            prefixes.push(format!("{search_word} {youtube_word} "));
+            prefixes.push(format!("{youtube_word} {search_word} "));
+            prefixes.push(format!("{search_word} on {youtube_word} "));
+            prefixes.push(format!("{search_word} auf {youtube_word} "));
+            prefixes.push(format!("{search_word} auf {youtube_word} nach "));
+            prefixes.push(format!("{search_word} on {youtube_word} for "));
+            prefixes.push(format!("{search_word} {youtube_word} nach "));
+            prefixes.push(format!("{search_word} {youtube_word} for "));
         }
+    }
 
-        let query = strip_first_prefix_str(normalized, &prefixes);
+        let query = trim_search_service_suffix(
+            strip_first_prefix_str(normalized, &prefixes),
+            &locale.youtube_words,
+        );
 
         if !query.is_empty() && query != normalized {
             return Some(CompanionAction::YouTubeSearch { query });
@@ -178,6 +255,12 @@ pub fn parse_voice_command_with_context(
         || title.contains("google")
         || title.contains("youtube");
 
+    let parsed = parse_voice_command(input);
+
+    if !matches!(parsed, CompanionAction::None) {
+        return parsed;
+    }
+
     if on_youtube {
         let has_play = contains_locale_words(&normalized, &locale.play_words, 0.84);
         let has_pause = contains_locale_words(&normalized, &locale.pause_words, 0.84);
@@ -205,7 +288,10 @@ pub fn parse_voice_command_with_context(
         }
 
         if let Some(query) = extract_generic_search_query(input) {
-            return CompanionAction::YouTubeSearch { query };
+            let cleaned = trim_search_service_suffix(query, &locale.youtube_words);
+            if !cleaned.trim().is_empty() {
+                return CompanionAction::YouTubeSearch { query: cleaned };
+            }
         }
 
         if let Some(text) = extract_quoted_text(input) {
@@ -217,16 +303,11 @@ pub fn parse_voice_command_with_context(
         }
     }
 
-    if in_browser {
-        if let Some(query) = extract_generic_search_query(input) {
-            return CompanionAction::GoogleSearch { query };
+    if let Some(query) = extract_generic_search_query(input) {
+        let cleaned = trim_search_service_suffix(query, &locale.google_words);
+        if !cleaned.trim().is_empty() {
+            return CompanionAction::GoogleSearch { query: cleaned };
         }
-    }
-
-    let parsed = parse_voice_command(input);
-
-    if !matches!(parsed, CompanionAction::None) {
-        return parsed;
     }
 
     CompanionAction::None
@@ -295,20 +376,38 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
         IntentKind::MediaNext => CompanionAction::MediaNext,
         IntentKind::MediaPrev => CompanionAction::MediaPrev,
 
-        IntentKind::GoogleSearch => CompanionAction::GoogleSearch {
-            query: extract_search_query(
-                &normalized,
-                &toks,
-                &["google", "googel", "gogle", "search", "suche", "such", "find"],
-            ),
+        IntentKind::GoogleSearch => {
+            let query = trim_search_service_suffix(
+                extract_search_query(
+                    &normalized,
+                    &toks,
+                    &["google", "googel", "gogle", "search", "suche", "such", "find"],
+                ),
+                &locale.google_words,
+            );
+
+            if query.is_empty() {
+                CompanionAction::None
+            } else {
+                CompanionAction::GoogleSearch { query }
+            }
         },
 
-        IntentKind::YouTubeSearch => CompanionAction::YouTubeSearch {
-            query: extract_search_query(
-                &normalized,
-                &toks,
-                &["youtube", "youtub", "jutube", "jutub", "yt", "search", "suche", "such", "find"],
-            ),
+        IntentKind::YouTubeSearch => {
+            let query = trim_search_service_suffix(
+                extract_search_query(
+                    &normalized,
+                    &toks,
+                    &["youtube", "youtub", "jutube", "jutub", "yt", "search", "suche", "such", "find"],
+                ),
+                &locale.youtube_words,
+            );
+
+            if query.is_empty() {
+                CompanionAction::None
+            } else {
+                CompanionAction::YouTubeSearch { query }
+            }
         },
 
         IntentKind::YouTubePlayTitle => {
