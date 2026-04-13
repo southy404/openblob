@@ -1,5 +1,6 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tempfile::NamedTempFile;
 
 fn play_wav_windows(path: &Path) -> Result<(), String> {
@@ -46,7 +47,7 @@ fn resolve_model_path(models_dir: &str, voice: &str) -> Result<PathBuf, String> 
         return Err("Piper voice ist leer.".to_string());
     }
 
-    let model_path = PathBuf::from(trimmed_models_dir).join(format!("{trimmed_voice}.onnx"));
+    let model_path = resolve_path(trimmed_models_dir).join(format!("{trimmed_voice}.onnx"));
 
     if !model_path.exists() {
         return Err(format!(
@@ -56,6 +57,18 @@ fn resolve_model_path(models_dir: &str, voice: &str) -> Result<PathBuf, String> 
     }
 
     Ok(model_path)
+}
+
+fn resolve_path(path: &str) -> PathBuf {
+    let p = PathBuf::from(path);
+
+    if p.is_absolute() {
+        return p;
+    }
+
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(p)
 }
 
 fn resolve_config_path(model_path: &Path) -> PathBuf {
@@ -79,6 +92,14 @@ pub fn speak(
         return Err("Piper executable ist leer.".to_string());
     }
 
+    let piper_path = resolve_path(trimmed_piper_exe);
+    if !piper_path.exists() {
+        return Err(format!(
+            "Piper executable nicht gefunden: {}",
+            piper_path.display()
+        ));
+    }
+
     let model_path = resolve_model_path(models_dir, voice)?;
     let config_path = resolve_config_path(&model_path);
 
@@ -93,7 +114,7 @@ pub fn speak(
         .map_err(|e| format!("Temporäre WAV-Datei konnte nicht erstellt werden: {e}"))?;
     let wav_path = wav_file.path().to_path_buf();
 
-    let output = Command::new(trimmed_piper_exe)
+    let mut child = Command::new(&piper_path)
         .arg("--model")
         .arg(&model_path)
         .arg("--config")
@@ -108,9 +129,26 @@ pub fn speak(
         .arg("0.667")
         .arg("--noise_w")
         .arg("0.8")
-        .arg(trimmed)
-        .output()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("Piper konnte nicht gestartet werden: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(trimmed.as_bytes())
+            .map_err(|e| format!("Text konnte nicht an Piper gesendet werden: {e}"))?;
+        stdin
+            .write_all(b"\n")
+            .map_err(|e| format!("Zeilenende konnte nicht an Piper gesendet werden: {e}"))?;
+    } else {
+        return Err("Piper stdin konnte nicht geöffnet werden.".to_string());
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Piper-Ausgabe konnte nicht gelesen werden: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();

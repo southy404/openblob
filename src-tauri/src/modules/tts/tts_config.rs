@@ -28,13 +28,13 @@ impl Default for TtsConfig {
         Self {
             default_lang: "de".into(),
 
-            de_provider: TtsProvider::Kokoro,
-            en_provider: TtsProvider::Kokoro,
+            de_provider: TtsProvider::Piper,
+            en_provider: TtsProvider::Piper,
 
-            de_voice: "af_heart".into(),
-            en_voice: "af_heart".into(),
+            de_voice: "de_DE-thorsten-medium".into(),
+            en_voice: "en_US-lessac-high".into(),
 
-            piper_exe: "piper".into(),
+            piper_exe: "../tools/piper/piper.exe".into(),
             piper_models_dir: "models".into(),
 
             kokoro_base_url: "http://127.0.0.1:8880".into(),
