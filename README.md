@@ -228,7 +228,7 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 | i18n groundwork for `en` / `de`                        | ✅     |
 | Speech bubble / companion bubble windows               | ✅     |
 | Quick menu as separate window                          | ⚠️     |
-| Global shortcut: CTRL + SPACE to toggle UI             | ⚠️     |
+| Global shortcut: CTRL + SPACE to toggle UI             | ✅     |
 | Hide & Seek mini game mode                             | ✅     |
 | Open-source-friendly structure cleanup                 | ✅     |
 
