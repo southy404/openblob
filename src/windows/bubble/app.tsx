@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, emit, emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Mic, MicOff, Send, Volume2, VolumeX } from "lucide-react";
-import { ensureDevWindow } from "./openDevWindow";
+import { ensureDevWindow } from "../bubble-dev/open";
 
 type ContextPayload = {
   text: string;
@@ -79,20 +79,24 @@ function normalizeShortcutLabel(input: string) {
     .trim();
 }
 
-function speak(text: string) {
-  if (!("speechSynthesis" in window) || !text.trim()) return;
-  window.speechSynthesis.cancel();
+async function speak(text: string, onError?: (msg: string) => void) {
+  const trimmed = text.trim();
+  if (!trimmed) return;
 
-  const utter = new SpeechSynthesisUtterance(text);
-  utter.rate = 1;
-  utter.pitch = 1;
-  utter.lang = "de-DE";
-  window.speechSynthesis.speak(utter);
+  try {
+    await invoke("speak_text", { text: trimmed });
+  } catch (error) {
+    const msg = `TTS failed: ${String(error)}`;
+    console.error("native tts failed", error);
+    onError?.(msg);
+  }
 }
 
-function stopSpeaking() {
-  if ("speechSynthesis" in window) {
-    window.speechSynthesis.cancel();
+async function stopSpeaking() {
+  try {
+    await invoke("stop_tts");
+  } catch (error) {
+    console.error("stop tts failed", error);
   }
 }
 
@@ -338,7 +342,7 @@ function BubbleApp() {
       await emit("companion-speech", result.content.slice(0, 180));
 
       if (speakEnabled) {
-        speak(result.content.slice(0, 260));
+        await speak(result.content.slice(0, 260), setHint);
       }
     } finally {
       await emitBlobState("thinking", false);
@@ -408,7 +412,7 @@ function BubbleApp() {
         await emit("companion-speech", actionResult);
 
         if (speakEnabled) {
-          speak(actionResult.slice(0, 220));
+          await speak(actionResult.slice(0, 220));
         }
 
         return;
@@ -421,7 +425,7 @@ function BubbleApp() {
         setLastRoute("command");
 
         if (speakEnabled) {
-          speak(message);
+          await speak(message);
         }
         return;
       }
@@ -441,7 +445,7 @@ function BubbleApp() {
       }
 
       if (speakEnabled) {
-        speak(message.slice(0, 220));
+        await speak(message.slice(0, 220));
       }
     } finally {
       setBusy(false);
@@ -552,6 +556,27 @@ function BubbleApp() {
     void emitBlobState("listening", false);
   };
 
+  const visibleRef = useRef(visible);
+  const listeningRef = useRef(listening);
+  const questionRef = useRef(question);
+  const busyRef = useRef(busy);
+
+  useEffect(() => {
+    visibleRef.current = visible;
+  }, [visible]);
+
+  useEffect(() => {
+    listeningRef.current = listening;
+  }, [listening]);
+
+  useEffect(() => {
+    questionRef.current = question;
+  }, [question]);
+
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
   useEffect(() => {
     try {
       window.localStorage.setItem(STORAGE_KEYS.model, model);
@@ -606,10 +631,13 @@ function BubbleApp() {
       );
 
       unlistenToggle = await listen("bubble-toggle", async () => {
+        console.log("[bubble] bubble-toggle received");
+
         const win = getCurrentWindow();
         const isVisible = await win.isVisible();
+        console.log("[bubble] visible before toggle:", isVisible);
 
-        if (isVisible && visible) {
+        if (isVisible) {
           stopVoiceInput();
           await fadeOutAndHide();
         } else {
@@ -618,18 +646,22 @@ function BubbleApp() {
       });
 
       unlistenShow = await listen("bubble-show", async () => {
+        console.log("[bubble] bubble-show received");
         await fadeInAndShow();
       });
 
       unlistenHide = await listen("bubble-hide", async () => {
+        console.log("[bubble] bubble-hide received");
         stopVoiceInput();
         await fadeOutAndHide();
       });
 
       unlistenVoiceToggle = await listen("companion-voice-toggle", async () => {
+        console.log("[bubble] companion-voice-toggle received");
+
         await fadeInAndShow();
 
-        if (listening) {
+        if (listeningRef.current) {
           stopVoiceInput();
         } else {
           await startVoiceInput();
@@ -640,13 +672,13 @@ function BubbleApp() {
     void setup();
 
     return () => {
-      if (unlistenContext) unlistenContext();
-      if (unlistenToggle) unlistenToggle();
-      if (unlistenShow) unlistenShow();
-      if (unlistenHide) unlistenHide();
-      if (unlistenVoiceToggle) unlistenVoiceToggle();
+      unlistenContext?.();
+      unlistenToggle?.();
+      unlistenShow?.();
+      unlistenHide?.();
+      unlistenVoiceToggle?.();
     };
-  }, [visible, listening, question, busy]);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

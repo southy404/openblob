@@ -1,36 +1,55 @@
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use chrono::{Datelike, Local, Timelike};
 use device_query::{DeviceQuery, DeviceState};
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::fs;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Emitter;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use std::fs; 
-use chrono::{Datelike, Local, Timelike};
+use rand::Rng;
+
+use modules::companion::bonding::{
+    load_bonding_state, load_or_create_bonding_state, save_bonding_state,
+};
+use modules::companion::personality::{
+    load_or_create_personality_state, load_personality_state,
+};
+use modules::memory::episodic_memory::{append_episode, EpisodicMemoryEntry};
+use modules::memory::semantic_memory::{load_or_create_semantic_memory, save_semantic_memory};
+use modules::profile::companion_config::load_or_create_companion_config;
+use modules::profile::onboarding_state::load_or_create_onboarding_state;
+use modules::profile::user_profile::{load_or_create_user_profile, save_user_profile};
 
 mod modules {
     pub mod app_profiles;
     pub mod browser_automations;
     pub mod command_router;
+    pub mod companion;
     pub mod context;
+    pub mod i18n;
+    pub mod memory;
+    pub mod profile;
     pub mod screen_capture;
     pub mod session_memory;
     pub mod snip_session;
+    pub mod snippets;
     pub mod steam_games;
+    pub mod storage;
     pub mod streaming;
     pub mod system;
+    pub mod tts;
     pub mod voice;
     pub mod windows_discovery;
 }
 
 use modules::app_profiles::resolve_app_action;
-use modules::command_router::{CompanionAction, parse_voice_command_with_context};
-use modules::context::{resolve_active_context, is_internal_companion_app};
+use modules::command_router::{parse_voice_command_with_context, CompanionAction};
+use modules::context::{is_internal_companion_app, resolve_active_context};
 use modules::snip_session::set_snip;
-
 
 static LAST_EXTERNAL_APP: OnceLock<Mutex<String>> = OnceLock::new();
 
@@ -44,6 +63,110 @@ fn default_vision_model() -> String {
 
 fn last_external_app_store() -> &'static Mutex<String> {
     LAST_EXTERNAL_APP.get_or_init(|| Mutex::new(String::from("unknown")))
+}
+
+fn initialize_companion_persistence() -> Result<(), String> {
+    let _config = load_or_create_companion_config()?;
+    let _onboarding = load_or_create_onboarding_state()?;
+    let _personality = load_or_create_personality_state()?;
+    let _bonding = load_or_create_bonding_state()?;
+    let _user_profile = load_or_create_user_profile()?;
+    let _semantic_memory = load_or_create_semantic_memory()?;
+    Ok(())
+}
+
+fn summarize_success_reply(reply: &str) -> String {
+    let trimmed = reply.trim();
+
+    if trimmed.is_empty() {
+        return "Action completed.".into();
+    }
+
+    trimmed.chars().take(180).collect()
+}
+
+fn infer_topic_from_input(input: &str) -> Option<String> {
+    let lowered = input.trim().to_lowercase();
+
+    if lowered.is_empty() {
+        return None;
+    }
+
+    if lowered.contains("youtube") {
+        return Some("youtube".into());
+    }
+    if lowered.contains("netflix") {
+        return Some("netflix".into());
+    }
+    if lowered.contains("spotify") {
+        return Some("spotify".into());
+    }
+    if lowered.contains("weather") || lowered.contains("wetter") {
+        return Some("weather".into());
+    }
+    if lowered.contains("screenshot") || lowered.contains("snip") {
+        return Some("screenshot".into());
+    }
+    if lowered.contains("google") {
+        return Some("google".into());
+    }
+    if lowered.contains("tab") || lowered.contains("browser") || lowered.contains("chrome") {
+        return Some("browser".into());
+    }
+
+    None
+}
+
+fn register_successful_interaction(input: &str, app_name: &str, context_domain: &str, reply: &str) {
+    if let Ok(mut bonding) = load_bonding_state() {
+        bonding.register_helpful_interaction();
+        let _ = save_bonding_state(&bonding);
+    }
+
+    if let Ok(mut profile) = load_or_create_user_profile() {
+        profile.register_app(app_name);
+
+        if let Some(topic) = infer_topic_from_input(input) {
+            profile.register_topic(&topic);
+        }
+
+        let _ = save_user_profile(&profile);
+    }
+
+    if let Ok(mut semantic_memory) = load_or_create_semantic_memory() {
+        semantic_memory.register_app(app_name);
+
+        if let Some(topic) = infer_topic_from_input(input) {
+            semantic_memory.register_topic(&topic);
+        }
+
+        let _ = save_semantic_memory(&semantic_memory);
+    }
+
+    let episode = EpisodicMemoryEntry::new(
+        "successful_command",
+        app_name,
+        context_domain,
+        input,
+        summarize_success_reply(reply),
+        "success",
+        0.42,
+    );
+
+    let _ = append_episode(&episode);
+}
+
+macro_rules! ok_and_remember {
+    ($input:expr, $ctx:expr, $reply:expr) => {{
+        let reply_value: String = $reply;
+        register_successful_interaction(
+            $input,
+            &$ctx.app_name,
+            &$ctx.domain,
+            &reply_value,
+        );
+        Ok::<String, String>(reply_value)
+    }};
 }
 
 #[derive(Debug, Serialize)]
@@ -127,7 +250,6 @@ struct OllamaChatResponse {
 struct OllamaMessage {
     content: String,
 }
-
 
 fn build_snip_search_prompt(comment: &str, app_name: &str, window_title: &str) -> String {
     format!(
@@ -256,7 +378,11 @@ fn format_search_result(raw: &str) -> String {
         search_query = if search_query.is_empty() { "unknown" } else { &search_query },
         alt_query_1 = if alt_query_1.is_empty() { "unknown" } else { &alt_query_1 },
         alt_query_2 = if alt_query_2.is_empty() { "unknown" } else { &alt_query_2 },
-        answer = if answer.is_empty() { "No concise answer returned." } else { &answer },
+        answer = if answer.is_empty() {
+            "No concise answer returned."
+        } else {
+            &answer
+        },
     )
 }
 
@@ -383,11 +509,10 @@ async fn ask_ollama_vision(prompt: &str, image_path: &str) -> Result<OllamaResul
             Err(err) => {
                 let lower = err.to_lowercase();
 
-                let is_missing_model =
-                    lower.contains("not found")
-                        || lower.contains("unknown model")
-                        || lower.contains("model")
-                        || lower.contains("pull");
+                let is_missing_model = lower.contains("not found")
+                    || lower.contains("unknown model")
+                    || lower.contains("model")
+                    || lower.contains("pull");
 
                 if is_missing_model {
                     not_found_errors.push(format!("{} -> {}", model, err));
@@ -593,8 +718,6 @@ async fn ensure_debug_browser() -> Result<(), String> {
         Err("Debug-Browser konnte nicht gestartet werden.".into())
     }
 }
-
-
 
 #[tauri::command]
 async fn capture_snip_region(x: i32, y: i32, width: u32, height: u32) -> Result<String, String> {
@@ -1153,7 +1276,10 @@ fn open_app_target(target: &str, prefer_browser: bool) -> Result<String, String>
             return Ok(format!("Opening {} in the browser.", target));
         }
 
-        if normalized.contains('.') || normalized.starts_with("http://") || normalized.starts_with("https://") {
+        if normalized.contains('.')
+            || normalized.starts_with("http://")
+            || normalized.starts_with("https://")
+        {
             let url = if normalized.starts_with("http://") || normalized.starts_with("https://") {
                 normalized.clone()
             } else {
@@ -1367,12 +1493,7 @@ fn weather_code_label(code: i32) -> &'static str {
     }
 }
 
-fn build_clothing_advice(
-    temp_now: f32,
-    temp_max: f32,
-    rain_prob: i32,
-    wind_kmh: f32,
-) -> String {
+fn build_clothing_advice(temp_now: f32, temp_max: f32, rain_prob: i32, wind_kmh: f32) -> String {
     let mut items: Vec<&str> = Vec::new();
 
     if temp_now <= 5.0 || temp_max <= 8.0 {
@@ -1499,8 +1620,7 @@ async fn weather_reply(location: Option<String>) -> Result<String, String> {
             "&timezone=auto",
             "&forecast_days=1"
         ),
-        location_hit.latitude,
-        location_hit.longitude
+        location_hit.latitude, location_hit.longitude
     );
 
     let forecast = client
@@ -1571,14 +1691,22 @@ async fn weather_reply(location: Option<String>) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn handle_voice_command(
-    app: tauri::AppHandle,
-    input: String,
-) -> Result<String, String> {
+async fn handle_voice_command(app: tauri::AppHandle, input: String) -> Result<String, String> {
     modules::session_memory::set_last_command(&input);
+
+    let personality = load_personality_state().unwrap_or_default();
+    let _personality_mood_hint = personality.mood_hint();
 
     let mut ctx = resolve_active_context();
     let active_app = get_active_app();
+
+    async fn maybe_speak_reply(reply: &str) {
+        let lang = "en";
+
+        if let Err(err) = modules::tts::manager::speak(reply, Some(lang)).await {
+            eprintln!("TTS error: {err}");
+        }
+    }
 
     if is_internal_companion_app(&ctx.app_name) && active_app != "unknown" {
         ctx.app_name = active_app.clone();
@@ -1592,12 +1720,8 @@ async fn handle_voice_command(
         }
     }
 
-    let parsed_action = parse_voice_command_with_context(
-        &input,
-        &ctx.app_name,
-        &ctx.window_title,
-        &ctx.domain,
-    );
+    let parsed_action =
+        parse_voice_command_with_context(&input, &ctx.app_name, &ctx.window_title, &ctx.domain);
 
     let action = if let Some(mapped) = resolve_app_action(parsed_action.clone(), &active_app) {
         mapped
@@ -1606,39 +1730,93 @@ async fn handle_voice_command(
     };
 
     match action {
+        CompanionAction::InsertSnippet { key } => {
+            if let Some(value) = modules::snippets::get_snippet(&key) {
+                let target = ensure_external_focus(&active_app)?;
+                insert_text(&value)?;
+                ok_and_remember!(
+                    &input,
+                    ctx,
+                    format!("Snippet '{}' in {} eingefügt.", key, target)
+                )
+            } else {
+                Ok(format!("Kein Snippet für '{}' gefunden.", key))
+            }
+        },
+
+        CompanionAction::CoinFlip => {
+            let result = if rand::thread_rng().gen_bool(0.5) {
+                "Kopf"
+            } else {
+                "Zahl"
+            };
+
+            let reply = format!("Ich werfe eine Münze ... {}!", result);
+            maybe_speak_reply(&reply).await;
+            ok_and_remember!(&input, ctx, reply)
+        },
+
+        CompanionAction::RollDice => {
+            let value = rand::thread_rng().gen_range(1..=6);
+
+            ok_and_remember!(
+                &input,
+                ctx,
+                format!("Du hast eine {} gewürfelt.", value)
+            )
+        },
+
+        CompanionAction::SetTimer { minutes } => {
+            let minutes = minutes.max(1);
+            let app_handle = app.clone();
+
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(minutes * 60));
+                let text = format!("Dein Timer über {} Minute(n) ist fertig.", minutes);
+                let _ = modules::tts::manager::speak(&text, Some("de"));
+                let _ = app_handle.emit("companion-timer-finished", text);
+            });
+
+            ok_and_remember!(
+                &input,
+                ctx,
+                format!("Timer für {} Minute(n) gestartet.", minutes)
+            )
+        },
         CompanionAction::YouTubePlay => {
             let target = ensure_external_focus(&active_app)?;
             press_key("k")?;
-            Ok(format!("YouTube-Play/Pause in {} ausgelöst.", target))
+            ok_and_remember!(&input, ctx, format!("YouTube-Play/Pause in {} ausgelöst.", target))
         }
 
         CompanionAction::YouTubePause => {
             let target = ensure_external_focus(&active_app)?;
             press_key("k")?;
-            Ok(format!("YouTube-Play/Pause in {} ausgelöst.", target))
+            ok_and_remember!(&input, ctx, format!("YouTube-Play/Pause in {} ausgelöst.", target))
         }
 
         CompanionAction::YouTubeSkipAd => {
             ensure_debug_browser().await?;
 
             if browser_click_best_match("skip ads".to_string()).await.is_ok() {
-                return Ok("Werbung übersprungen.".into());
+                return ok_and_remember!(&input, ctx, String::from("Werbung übersprungen."));
             }
 
             if browser_click_best_match("skip ad".to_string()).await.is_ok() {
-                return Ok("Werbung übersprungen.".into());
+                return ok_and_remember!(&input, ctx, String::from("Werbung übersprungen."));
             }
 
             if browser_click_best_match("überspringen".to_string()).await.is_ok() {
-                return Ok("Werbung übersprungen.".into());
+                return ok_and_remember!(&input, ctx, String::from("Werbung übersprungen."));
             }
 
             if browser_click_best_match("ueberspringen".to_string()).await.is_ok() {
-                return Ok("Werbung übersprungen.".into());
+                return ok_and_remember!(&input, ctx, String::from("Werbung übersprungen."));
             }
 
             Ok("Kein Skip-Button gefunden.".into())
         }
+
         CompanionAction::StreamOpenTitle {
             service,
             title,
@@ -1656,12 +1834,13 @@ async fn handle_voice_command(
                     &item.url,
                     &title,
                 );
-                Ok(format!("Opening {} on {}.", item.title, service))
+
+                ok_and_remember!(&input, ctx, format!("Opening {} on {}.", item.title, service))
             } else {
-                println!("[stream-open] no match found");
                 Ok(format!("I couldn't find '{}' on {}.", title, service))
             }
         }
+
         CompanionAction::StreamRecommend {
             service,
             mood,
@@ -1686,7 +1865,7 @@ async fn handle_voice_command(
                     kind: kind.clone(),
                     trending,
                     exclude_titles: Vec::new(),
-                }
+                },
             );
 
             if let Some(rec) = rec {
@@ -1697,29 +1876,44 @@ async fn handle_voice_command(
                     &query_text,
                 );
 
-                Ok(modules::streaming::build_recommendation_reply(&rec))
+                ok_and_remember!(
+                    &input,
+                    ctx,
+                    modules::streaming::build_recommendation_reply(&rec)
+                )
             } else {
                 Ok("I couldn't find a strong recommendation yet.".into())
             }
         }
+
         CompanionAction::StreamCapability { service } => {
             let svc = service.unwrap_or_else(|| "netflix".into());
 
-            Ok(format!(
-                "I can open specific titles on {}, show trending picks, and recommend movies or series by mood, genre, or type. For example: 'play Black Mirror on {}', 'what's trending on {}', or 'recommend a funny movie on {}'.",
-                svc, svc, svc, svc
-            ))
+            ok_and_remember!(
+                &input,
+                ctx,
+                format!(
+                    "I can open specific titles on {}, show trending picks, and recommend movies or series by mood, genre, or type. For example: 'play Black Mirror on {}', 'what's trending on {}', or 'recommend a funny movie on {}'.",
+                    svc, svc, svc, svc
+                )
+            )
         }
+
         CompanionAction::StreamOpenLastSuggestion => {
             let state = modules::session_memory::get_state();
 
             if !state.last_suggested_url.is_empty() {
                 open_url_prefer_browser(&state.last_suggested_url, false, false)?;
-                return Ok(format!("Opening {}.", state.last_suggested_title));
+                return ok_and_remember!(
+                    &input,
+                    ctx,
+                    format!("Opening {}.", state.last_suggested_title)
+                );
             }
 
             Ok("There is no recent streaming suggestion to open.".into())
         }
+
         CompanionAction::StreamMoreLikeLast => {
             let state = modules::session_memory::get_state();
 
@@ -1745,141 +1939,203 @@ async fn handle_voice_command(
                     &state.last_recommendation_query,
                 );
 
-                Ok(format!(
-                    "Then {} could be another good choice. {}. Want me to open it?",
-                    item.title.title,
-                    item.reason
-                ))
+                ok_and_remember!(
+                    &input,
+                    ctx,
+                    format!(
+                        "Then {} could be another good choice. {}. Want me to open it?",
+                        item.title.title, item.reason
+                    )
+                )
             } else {
                 Ok("I couldn't find another good option yet.".into())
             }
         }
+
         CompanionAction::VolumeUp => {
             modules::system::change_system_volume(0.08)?;
-            Ok("Okay, lauter.".into())
+            ok_and_remember!(&input, ctx, String::from("Okay, lauter."))
         }
+
         CompanionAction::VolumeDown => {
             modules::system::change_system_volume(-0.08)?;
-            Ok("Okay, leiser.".into())
+            ok_and_remember!(&input, ctx, String::from("Okay, leiser."))
         }
+
         CompanionAction::SetVolume { percent } => Err(format!(
             "Exakte Prozent-Lautstärke auf {}% ist noch nicht implementiert.",
             percent
         )),
+
         CompanionAction::Mute => {
             modules::system::set_system_mute(true)?;
-            Ok("Okay, Ton aus.".into())
+            ok_and_remember!(&input, ctx, String::from("Okay, Ton aus."))
         }
+
         CompanionAction::Unmute => {
             modules::system::set_system_mute(false)?;
-            Ok("Okay, Ton an.".into())
+            ok_and_remember!(&input, ctx, String::from("Okay, Ton an."))
         }
+
         CompanionAction::ToggleMute => {
             modules::system::toggle_system_mute()?;
-            Ok("Mute umgeschaltet.".into())
+            ok_and_remember!(&input, ctx, String::from("Mute umgeschaltet."))
         }
 
         CompanionAction::MediaPlayPause => {
             let target = ensure_external_focus(&active_app)?;
             press_key("k")?;
-            Ok(format!("Play oder Pause in {}.", target))
+            ok_and_remember!(&input, ctx, format!("Play oder Pause in {}.", target))
         }
+
         CompanionAction::MediaNext => {
             modules::system::media_next_track()?;
-            Ok("Okay, nächster Titel.".into())
+            ok_and_remember!(&input, ctx, String::from("Okay, nächster Titel."))
         }
+
         CompanionAction::MediaPrev => {
             modules::system::media_prev_track()?;
-            Ok("Okay, vorheriger Titel.".into())
+            ok_and_remember!(&input, ctx, String::from("Okay, vorheriger Titel."))
         }
 
         CompanionAction::Save => {
             let target = ensure_external_focus(&active_app)?;
             shortcut_ctrl('s')?;
-            Ok(format!("Speichern in {} ausgelöst.", target))
+            ok_and_remember!(&input, ctx, format!("Speichern in {} ausgelöst.", target))
         }
+
         CompanionAction::SaveAs => {
             let target = ensure_external_focus(&active_app)?;
             shortcut_ctrl_shift('s')?;
-            Ok(format!("Speichern unter in {} ausgelöst.", target))
+            ok_and_remember!(&input, ctx, format!("Speichern unter in {} ausgelöst.", target))
         }
+
         CompanionAction::OpenFile => {
             let target = ensure_external_focus(&active_app)?;
             shortcut_ctrl('o')?;
-            Ok(format!("Öffnen in {} ausgelöst.", target))
+            ok_and_remember!(&input, ctx, format!("Öffnen in {} ausgelöst.", target))
         }
+
         CompanionAction::NewFile => {
             let target = ensure_external_focus(&active_app)?;
             shortcut_ctrl('n')?;
-            Ok(format!("Neu in {} ausgelöst.", target))
+            ok_and_remember!(&input, ctx, format!("Neu in {} ausgelöst.", target))
         }
+
         CompanionAction::Close | CompanionAction::CloseApp => {
             ensure_debug_browser().await?;
             let tab = modules::browser_automations::get_active_tab().await?;
             modules::browser_automations::close_tab(&tab.id).await?;
-            Ok("Aktiven Browser-Tab geschlossen.".into())
+            ok_and_remember!(&input, ctx, "Aktiven Browser-Tab geschlossen.".into())
         }
 
         CompanionAction::NewTab => {
             ensure_debug_browser().await?;
             modules::browser_automations::new_tab("https://www.google.com").await?;
-            Ok("Neuer Browser-Tab geöffnet.".into())
+            ok_and_remember!(&input, ctx, "Neuer Browser-Tab geöffnet.".into())
         }
 
         CompanionAction::CloseTab => {
             ensure_debug_browser().await?;
             let tab = modules::browser_automations::get_active_tab().await?;
             modules::browser_automations::close_tab(&tab.id).await?;
-            Ok("Aktiven Browser-Tab geschlossen.".into())
+            ok_and_remember!(&input, ctx, "Aktiven Browser-Tab geschlossen.".into())
         }
-        CompanionAction::CloseTabByIndex { index } => browser_close_tab_by_index(index).await,
+
+        CompanionAction::CloseTabByIndex { index } => {
+            let reply = browser_close_tab_by_index(index).await?;
+            ok_and_remember!(&input, ctx, reply)
+        }
+
         CompanionAction::NewWindow => {
             ensure_debug_browser().await?;
             modules::browser_automations::new_tab("https://www.google.com").await?;
-            Ok("Neuer Browser-Tab geöffnet.".into())
+            ok_and_remember!(&input, ctx, "Neuer Browser-Tab geöffnet.".into())
         }
+
         CompanionAction::Incognito => {
             let target = ensure_external_focus(&active_app)?;
             shortcut_ctrl_shift('n')?;
-            Ok(format!("Inkognito-Fenster in {} geöffnet.", target))
+            ok_and_remember!(
+                &input,
+                ctx,
+                format!("Inkognito-Fenster in {} geöffnet.", target)
+            )
         }
+
         CompanionAction::Reload => {
             let target = ensure_external_focus(&active_app)?;
             shortcut_ctrl('r')?;
-            Ok(format!("Seite in {} neu geladen.", target))
+            ok_and_remember!(&input, ctx, format!("Seite in {} neu geladen.", target))
         }
+
         CompanionAction::Undo => {
             let target = ensure_external_focus(&active_app)?;
             shortcut_ctrl('z')?;
-            Ok(format!("Rückgängig in {}.", target))
+            ok_and_remember!(&input, ctx, format!("Rückgängig in {}.", target))
         }
+
         CompanionAction::Redo => {
             let target = ensure_external_focus(&active_app)?;
             shortcut_ctrl('y')?;
-            Ok(format!("Wiederholen in {}.", target))
+            ok_and_remember!(&input, ctx, format!("Wiederholen in {}.", target))
         }
 
-        CompanionAction::BrowserBack => browser_back().await,
-        CompanionAction::BrowserForward => browser_forward().await,
-        CompanionAction::BrowserScrollDown => browser_scroll_down().await,
-        CompanionAction::BrowserScrollUp => browser_scroll_up().await,
-        CompanionAction::BrowserTypeText { text } => browser_type_text(text).await,
-        CompanionAction::BrowserSubmit => browser_submit().await,
-        CompanionAction::BrowserClickBestMatch { text } => browser_click_best_match(text).await,
+        CompanionAction::BrowserBack => {
+            let reply = browser_back().await?;
+            ok_and_remember!(&input, ctx, reply)
+        }
+
+        CompanionAction::BrowserForward => {
+            let reply = browser_forward().await?;
+            ok_and_remember!(&input, ctx, reply)
+        }
+
+        CompanionAction::BrowserScrollDown => {
+            let reply = browser_scroll_down().await?;
+            ok_and_remember!(&input, ctx, reply)
+        }
+
+        CompanionAction::BrowserScrollUp => {
+            let reply = browser_scroll_up().await?;
+            ok_and_remember!(&input, ctx, reply)
+        }
+
+        CompanionAction::BrowserTypeText { text } => {
+            let reply = browser_type_text(text).await?;
+            ok_and_remember!(&input, ctx, reply)
+        }
+
+        CompanionAction::BrowserSubmit => {
+            let reply = browser_submit().await?;
+            ok_and_remember!(&input, ctx, reply)
+        }
+
+        CompanionAction::BrowserClickBestMatch { text } => {
+            let reply = browser_click_best_match(text).await?;
+            ok_and_remember!(&input, ctx, reply)
+        }
+
         CompanionAction::BrowserClickButtonByText { text } => {
-            browser_click_best_match(text).await
-        },
+            let reply = browser_click_best_match(text).await?;
+            ok_and_remember!(&input, ctx, reply)
+        }
+
         CompanionAction::BrowserContext => {
-            let ctx = browser_get_context().await?; 
-            Ok(format!(
-                "Seite: {} | URL: {} | Typ: {} | Links: {} | Buttons: {} | Inputs: {}",
-                ctx.title,
-                ctx.url,
-                ctx.page_kind,
-                ctx.visible_links.len(),
-                ctx.visible_buttons.len(),
-                ctx.visible_inputs.len()
-            ))
+            let browser_ctx = browser_get_context().await?;
+            ok_and_remember!(
+                &input,
+                ctx,
+                format!(
+                    "Seite: {} | URL: {} | Typ: {} | Links: {} | Buttons: {} | Inputs: {}",
+                    browser_ctx.title,
+                    browser_ctx.url,
+                    browser_ctx.page_kind,
+                    browser_ctx.visible_links.len(),
+                    browser_ctx.visible_buttons.len(),
+                    browser_ctx.visible_inputs.len()
+                )
+            )
         }
 
         CompanionAction::GoogleSearch { query } => {
@@ -1889,7 +2145,7 @@ async fn handle_voice_command(
                 urlencoding::encode(&query)
             );
             modules::browser_automations::navigate_best_tab(&url).await?;
-            Ok(format!("Suche auf Google nach {}.", query))
+            ok_and_remember!(&input, ctx, format!("Suche auf Google nach {}.", query))
         }
 
         CompanionAction::YouTubeSearch { query } => {
@@ -1899,7 +2155,7 @@ async fn handle_voice_command(
                 urlencoding::encode(&query)
             );
             modules::browser_automations::navigate_best_tab(&url).await?;
-            Ok(format!("Suche auf YouTube nach {}.", query))
+            ok_and_remember!(&input, ctx, format!("Suche auf YouTube nach {}.", query))
         }
 
         CompanionAction::YouTubePlayTitle { title } => {
@@ -1909,100 +2165,153 @@ async fn handle_voice_command(
                 urlencoding::encode(&title)
             );
             modules::browser_automations::navigate_best_tab(&url).await?;
-            Ok(format!("Suche auf YouTube nach {}.", title))
-        },
+            ok_and_remember!(&input, ctx, format!("Suche auf YouTube nach {}.", title))
+        }
 
         CompanionAction::BrowserOpenUrl {
             url,
             new_tab,
             new_window,
             incognito,
-        } => browser_open_url(url, new_tab, new_window, incognito).await,
+        } => {
+            let reply = browser_open_url(url, new_tab, new_window, incognito).await?;
+            ok_and_remember!(&input, ctx, reply)
+        }
 
         CompanionAction::BrowserClickLinkByText { text, new_tab } => {
-            browser_click_link_by_text(text, new_tab).await
+            let reply = browser_click_link_by_text(text, new_tab).await?;
+            ok_and_remember!(&input, ctx, reply)
         }
-        CompanionAction::BrowserClickFirstResult => browser_click_first_result().await,
-        CompanionAction::BrowserClickNthResult { index } => browser_click_nth_result(index).await,
+
+        CompanionAction::BrowserClickFirstResult => {
+            let reply = browser_click_first_result().await?;
+            ok_and_remember!(&input, ctx, reply)
+        }
+
+        CompanionAction::BrowserClickNthResult { index } => {
+            let reply = browser_click_nth_result(index).await?;
+            ok_and_remember!(&input, ctx, reply)
+        }
 
         CompanionAction::OpenApp {
             target,
             prefer_browser,
-        } => open_app_target(&target, prefer_browser),
+        } => {
+            let reply = open_app_target(&target, prefer_browser)?;
+            ok_and_remember!(&input, ctx, reply)
+        }
 
         CompanionAction::InsertText(text) => {
             let target = ensure_external_focus(&active_app)?;
             insert_text(&text)?;
-            Ok(format!("Text in {} eingegeben.", target))
+            ok_and_remember!(&input, ctx, format!("Text in {} eingegeben.", target))
         }
+
         CompanionAction::KeyPress(key) => {
             let target = ensure_external_focus(&active_app)?;
             press_key(key)?;
-            Ok(format!("Taste {} in {} gesendet.", key, target))
+            ok_and_remember!(&input, ctx, format!("Taste {} in {} gesendet.", key, target))
         }
+
         CompanionAction::KeyCombo(keys) => {
             let target = ensure_external_focus(&active_app)?;
             press_key_combo(&keys)?;
-            Ok(format!("Tastenkombination in {} gesendet.", target))
+            ok_and_remember!(
+                &input,
+                ctx,
+                format!("Tastenkombination in {} gesendet.", target)
+            )
         }
+
         CompanionAction::Confirm => {
             let state = modules::session_memory::get_state();
 
             if !state.last_suggested_url.is_empty() {
                 open_url_prefer_browser(&state.last_suggested_url, false, false)?;
-                return Ok(format!("Opening {}.", state.last_suggested_title));
+                return ok_and_remember!(
+                    &input,
+                    ctx,
+                    format!("Opening {}.", state.last_suggested_title)
+                );
             }
 
             let target = ensure_external_focus(&active_app)?;
             press_key("enter")?;
-            Ok(format!("Confirmed in {}.", target))
+            ok_and_remember!(&input, ctx, format!("Confirmed in {}.", target))
         }
+
         CompanionAction::Clear => {
             let target = ensure_external_focus(&active_app)?;
             press_key("escape")?;
-            Ok(format!("Zurückgesetzt in {}.", target))
+            ok_and_remember!(&input, ctx, format!("Zurückgesetzt in {}.", target))
         }
 
         CompanionAction::YouTubeNextVideo => {
             let target = ensure_external_focus(&active_app)?;
             press_key_combo(&["shift", "n"])?;
-            Ok(format!("Nächstes YouTube-Video in {}.", target))
+            ok_and_remember!(
+                &input,
+                ctx,
+                format!("Nächstes YouTube-Video in {}.", target)
+            )
         }
+
         CompanionAction::YouTubeSeekForward => {
             let target = ensure_external_focus(&active_app)?;
             press_key("l")?;
-            Ok(format!("YouTube in {} vorgespult.", target))
+            ok_and_remember!(&input, ctx, format!("YouTube in {} vorgespult.", target))
         }
-                CompanionAction::YouTubeSeekBackward => {
+
+        CompanionAction::YouTubeSeekBackward => {
             let target = ensure_external_focus(&active_app)?;
             press_key("j")?;
-            Ok(format!("YouTube in {} zurückgespult.", target))
+            ok_and_remember!(&input, ctx, format!("YouTube in {} zurückgespult.", target))
         }
 
         CompanionAction::CurrentTime => {
             let now = Local::now();
-            Ok(german_time_phrase(now.hour(), now.minute()))
+            ok_and_remember!(&input, ctx, german_time_phrase(now.hour(), now.minute()))
         }
 
         CompanionAction::CurrentDate => {
             let now = Local::now();
-            Ok(format!(
-                "Heute ist {}, der {}. {} {}.",
-                german_weekday_name(now.weekday()),
-                now.day(),
-                german_month_name(now.month()),
-                now.year()
-            ))
+            ok_and_remember!(
+                &input,
+                ctx,
+                format!(
+                    "Heute ist {}, der {}. {} {}.",
+                    german_weekday_name(now.weekday()),
+                    now.day(),
+                    german_month_name(now.month()),
+                    now.year()
+                )
+            )
         }
 
-        CompanionAction::WeatherToday { location } => weather_reply(location).await,
+        CompanionAction::WeatherToday { location } => {
+            let reply = weather_reply(location).await?;
+            ok_and_remember!(&input, ctx, reply)
+        }
+
         CompanionAction::ExplainSelection => Ok("NO_ACTION".into()),
+
         CompanionAction::TakeScreenshot => {
             let _ = app.emit("companion-snip-hotkey", ());
-            Ok("Snip-Modus geöffnet.".into())
+            ok_and_remember!(&input, ctx, String::from("Snip-Modus geöffnet."))
         }
+
         CompanionAction::None => Ok("NO_ACTION".into()),
     }
+}
+
+#[tauri::command]
+async fn speak_text(text: String, lang: Option<String>) -> Result<(), String> {
+    modules::tts::manager::speak(&text, lang.as_deref()).await
+}
+
+#[tauri::command]
+async fn stop_tts() -> Result<(), String> {
+    modules::tts::manager::stop().await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2010,37 +2319,44 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-       .plugin(
-        tauri_plugin_global_shortcut::Builder::new()
-            .with_handler(|app, shortcut, event| {
-                use tauri_plugin_global_shortcut::ShortcutState;
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    use tauri_plugin_global_shortcut::ShortcutState;
 
-                if event.state != ShortcutState::Pressed {
-                    return;
-                }
+                    if event.state != ShortcutState::Pressed {
+                        return;
+                    }
 
-                let shortcut_str = shortcut.to_string().replace(' ', "").to_lowercase();
-                println!("global shortcut pressed: {}", shortcut_str);
+                    let shortcut_str = shortcut.to_string().replace(' ', "").to_lowercase();
+                    println!("global shortcut pressed: {}", shortcut_str);
 
-                let is_toggle =
-                    shortcut_str == "control+space" || shortcut_str == "ctrl+space";
+                    let is_toggle =
+                        shortcut_str == "control+space" || shortcut_str == "ctrl+space";
 
-                let is_voice =
-                    shortcut_str == "alt+keym" || shortcut_str == "alt+m";
+                    let is_voice = shortcut_str == "alt+keym" || shortcut_str == "alt+m";
 
-                if is_toggle {
-                    let _ = app.emit("companion-toggle", ());
-                    return;
-                }
+                    if is_toggle {
+                        let _ = app.emit("companion-toggle", ());
+                        return;
+                    }
 
-                if is_voice {
-                    let _ = app.emit("companion-voice-toggle", ());
-                }
-            })
-            .build(),
-    )
+                    if is_voice {
+                        let _ = app.emit("companion-voice-toggle", ());
+                    }
+                })
+                .build(),
+        )
         .setup(|app| {
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+            if let Err(err) = modules::i18n::command_locale::init_command_locale("en") {
+                eprintln!("Failed to initialize command locale: {err}");
+            }
+
+            if let Err(err) = initialize_companion_persistence() {
+                eprintln!("Failed to initialize companion persistence: {err}");
+            }
 
             let shortcut = app.global_shortcut();
 
@@ -2062,6 +2378,8 @@ pub fn run() {
             get_active_app,
             get_active_snip_context,
             handle_voice_command,
+            speak_text,
+            stop_tts,
             browser_list_tabs,
             browser_close_tab_by_index,
             browser_new_tab,

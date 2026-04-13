@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use strsim::jaro_winkler;
+use crate::modules::i18n::command_locale::command_locale;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
@@ -79,6 +80,7 @@ pub enum CompanionAction {
     YouTubeSkipAd,
 
     InsertText(String),
+    InsertSnippet { key: String },
     KeyCombo(Vec<&'static str>),
     KeyPress(&'static str),
 
@@ -95,6 +97,9 @@ pub enum CompanionAction {
     WeatherToday { location: Option<String> },
     ExplainSelection,
     TakeScreenshot,
+    CoinFlip,
+    RollDice,
+    SetTimer { minutes: u64 },
     None,
 }
 
@@ -151,6 +156,9 @@ enum IntentKind {
     WeatherToday,
     ExplainSelection,
     TakeScreenshot,
+    CoinFlip,
+    RollDice,
+    SetTimer { minutes: u64 },
     None,
 }
 
@@ -333,6 +341,23 @@ fn normalize(input: &str) -> String {
     out.trim().to_string()
 }
 
+fn fuzzy_has_any_strings(tokens: &[&str], words: &[String], threshold: f32) -> bool {
+    tokens.iter().any(|t| {
+        words.iter().any(|w| jaro_winkler(t, w) >= threshold as f64)
+    })
+}
+
+fn fuzzy_count_strings(tokens: &[&str], words: &[String], threshold: f32) -> usize {
+    tokens
+        .iter()
+        .filter(|t| words.iter().any(|w| jaro_winkler(t, w) >= threshold as f64))
+        .count()
+}
+
+fn score_strings(tokens: &[&str], words: &[String], threshold: f32, weight: f32) -> f32 {
+    fuzzy_count_strings(tokens, words, threshold) as f32 * weight
+}
+
 fn tokens(text: &str) -> Vec<&str> {
     text.split_whitespace().filter(|t| !t.is_empty()).collect()
 }
@@ -495,6 +520,42 @@ fn extract_generic_search_query(input: &str) -> Option<String> {
     None
 }
 
+fn extract_timer_minutes(input: &str) -> Option<u64> {
+    let tokens: Vec<&str> = input.split_whitespace().collect();
+
+    for (i, token) in tokens.iter().enumerate() {
+        if let Ok(value) = token.parse::<u64>() {
+            let next = tokens.get(i + 1).copied().unwrap_or("");
+
+            if next.starts_with("min")
+                || next == "minute"
+                || next == "minuten"
+            {
+                return Some(value);
+            }
+
+            if input.contains("timer") {
+                return Some(value);
+            }
+        }
+    }
+
+    if input.contains("one minute") || input.contains("eine minute") {
+        return Some(1);
+    }
+    if input.contains("two minutes") || input.contains("zwei minuten") {
+        return Some(2);
+    }
+    if input.contains("five minutes") || input.contains("fünf minuten") {
+        return Some(5);
+    }
+    if input.contains("ten minutes") || input.contains("zehn minuten") {
+        return Some(10);
+    }
+
+    None
+}
+
 pub fn parse_voice_command_with_context(
     input: &str,
     app_name: &str,
@@ -523,6 +584,39 @@ pub fn parse_voice_command_with_context(
         }
 
         _ => {}
+    }
+
+    let lowered = input.trim().to_lowercase();
+
+    // coin flip
+    if lowered.contains("flip a coin")
+        || lowered.contains("coin flip")
+        || lowered.contains("wirf eine münze")
+        || lowered.contains("münzwurf")
+    {
+        return CompanionAction::CoinFlip;
+    }
+
+    // dice roll
+    if lowered.contains("roll a dice")
+        || lowered.contains("roll dice")
+        || lowered.contains("roll a die")
+        || lowered == "würfel"
+        || lowered.contains("würfel mal")
+        || lowered.contains("würfeln")
+    {
+        return CompanionAction::RollDice;
+    }
+
+    // timer
+    if lowered.contains("set timer")
+        || lowered.contains("start timer")
+        || lowered.contains("stell timer")
+        || lowered.contains("starte timer")
+        || lowered.contains("timer auf")
+    {
+        let minutes = extract_timer_minutes(&lowered).unwrap_or(5);
+        return CompanionAction::SetTimer { minutes };
     }
 
     let app = app_name.to_lowercase();
@@ -969,6 +1063,9 @@ fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
         return IntentKind::SetVolume;
     }
 
+    let locale = command_locale();
+
+
     let mut scores = vec![
         IntentScore {
             kind: IntentKind::CurrentTime,
@@ -995,7 +1092,7 @@ fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
         IntentScore { kind: IntentKind::YouTubePlayTitle, score: score(toks, PLAY_WORDS, 0.84, 1.7) + score(toks, YOUTUBE_WORDS, 0.84, 0.6) + score(toks, RESULT_WORDS, 0.84, 0.3) },
         IntentScore {
             kind: IntentKind::TakeScreenshot,
-            score: score(toks, SCREENSHOT_WORDS, 0.90, 2.6),
+            score: score_strings(toks, &locale.screenshot_words, 0.90, 2.6),
         },
         IntentScore {
             kind: IntentKind::OpenApp,
@@ -1126,6 +1223,18 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
 
     if let Some(action) = parse_media_command(&normalized) {
         return action;
+    }
+
+    if normalized == "insert my email" || normalized == "paste my email" {
+        return CompanionAction::InsertSnippet {
+            key: "email".to_string(),
+        };
+    }
+
+    if normalized == "insert github" || normalized == "paste github" {
+        return CompanionAction::InsertSnippet {
+            key: "github".to_string(),
+        };
     }
 
     match normalized.trim() {
@@ -1334,6 +1443,9 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
 
         IntentKind::ExplainSelection => CompanionAction::ExplainSelection,
         IntentKind::TakeScreenshot => CompanionAction::TakeScreenshot,
+        IntentKind::CoinFlip => CompanionAction::CoinFlip,
+        IntentKind::RollDice => CompanionAction::RollDice,
+        IntentKind::SetTimer { minutes } => CompanionAction::SetTimer { minutes },
         IntentKind::None => CompanionAction::None,
     }
 }

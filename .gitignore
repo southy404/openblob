@@ -35,4 +35,4 @@ src-tauri/.tauri/
 
 # Misc
 *.tmp
-*.bak
+*.baksrc-tauri/models/*.onnx

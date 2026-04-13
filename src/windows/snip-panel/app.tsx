@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
@@ -106,10 +106,27 @@ function SnipPanel() {
   const [previewError, setPreviewError] = useState("");
   const [searchData, setSearchData] = useState<SearchData | null>(null);
 
+  const busyRef = useRef(false);
+
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
   const hasPreview = useMemo(
-    () => !!previewUrl && previewState !== "error",
+    () => !!previewUrl && previewState === "ready",
     [previewUrl, previewState]
   );
+
+  const resetPanelState = () => {
+    setPreviewUrl("");
+    setComment("");
+    setResult("");
+    setBusy(false);
+    setSearchData(null);
+    setPreviewError("");
+    setPreviewState("idle");
+    busyRef.current = false;
+  };
 
   useEffect(() => {
     let unlisten: null | (() => void) = null;
@@ -119,44 +136,43 @@ function SnipPanel() {
         const nextPath = event.payload.path || "";
         const normalizedPath = normalizeWindowsPath(nextPath);
 
+        resetPanelState();
+
+        setPath(nextPath);
+        setAppName(event.payload.app || "unknown");
+        setWindowTitle(event.payload.windowTitle || "");
+        setContextDomain(event.payload.contextDomain || "");
+
         const exists = await invoke<boolean>("snip_file_exists", {
           path: nextPath,
         }).catch(() => false);
 
-        const nextPreviewUrl = exists ? convertFileSrc(normalizedPath) : "";
-
-        setPath(nextPath);
-        setPreviewUrl("");
-        setComment("");
-        setResult("");
-        setBusy(false);
-        setSearchData(null);
-        setAppName(event.payload.app || "unknown");
-        setWindowTitle(event.payload.windowTitle || "");
-        setContextDomain(event.payload.contextDomain || "");
-        setPreviewError("");
-
-        if (exists && nextPreviewUrl) {
-          setPreviewState("loading");
-          setPreviewUrl(nextPreviewUrl);
-        } else {
+        if (!exists || !nextPath) {
           setPreviewState("error");
           setPreviewError(
             nextPath
               ? `Snip file missing: ${nextPath}`
               : "No snip path received."
           );
+        } else {
+          setPreviewState("loading");
+          setPreviewUrl(convertFileSrc(normalizedPath));
         }
 
-        await getCurrentWindow().show();
-        await getCurrentWindow().setFocus();
+        const win = getCurrentWindow();
+        await win.show().catch(() => {});
+        await win.setFocus().catch(() => {});
+
+        requestAnimationFrame(() => {
+          //
+        });
       });
     };
 
     void setup();
 
     return () => {
-      if (unlisten) unlisten();
+      unlisten?.();
     };
   }, []);
 
@@ -179,8 +195,9 @@ function SnipPanel() {
   };
 
   const runAction = async (mode: SnipMode) => {
-    if (!path || busy) return;
+    if (!path || busyRef.current) return;
 
+    busyRef.current = true;
     setBusy(true);
     setResult("");
 
@@ -208,6 +225,7 @@ function SnipPanel() {
         setSearchData(null);
       }
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
@@ -285,6 +303,7 @@ function SnipPanel() {
         }
 
         .snip-panel {
+          position: relative;
           width: 100%;
           height: 100%;
           border-radius: 30px;
