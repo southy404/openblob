@@ -17,7 +17,8 @@
 
 ---
 
-> **Build a desktop copilot that feels alive, useful, extensible, and truly personal.**  <br />
+> **Build a desktop copilot that feels alive, useful, extensible, and truly personal.** <br />
+> Current focus: **stabilizing the architecture, improving contributor-friendliness, and refining the multi-window desktop UX.**
 
 OpenBlob is a local-first AI companion that lives on your Windows desktop — sees your screen, understands your context, and grows through community-driven features, smarter abilities, better design, and new integrations.
 
@@ -36,11 +37,14 @@ OpenBlob aims to be different:
 - **open-source** — built in public, for everyone
 - **local-first** — runs on your machine, not someone else's server
 - **context-aware** — understands what app you're in, not just what you type
-- **vision-enabled** — analyzes your screen in real time
+- **vision-enabled** — analyzes your screen and selected regions
 - **privacy-conscious** — transparent about what touches the network
-- **extensible** — designed for modules, plugins, and new capabilities
+- **extensible** — designed for modules, plugins, and future capability packs
 - **community-built** — welcoming to devs, designers, tinkerers, and curious builders
-- **high-quality UX** — polished, expressive, and enjoyable to use
+- **high-quality UX** — polished, expressive, playful, and useful
+
+OpenBlob is currently in an **early but ambitious stage**:
+the foundation is there, the architecture is evolving, and the project is actively being reorganized to become more contributor-friendly and easier to extend.
 
 ---
 
@@ -55,89 +59,89 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 
 **Search**
 
-| Command | Description |
-|--------|-------------|
+| Command                                  | Description             |
+| ---------------------------------------- | ----------------------- |
 | `google <query>` / `google nach <query>` | Perform a Google search |
-| `search google for <query>` | Perform a Google search |
-| `youtube <query>` | Search on YouTube |
-| `search youtube for <query>` | Search on YouTube |
+| `search google for <query>`              | Perform a Google search |
+| `youtube <query>`                        | Search on YouTube       |
+| `search youtube for <query>`             | Search on YouTube       |
 
 **Open & Navigation**
 
-| Command | Description |
-|--------|-------------|
-| `open <url>` | Open a website |
-| `open youtube` | Open YouTube homepage |
-| `go back` / `zurück` | Navigate back |
-| `forward` | Navigate forward |
-| `scroll down` / `scroll up` | Scroll page |
+| Command                     | Description           |
+| --------------------------- | --------------------- |
+| `open <url>`                | Open a website        |
+| `open youtube`              | Open YouTube homepage |
+| `go back` / `zurück`        | Navigate back         |
+| `forward`                   | Navigate forward      |
+| `scroll down` / `scroll up` | Scroll page           |
 
 **Tab & Window Control**
 
-| Command | Description |
-|--------|-------------|
-| `open new tab` / `öffne neuen tab` | Open a new tab |
-| `close tab` / `schließe tab` | Close active tab |
-| `open new window` | Open new window |
+| Command                            | Description      |
+| ---------------------------------- | ---------------- |
+| `open new tab` / `öffne neuen tab` | Open a new tab   |
+| `close tab` / `schließe tab`       | Close active tab |
+| `open new window`                  | Open new window  |
 
 **Interaction**
 
-| Command | Description |
-|--------|-------------|
+| Command              | Description                |
+| -------------------- | -------------------------- |
 | `click first result` | Click first visible result |
-| `type <text>` | Type into active input |
-| `submit` | Confirm input (Enter) |
+| `type <text>`        | Type into active input     |
+| `submit`             | Confirm input (Enter)      |
 
 ---
 
 ### 🎬 Streaming & Media
 
-| Command | Description |
-|--------|-------------|
-| `play <title> on netflix` | Open title |
-| `play something <mood> on netflix` | Get recommendation |
-| `more like this` | Show similar content |
-| `next video` | Play next video |
-| `forward <seconds>` | Seek forward |
-| `rewind` | Seek backward |
+| Command                            | Description          |
+| ---------------------------------- | -------------------- |
+| `play <title> on netflix`          | Open title           |
+| `play something <mood> on netflix` | Get recommendation   |
+| `more like this`                   | Show similar content |
+| `next video`                       | Play next video      |
+| `forward <seconds>`                | Seek forward         |
+| `rewind`                           | Seek backward        |
 
 ---
 
 ### 💻 System Control
 
-| Command | Description |
-|--------|-------------|
-| `open <app>` | Launch application |
-| `close app` | Close active application |
-| `volume up / down` | Adjust system volume |
-| `mute / unmute` | Toggle audio |
-| `play music` | Media control |
-| `next track / previous track` | Media navigation |
+| Command                       | Description              |
+| ----------------------------- | ------------------------ |
+| `open <app>`                  | Launch application       |
+| `close app`                   | Close active application |
+| `volume up / down`            | Adjust system volume     |
+| `mute / unmute`               | Toggle audio             |
+| `play music`                  | Media control            |
+| `next track / previous track` | Media navigation         |
 
 ---
 
 ### ✂️ Screenshot & Vision
 
-| Command | Description |
-|--------|-------------|
-| `screenshot` | Start snip mode |
-| `take screenshot` | Capture screen |
-| `mach screenshot` | German variant |
-| `capture screen` | Capture screen |
-| `explain this` | Analyze screenshot |
-| `translate this` | Translate text |
-| `search this` | Generate search query |
+| Command           | Description           |
+| ----------------- | --------------------- |
+| `screenshot`      | Start snip mode       |
+| `take screenshot` | Capture screen        |
+| `mach screenshot` | German variant        |
+| `capture screen`  | Capture screen        |
+| `explain this`    | Analyze screenshot    |
+| `translate this`  | Translate text        |
+| `search this`     | Generate search query |
 
 ---
 
 ### 🧠 Context & AI
 
-| Command | Description |
-|--------|-------------|
-| `what is this` | Explain current context |
-| `explain selection` | Explain selected content |
-| `where am i` | Detect current app/page |
-| `what is on this page` | Analyze visible UI |
+| Command                | Description              |
+| ---------------------- | ------------------------ |
+| `what is this`         | Explain current context  |
+| `explain selection`    | Explain selected content |
+| `where am i`           | Detect current app/page  |
+| `what is on this page` | Analyze visible UI       |
 
 ---
 
@@ -158,30 +162,30 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 
 ### 🎮 Interaction & Modes
 
-| Command | Description |
-|--------|-------------|
-| `hide and seek` | Start mini game |
-| `dance` | React to music |
-| `sleep` | Enter idle state |
-| `wake up` | Reactivate companion |
+| Command         | Description          |
+| --------------- | -------------------- |
+| `hide and seek` | Start mini game      |
+| `dance`         | React to music       |
+| `sleep`         | Enter idle state     |
+| `wake up`       | Reactivate companion |
 
 ---
 
 ### ⌨️ Shortcuts
 
-| Shortcut | Description |
-|---------|-------------|
-| `CTRL + SPACE` | Toggle companion UI |
-| `ALT + M` | Voice input |
-| `CTRL + ALT + S` | Screenshot / snip |
+| Shortcut         | Description         |
+| ---------------- | ------------------- |
+| `CTRL + SPACE`   | Toggle companion UI |
+| `ALT + M`        | Voice input         |
+| `CTRL + ALT + S` | Screenshot / snip   |
 
 ---
 
 ### Notes
 
-- Commands are **fuzzy matched** — exact wording is not required  
-- Language can be mixed (German + English)  
-- Context is used to resolve intent (e.g. browser vs app vs game)  
+- Commands are **fuzzy matched** — exact wording is not required
+- Language can be mixed (German + English)
+- Context is used to resolve intent (e.g. browser vs app vs game)
 - Some commands adapt based on the current active application
 - Some actions (like YouTube playback) use **keyboard-level control** instead of UI clicking for higher reliability
 - Commands like `play`, `pause`, or `skip` adapt based on current context (e.g. active YouTube tab)
@@ -210,22 +214,25 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 | Multi-model fallback system (vision + text)            | ✅     |
 | Active window / app context detection                  | ✅     |
 | Context-aware responses (games, apps, UI)              | ✅     |
-| Screen capture + region snipping                       | ✅     |
+| Screen capture + region snipping                       | ⚠️     |
 | OCR, translation & explanation via screenshot          | ✅     |
 | Vision-based search query generation                   | ✅     |
 | Game UI / quest / error recognition via screenshot     | ✅     |
-| Browser automation via Chrome/Edge remote debugging    | ✅     |
+| Browser automation via Chrome/Edge remote debugging    | ⚠️     |
 | Local app launching                                    | ✅     |
 | Steam game detection & launching                       | ✅     |
-| Input simulation (keyboard/mouse)                      | ✅     |
+| Input simulation (keyboard/mouse)                      | ⚠️     |
 | Clipboard integration                                  | ✅     |
 | Session memory for recent interactions                 | ✅     |
 | Natural command parsing (German + English)             | ✅     |
+| i18n groundwork for `en` / `de`                        | ✅     |
 | Speech bubble / companion bubble windows               | ✅     |
-| Global shortcut: CTRL + SPACE to toggle UI             | ✅     |
+| Quick menu as separate window                          | ⚠️     |
+| Global shortcut: CTRL + SPACE to toggle UI             | ⚠️     |
 | Hide & Seek mini game mode                             | ✅     |
+| Open-source-friendly structure cleanup                 | ✅     |
 
-> ⚠️ = feature exists but is still unstable or in active refinement
+> ⚠️ = feature exists but is still unstable, being refactored, or in active refinement
 
 ### Planned
 
@@ -244,15 +251,18 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 
 ## Known Issues / Rough Edges
 
-| Area                                     | Status                                             |
-| ---------------------------------------- | -------------------------------------------------- |
-| Global shortcut (CTRL + SPACE)           | ⚠️ slightly unstable, WIP                          |
-| Browser automation consent / permissions | ⚠️ needs clearer user controls                     |
-| Multi-model routing                      | ⚠️ fallback logic still rough                      |
-| Voice pipeline                           | ⚠️ occasional recognition failures                 |
-| Context detection edge cases             | ⚠️ fallback to last known app isn't always correct |
-| Error handling across modules            | ⚠️ inconsistent, needs improvement                 |
-| Settings UI                              | ❌ not yet implemented                             |
+| Area                                     | Status                                                         |
+| ---------------------------------------- | -------------------------------------------------------------- |
+| Global shortcut (CTRL + SPACE)           | ⚠️ slightly unstable, WIP                                      |
+| Snip capture                             | ⚠️ region capture may only trigger reliably on the second try  |
+| Quick menu window                        | ⚠️ recent refactor, event/capability flow still being refined  |
+| Browser automation consent / permissions | ⚠️ needs clearer user controls                                 |
+| Browser automation reliability           | ⚠️ some commands no longer execute as reliably after refactors |
+| Multi-model routing                      | ⚠️ fallback logic still rough                                  |
+| Voice pipeline                           | ⚠️ occasional recognition failures                             |
+| Context detection edge cases             | ⚠️ fallback to last known app isn't always correct             |
+| Error handling across modules            | ⚠️ inconsistent, needs improvement                             |
+| Settings UI                              | ❌ not yet implemented                                         |
 
 > Expect rapid changes, rough edges, and ongoing refactors — this is early-stage, actively evolving software.
 
@@ -371,41 +381,48 @@ ollama pull qwen2.5vl:7b
 
 ---
 
-## Project Structure (new structure will follow soon)
+## Project Structure
 
-```
+```text
 openblob/
+├─ public/                       # static assets, gifs, branding
 ├─ src/                          # React frontend
+│  ├─ windows/                   # multi-window UI entries
+│  │  ├─ bubble/
+│  │  ├─ quick-menu/
+│  │  ├─ snip-overlay/
+│  │  └─ snip-panel/
+│  ├─ components/                # shared UI pieces (growing)
+│  ├─ i18n/                      # language groundwork / localization setup
+│  ├─ App.tsx                    # main companion window
+│  └─ ...
 ├─ src-tauri/
+│  ├─ capabilities/              # Tauri v2 window/capability permissions
 │  └─ src/
 │     ├─ lib.rs
 │     └─ modules/
-│        ├─ command_router.rs    # intent parsing + routing
-│        ├─ context.rs           # active window / app detection
-│        ├─ screen_capture.rs    # screenshot + snip
-│        ├─ snip_session.rs      # snip session management
-│        ├─ browser_automations.rs
-│        ├─ steam_games.rs
-│        ├─ session_memory.rs
-│        ├─ voice.rs
-│        ├─ system.rs
-│        ├─ windows_discovery.rs
-│        └─ app_profiles.rs
+│        ├─ command_router/      # intent parsing + routing
+│        ├─ context/             # active window / app detection
+│        ├─ screen_capture/      # screenshot + snip
+│        ├─ browser_automation/  # browser automation / debugging helpers
+│        ├─ session_memory/
+│        ├─ voice/
+│        ├─ system/
+│        ├─ streaming/
+│        ├─ tts/
+│        └─ ...
 ├─ docs/
 │  ├─ architecture.md
 │  ├─ roadmap.md
 │  └─ design.md
 ├─ .github/
 │  ├─ ISSUE_TEMPLATE/
-│  │  ├─ bug_report.md
-│  │  └─ feature_request.md
 │  ├─ workflows/
-│  │  └─ ci.yml
 │  └─ PULL_REQUEST_TEMPLATE.md
-├─ .gitignore
-├─ CHANGELOG.md
-├─ CODE_OF_CONDUCT.md
-├─ CONTRIBUTING.md
+├─ quick-menu.html
+├─ snip-panel.html
+├─ snip-overlay.html
+├─ speech.html
 ├─ LICENSE
 ├─ README.md
 └─ SECURITY.md
@@ -442,12 +459,17 @@ Fun interactions and real productivity are not opposites.
 
 ### Core
 
+### Core
+
 - [ ] Stabilize command routing
 - [ ] Improve app / context detection
+- [ ] Fix snip capture reliability
+- [ ] Stabilize quick menu window actions / permissions flow
 - [ ] Improve browser automation reliability + consent handling
 - [ ] Improve voice pipeline
 - [ ] Add settings UI
 - [ ] Better error handling across all modules
+- [ ] Expand multilingual support beyond current `en` / `de` groundwork
 
 ### AI / Intelligence
 
@@ -539,6 +561,8 @@ Contributions are welcome — all kinds, not just code.
 
 Please open an issue before large changes so we can align on direction.
 
+Smaller cleanup PRs, architecture improvements, UI polish, docs work, and bug fixes are especially welcome while the project structure is being stabilized.
+
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for full details.
 
 ---
@@ -559,9 +583,16 @@ Design matters as much as functionality in this project.
 
 ## Status
 
-**Early-stage, actively evolving.**
+**Early-stage, actively evolving, and currently being refactored.**
 
-Expect rapid changes, rough edges, experimental ideas, and ongoing refactors. New features land frequently. Breaking changes happen.
+Recent work focused on:
+
+- making the structure more open-source-friendly
+- preparing multilingual support (`en` / `de`)
+- separating larger UI elements into dedicated windows (like the quick menu)
+- improving long-term maintainability
+
+The project is already functional, but still has rough edges and active regressions in some areas. Expect rapid changes, experimental ideas, and ongoing cleanup.
 
 ---
 
