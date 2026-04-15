@@ -221,22 +221,19 @@ function QuickMenuApp() {
         }
 
         .quick-menu {
-        position: relative;
-        width: 100%;
-        height: 100%;
-        overflow: hidden;
-        border-radius: 30px;
-        border: 1px solid rgba(255,255,255,0.18);
-        background:
-            linear-gradient(
-            180deg,
-            rgba(255,255,255,0.18),
-            rgba(255,255,255,0.08)
-            ),
-            rgba(16,20,28,0.84);
-        backdrop-filter: blur(24px) saturate(145%);
-        -webkit-backdrop-filter: blur(24px) saturate(145%);
-        box-shadow: none;
+          position: relative;
+          width: 100%;
+          height: 100%;
+          overflow: hidden;
+          border-radius: 30px;
+          isolation: isolate;
+          background: var(--glass-bg);
+          backdrop-filter: blur(24px) saturate(150%);
+          -webkit-backdrop-filter: blur(24px) saturate(150%);
+          border: 1px solid var(--glass-border);
+          box-shadow:
+            inset 0 1px 1px rgba(255,255,255,0.16),
+            inset 0 -1px 1px rgba(0,0,0,0.18);
         }
 
         .quick-menu::before {
@@ -283,16 +280,16 @@ function QuickMenuApp() {
         }
 
         .quick-close {
-        width: 40px;
-        height: 40px;
-        border-radius: 14px;
-        border: 1px solid rgba(255,255,255,0.10);
-        background: rgba(255,255,255,0.08);
-        color: white;
-        display: grid;
-        place-items: center;
-        cursor: pointer;
-        box-shadow: none;
+          width: 40px;
+          height: 40px;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.08);
+          color: white;
+          display: grid;
+          place-items: center;
+          cursor: pointer;
+          transition: all 0.2s ease;
         }
 
         .quick-close:hover {
