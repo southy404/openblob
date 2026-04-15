@@ -48,6 +48,14 @@ the foundation is there, the architecture is evolving, and the project is active
 
 ---
 
+## Documentation
+
+For a full technical deep-dive — architecture, core systems, Tauri bridge, module reference, and contribution guide — see the developer documentation:
+
+📄 **[docs/documentation.md](./docs/documentation.md)**
+
+---
+
 ## Command Reference
 
 OpenBlob uses natural language command parsing.  
@@ -302,7 +310,7 @@ This is expected behavior due to:
 ### What this means
 
 - Windows Defender or other antivirus tools **may warn or block execution**
-- SmartScreen may show **“unknown publisher” warnings**
+- SmartScreen may show **"unknown publisher" warnings**
 - Some features (like browser control or input simulation) may be restricted
 
 ---
@@ -551,8 +559,6 @@ Fun interactions and real productivity are not opposites.
 ---
 
 ## Roadmap
-
-### Core
 
 ### Core
 

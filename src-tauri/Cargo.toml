@@ -37,6 +37,7 @@ chrono = "0.4"
 tauri-plugin-opener = "2"
 once_cell = "1"
 rand = "0.8"
+window-vibrancy = "0.7"
 
 windows = { version = "0.52", features = [
   "Win32_Foundation",

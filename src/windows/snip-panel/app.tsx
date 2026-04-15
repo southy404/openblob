@@ -109,6 +109,19 @@ function SnipPanel() {
   const busyRef = useRef(false);
 
   useEffect(() => {
+    const applyGlass = async () => {
+      try {
+        const win = getCurrentWindow();
+        await invoke("apply_glass_effect", { window: win });
+      } catch (error) {
+        console.error("failed to apply glass effect", error);
+      }
+    };
+
+    void applyGlass();
+  }, []);
+
+  useEffect(() => {
     busyRef.current = busy;
   }, [busy]);
 
@@ -162,10 +175,6 @@ function SnipPanel() {
         const win = getCurrentWindow();
         await win.show().catch(() => {});
         await win.setFocus().catch(() => {});
-
-        requestAnimationFrame(() => {
-          //
-        });
       });
     };
 
@@ -234,51 +243,24 @@ function SnipPanel() {
     await getCurrentWindow().hide().catch(console.error);
   };
 
-  const glassButtonBase: React.CSSProperties = {
-    height: 44,
-    border: "1px solid rgba(255,255,255,0.10)",
-    background: "rgba(255,255,255,0.08)",
-    color: "#eef4ff",
-    borderRadius: 16,
-    padding: "0 14px",
-    cursor: "pointer",
-    fontWeight: 700,
-    fontSize: 13,
-    transition: "all 160ms ease",
-    backdropFilter: "blur(10px)",
-    WebkitBackdropFilter: "blur(10px)",
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-  };
-
-  const primaryButtonStyle: React.CSSProperties = {
-    ...glassButtonBase,
-    background:
-      "linear-gradient(180deg, rgba(117,163,255,0.22), rgba(117,163,255,0.12))",
-    border: "1px solid rgba(140,180,255,0.26)",
-  };
-
   return (
     <>
       <style>{`
         :root {
           color-scheme: dark;
-          --panel-base: rgba(15, 19, 28, 0.90);
-          --panel-tint-top: rgba(255, 255, 255, 0.18);
-          --panel-tint-bottom: rgba(255, 255, 255, 0.08);
-          --panel-border: rgba(255, 255, 255, 0.14);
-          --panel-border-soft: rgba(255, 255, 255, 0.08);
+          --text-main: rgba(255,255,255,0.96);
+          --text-soft: rgba(255,255,255,0.72);
+          --text-dim: rgba(255,255,255,0.48);
 
-          --text-main: rgba(238, 244, 255, 0.98);
-          --text-soft: rgba(205, 217, 241, 0.78);
-          --text-dim: rgba(205, 217, 241, 0.56);
+          --glass-bg: rgba(18, 22, 30, 0.34);
+          --glass-bg-strong: rgba(18, 22, 30, 0.50);
+          --glass-fill: rgba(255,255,255,0.06);
+          --glass-fill-hover: rgba(255,255,255,0.12);
+          --glass-border: rgba(255,255,255,0.14);
+          --glass-border-soft: rgba(255,255,255,0.08);
 
-          --glass-chip: rgba(255, 255, 255, 0.06);
-          --glass-chip-strong: rgba(255, 255, 255, 0.10);
-          --accent: rgba(117, 163, 255, 1);
-          --accent-soft: rgba(117, 163, 255, 0.16);
+          --blue: rgba(10, 132, 255, 0.92);
+          --blue-soft: rgba(10, 132, 255, 0.14);
         }
 
         * {
@@ -291,14 +273,14 @@ function SnipPanel() {
           margin: 0;
           overflow: hidden;
           background: transparent;
-          font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Inter, sans-serif;
           color: var(--text-main);
         }
 
         .snip-shell {
           width: 100%;
           height: 100%;
-          padding: 14px;
+          padding: 12px;
           background: transparent;
         }
 
@@ -308,39 +290,25 @@ function SnipPanel() {
           height: 100%;
           border-radius: 30px;
           overflow: hidden;
-          border: 1px solid rgba(255,255,255,0.14);
-          background:
-            linear-gradient(
-              180deg,
-              rgba(255,255,255,0.18),
-              rgba(255,255,255,0.08)
-            ),
-            rgba(15, 19, 28, 0.90);
-          backdrop-filter: blur(30px) saturate(145%);
-          -webkit-backdrop-filter: blur(30px) saturate(145%);
           isolation: isolate;
+          background: var(--glass-bg);
+          backdrop-filter: blur(26px) saturate(150%);
+          -webkit-backdrop-filter: blur(26px) saturate(150%);
+          border: 1px solid var(--glass-border);
+          box-shadow:
+            inset 0 1px 1px rgba(255,255,255,0.16),
+            inset 0 -1px 1px rgba(0,0,0,0.18);
         }
 
         .snip-panel::before {
           content: "";
           position: absolute;
           inset: 0;
-          border-radius: inherit;
           pointer-events: none;
+          border-radius: inherit;
           background:
-            radial-gradient(circle at 10% 0%, rgba(255,255,255,0.16), transparent 28%),
-            radial-gradient(circle at 100% 100%, rgba(117,163,255,0.12), transparent 22%);
-        }
-
-        .snip-panel::after {
-          content: "";
-          position: absolute;
-          inset: 0;
-          border-radius: inherit;
-          pointer-events: none;
-          box-shadow:
-            inset 1px 1px 0 rgba(255,255,255,0.24),
-            inset -1px -1px 0 rgba(255,255,255,0.04);
+            radial-gradient(circle at 12% 0%, rgba(255,255,255,0.12), transparent 30%),
+            radial-gradient(circle at 100% 100%, rgba(117,163,255,0.10), transparent 22%);
         }
 
         .snip-header {
@@ -351,7 +319,12 @@ function SnipPanel() {
           align-items: center;
           gap: 12px;
           padding: 14px 16px;
-          border-bottom: 1px solid var(--panel-border-soft);
+          border-bottom: 1px solid rgba(255,255,255,0.06);
+          background: linear-gradient(
+            180deg,
+            rgba(255,255,255,0.05),
+            rgba(255,255,255,0.01)
+          );
         }
 
         .snip-header-left {
@@ -412,6 +385,7 @@ function SnipPanel() {
 
         .snip-close:hover {
           background: rgba(255,255,255,0.14);
+          border-color: rgba(255,255,255,0.16);
         }
 
         .snip-content {
@@ -429,21 +403,17 @@ function SnipPanel() {
         }
 
         .snip-content::-webkit-scrollbar-thumb {
-          background: rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.12);
           border-radius: 999px;
         }
 
         .glass-card {
           border-radius: 22px;
           border: 1px solid rgba(255,255,255,0.08);
-          background:
-            linear-gradient(
-              180deg,
-              rgba(255,255,255,0.08),
-              rgba(255,255,255,0.04)
-            ),
-            rgba(255,255,255,0.02);
+          background: rgba(255,255,255,0.05);
           overflow: hidden;
+          backdrop-filter: blur(14px) saturate(135%);
+          -webkit-backdrop-filter: blur(14px) saturate(135%);
         }
 
         .preview-card {
@@ -451,6 +421,13 @@ function SnipPanel() {
           display: grid;
           place-items: center;
           position: relative;
+          background:
+            linear-gradient(
+              180deg,
+              rgba(255,255,255,0.06),
+              rgba(255,255,255,0.03)
+            ),
+            rgba(255,255,255,0.02);
         }
 
         .preview-empty {
@@ -501,7 +478,9 @@ function SnipPanel() {
           background: rgba(255,255,255,0.05);
           color: var(--text-main);
           outline: none;
-          font: 500 13px/1.5 Inter, system-ui, sans-serif;
+          font: 500 13px/1.55 Inter, system-ui, sans-serif;
+          backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
         }
 
         .comment-box::placeholder {
@@ -517,6 +496,60 @@ function SnipPanel() {
           display: grid;
           grid-template-columns: 1fr 1fr;
           gap: 8px;
+        }
+
+        .action-btn {
+          height: 44px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.08);
+          color: #eef4ff;
+          border-radius: 16px;
+          padding: 0 14px;
+          cursor: pointer;
+          font-weight: 700;
+          font-size: 13px;
+          transition: all 160ms ease;
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+        }
+
+        .action-btn:hover {
+          background: rgba(255,255,255,0.14);
+          border-color: rgba(255,255,255,0.16);
+          transform: translateY(-1px);
+        }
+
+        .action-btn:active {
+          transform: translateY(0);
+        }
+
+        .action-btn-primary {
+          background:
+            linear-gradient(
+              180deg,
+              rgba(10,132,255,0.22),
+              rgba(10,132,255,0.12)
+            );
+          border: 1px solid rgba(10,132,255,0.26);
+        }
+
+        .action-btn-primary:hover {
+          background:
+            linear-gradient(
+              180deg,
+              rgba(10,132,255,0.28),
+              rgba(10,132,255,0.16)
+            );
+        }
+
+        .busy-line {
+          font-size: 12px;
+          color: var(--text-soft);
+          padding: 0 2px;
         }
 
         .result-box {
@@ -538,10 +571,10 @@ function SnipPanel() {
           padding: 12px 14px;
           border-radius: 18px;
           font-size: 12px;
-          line-height: 1.5;
+          line-height: 1.55;
           color: rgba(238,244,255,0.82);
-          background: rgba(117,163,255,0.08);
-          border: 1px solid rgba(140,180,255,0.18);
+          background: rgba(10,132,255,0.08);
+          border: 1px solid rgba(10,132,255,0.18);
         }
 
         .search-summary strong {
@@ -562,22 +595,17 @@ function SnipPanel() {
           background: transparent;
           padding: 0;
           font-size: 11px;
-          color: rgba(255,255,255,0.68);
+          color: rgba(255,255,255,0.64);
           cursor: pointer;
+          transition: color 0.16s ease;
         }
 
         .tiny-link:hover {
-          color: rgba(255,255,255,0.94);
+          color: rgba(255,255,255,0.92);
         }
 
         .tiny-link-static {
           cursor: default;
-        }
-
-        .busy-line {
-          font-size: 12px;
-          color: var(--text-soft);
-          padding: 0 2px;
         }
 
         @media (max-width: 640px) {
@@ -668,7 +696,7 @@ function SnipPanel() {
 
             <div className="actions-grid">
               <button
-                style={glassButtonBase}
+                className="action-btn"
                 onClick={() => runAction("explain")}
               >
                 <Sparkles size={16} />
@@ -676,20 +704,20 @@ function SnipPanel() {
               </button>
 
               <button
-                style={glassButtonBase}
+                className="action-btn"
                 onClick={() => runAction("translate")}
               >
                 <Languages size={16} />
                 Translate
               </button>
 
-              <button style={glassButtonBase} onClick={() => runAction("ocr")}>
+              <button className="action-btn" onClick={() => runAction("ocr")}>
                 <ScanText size={16} />
                 Extract Text
               </button>
 
               <button
-                style={primaryButtonStyle}
+                className="action-btn action-btn-primary"
                 onClick={() => runAction("search")}
               >
                 <Search size={16} />
@@ -719,7 +747,7 @@ function SnipPanel() {
                     </div>
 
                     <button
-                      style={primaryButtonStyle}
+                      className="action-btn action-btn-primary"
                       onClick={() => openWebSearch(searchData.searchQuery)}
                     >
                       <ExternalLink size={16} />
@@ -729,7 +757,7 @@ function SnipPanel() {
                     {!!searchData.altQuery1 &&
                       searchData.altQuery1 !== "unknown" && (
                         <button
-                          style={glassButtonBase}
+                          className="action-btn"
                           onClick={() => openWebSearch(searchData.altQuery1)}
                         >
                           <ExternalLink size={16} />
@@ -739,7 +767,7 @@ function SnipPanel() {
 
                     <div className="actions-grid">
                       <button
-                        style={glassButtonBase}
+                        className="action-btn"
                         onClick={() =>
                           openImageSearch(
                             searchData.altQuery2 || searchData.searchQuery
@@ -751,7 +779,7 @@ function SnipPanel() {
                       </button>
 
                       <button
-                        style={glassButtonBase}
+                        className="action-btn"
                         onClick={() =>
                           openYouTubeSearch(
                             searchData.altQuery2 || searchData.searchQuery
@@ -767,7 +795,7 @@ function SnipPanel() {
 
                 <div className="actions-grid">
                   <button
-                    style={glassButtonBase}
+                    className="action-btn"
                     onClick={async () => {
                       await writeText(result).catch(console.error);
                     }}
@@ -777,7 +805,7 @@ function SnipPanel() {
                   </button>
 
                   <button
-                    style={glassButtonBase}
+                    className="action-btn"
                     onClick={async () => {
                       await invoke("emit_snip_result_to_bubble", {
                         text: result,
@@ -794,7 +822,7 @@ function SnipPanel() {
             <div className="bottom-links">
               <span className="tiny-link tiny-link-static">snip panel</span>
               <span className="tiny-link tiny-link-static">
-                later: screenshot shortcut link
+                contextual helper
               </span>
             </div>
           </div>

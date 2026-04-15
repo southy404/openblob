@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import {
   X,
   GripHorizontal,
@@ -8,10 +9,10 @@ import {
   Globe,
   Music2,
   Dice5,
-  TimerReset,
   MonitorSmartphone,
   Search,
   TerminalSquare,
+  ChevronDown,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -125,8 +126,33 @@ function DevWindow() {
   const [voiceShortcut, setVoiceShortcut] = useState("Alt + M");
   const [model, setModel] = useState("llama3.1:8b");
   const [search, setSearch] = useState("");
+  const [blobName, setBlobName] = useState("");
+  const [ownerName, setOwnerName] = useState("");
+  const [language, setLanguage] = useState("en");
+  const [saving, setSaving] = useState(false);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
+    "Voice / General": true,
+    Browser: false,
+    "Media / Streaming": false,
+    "Fun / Mini Commands": false,
+    "Apps / System": false,
+    "Editing / Shortcuts": false,
+  });
 
   const appWindow = useMemo(() => getCurrentWindow(), []);
+
+  useEffect(() => {
+    const applyGlass = async () => {
+      try {
+        const win = getCurrentWindow();
+        await invoke("apply_glass_effect", { window: win });
+      } catch (error) {
+        console.error("failed to apply dev glass effect", error);
+      }
+    };
+
+    void applyGlass();
+  }, []);
 
   useEffect(() => {
     let unlisten: null | (() => void) = null;
@@ -156,6 +182,26 @@ function DevWindow() {
     };
   }, [appWindow]);
 
+  useEffect(() => {
+    const loadIdentity = async () => {
+      try {
+        const result = (await invoke("get_identity")) as [
+          string,
+          string,
+          string
+        ];
+        const [blob, owner, lang] = result;
+        setBlobName(blob);
+        setOwnerName(owner);
+        setLanguage(lang);
+      } catch (err) {
+        console.error("failed to load identity", err);
+      }
+    };
+
+    void loadIdentity();
+  }, []);
+
   const closeWindow = async () => {
     try {
       await appWindow.hide();
@@ -169,6 +215,29 @@ function DevWindow() {
       await appWindow.startDragging();
     } catch (error) {
       console.error("failed to start dragging:", error);
+    }
+  };
+
+  const saveIdentity = async () => {
+    try {
+      setSaving(true);
+
+      await invoke("update_identity", {
+        blobName,
+        ownerName,
+        language,
+      });
+
+      const result = (await invoke("get_identity")) as [string, string, string];
+      const [blob, owner, lang] = result;
+
+      setBlobName(blob);
+      setOwnerName(owner);
+      setLanguage(lang);
+    } catch (err) {
+      console.error("failed to save identity", err);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -190,30 +259,73 @@ function DevWindow() {
       .filter((group) => group.items.length > 0);
   }, [search]);
 
+  useEffect(() => {
+    const q = search.trim();
+    if (!q) return;
+
+    setOpenGroups((prev) => {
+      const next = { ...prev };
+      for (const group of filteredGroups) {
+        next[group.title] = true;
+      }
+      return next;
+    });
+  }, [search, filteredGroups]);
+
   const totalCommands = commandGroups.reduce(
     (sum, group) => sum + group.items.length,
     0
   );
 
+  const visibleCommands = filteredGroups.reduce(
+    (sum, group) => sum + group.items.length,
+    0
+  );
+
+  const toggleGroup = (title: string) => {
+    setOpenGroups((prev) => ({
+      ...prev,
+      [title]: !prev[title],
+    }));
+  };
+
   return (
     <>
       <style>{`
-        html, body, #root {
+        :root {
+          color-scheme: dark;
+          --text-main: #ffffff;
+          --text-soft: rgba(255,255,255,0.74);
+          --text-dim: rgba(255,255,255,0.48);
+          --glass-bg: rgba(24, 24, 28, 0.30);
+          --glass-bg-strong: rgba(24, 24, 28, 0.42);
+          --glass-stroke: rgba(255,255,255,0.14);
+          --glass-stroke-soft: rgba(255,255,255,0.08);
+          --glass-fill: rgba(255,255,255,0.06);
+          --glass-fill-hover: rgba(255,255,255,0.10);
+          --blue: rgba(10, 132, 255, 0.92);
+        }
+
+        html,
+        body,
+        #root {
           margin: 0;
           width: 100%;
           height: 100%;
           background: transparent;
           overflow: hidden;
-          font-family: Inter, system-ui, sans-serif;
-          color: rgba(255,255,255,0.96);
+          font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Inter, sans-serif;
+          color: var(--text-main);
         }
 
-        * { box-sizing: border-box; }
+        * {
+          box-sizing: border-box;
+        }
 
         .shell {
           width: 100%;
           height: 100%;
-          padding: 14px;
+          padding: 12px;
         }
 
         .panel {
@@ -222,17 +334,14 @@ function DevWindow() {
           height: 100%;
           border-radius: 28px;
           overflow: hidden;
-          border: 1px solid rgba(255,255,255,0.18);
-          background:
-            linear-gradient(
-              180deg,
-              rgba(255,255,255,0.22),
-              rgba(255,255,255,0.12)
-            ),
-            rgba(14, 18, 26, 0.88);
-          backdrop-filter: blur(38px) saturate(155%);
-          -webkit-backdrop-filter: blur(38px) saturate(155%);
           isolation: isolate;
+          background: var(--glass-bg);
+          backdrop-filter: blur(18px) saturate(155%);
+          -webkit-backdrop-filter: blur(18px) saturate(155%);
+          border: 1px solid var(--glass-stroke);
+          box-shadow:
+            inset 0 1px 1px rgba(255,255,255,0.16),
+            inset 0 -1px 1px rgba(0,0,0,0.18);
         }
 
         .panel::before {
@@ -242,30 +351,24 @@ function DevWindow() {
           pointer-events: none;
           border-radius: inherit;
           background:
-            radial-gradient(circle at 14% 0%, rgba(255,255,255,0.16), transparent 30%),
-            radial-gradient(circle at 100% 100%, rgba(255,255,255,0.08), transparent 26%);
-        }
-
-        .panel::after {
-          content: "";
-          position: absolute;
-          inset: 0;
-          pointer-events: none;
-          border-radius: inherit;
-          box-shadow:
-            inset 1px 1px 0 rgba(255,255,255,0.30),
-            inset -1px -1px 0 rgba(255,255,255,0.04);
+            radial-gradient(circle at 12% 0%, rgba(255,255,255,0.10), transparent 28%),
+            radial-gradient(circle at 100% 100%, rgba(255,255,255,0.05), transparent 24%);
         }
 
         .header {
           position: relative;
           z-index: 1;
           display: grid;
-          grid-template-columns: 1fr auto;
+          grid-template-columns: minmax(0, 1fr) auto;
           align-items: center;
           gap: 12px;
           padding: 14px 16px;
-          border-bottom: 1px solid rgba(255,255,255,0.08);
+          border-bottom: 1px solid rgba(255,255,255,0.06);
+          background: linear-gradient(
+            180deg,
+            rgba(255,255,255,0.04),
+            rgba(255,255,255,0.01)
+          );
         }
 
         .dragbar {
@@ -284,70 +387,90 @@ function DevWindow() {
         }
 
         .drag-icon {
-          width: 34px;
-          height: 34px;
-          border-radius: 12px;
+          width: 36px;
+          height: 36px;
+          border-radius: 13px;
           display: grid;
           place-items: center;
           border: 1px solid rgba(255,255,255,0.10);
           background: rgba(255,255,255,0.08);
-          color: rgba(255,255,255,0.86);
+          color: rgba(255,255,255,0.88);
           flex-shrink: 0;
+        }
+
+        .titleWrap {
+          min-width: 0;
         }
 
         .title {
           font-size: 14px;
           font-weight: 700;
+          letter-spacing: 0.01em;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
 
         .subtitle {
           font-size: 11px;
           color: rgba(255,255,255,0.58);
           margin-top: 3px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
 
         .close {
           width: 40px;
           height: 40px;
-          border-radius: 12px;
+          border-radius: 13px;
           border: 1px solid rgba(255,255,255,0.12);
-          background: rgba(255,255,255,0.12);
+          background: rgba(255,255,255,0.10);
           color: white;
           display: grid;
           place-items: center;
           cursor: pointer;
+          transition: all 0.2s ease;
+          flex-shrink: 0;
         }
 
         .close:hover {
-          background: rgba(255,255,255,0.18);
+          background: rgba(255,255,255,0.16);
+          border-color: rgba(255,255,255,0.18);
         }
 
-        .content {
-          position: relative;
-          z-index: 1;
-          height: calc(100% - 71px);
-          padding: 16px;
-          display: grid;
-          grid-template-rows: auto auto 1fr;
-          gap: 14px;
-          overflow: hidden;
-        }
+      .content {
+        position: relative;
+        z-index: 1;
+        height: calc(100% - 71px);
+        padding: 14px;
+        display: grid;
+        grid-template-columns: 1fr;
+        grid-auto-rows: max-content;
+        gap: 12px;
+        min-height: 0;
+        overflow: auto;
+        align-content: start;
+      }
 
         .stats {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 12px;
+          gap: 10px;
         }
 
         .card {
-          border-radius: 18px;
-          border: 1px solid rgba(255,255,255,0.08);
-          background: rgba(255,255,255,0.06);
-          padding: 14px;
+          border-radius: 20px;
+          border: 1px solid var(--glass-stroke-soft);
+          background: rgba(255,255,255,0.05);
+          padding: 13px;
+          backdrop-filter: blur(18px) saturate(155%);
+          -webkit-backdrop-filter: blur(18px) saturate(155%);
+          min-width: 0;
         }
 
         .label {
-          font-size: 11px;
+          font-size: 10px;
           text-transform: uppercase;
           letter-spacing: 0.08em;
           opacity: 0.58;
@@ -356,23 +479,95 @@ function DevWindow() {
 
         .value {
           font-size: 13px;
-          line-height: 1.5;
+          line-height: 1.45;
           word-break: break-word;
+          color: var(--text-soft);
         }
 
         .value.strong {
           font-size: 16px;
           font-weight: 700;
+          color: var(--text-main);
+        }
+
+        .identityCard {
+          display: grid;
+          gap: 12px;
+        }
+
+        .identityGrid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+          gap: 10px;
+          align-items: end;
+        }
+
+        .field {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          min-width: 0;
+        }
+
+        .fieldLabel {
+          font-size: 11px;
+          color: rgba(255,255,255,0.56);
+          letter-spacing: 0.03em;
+        }
+
+        .textInput {
+          width: 100%;
+          height: 42px;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.07);
+          color: white;
+          outline: none;
+          padding: 0 12px;
+          font-size: 13px;
+          min-width: 0;
+        }
+
+        .textInput::placeholder {
+          color: rgba(255,255,255,0.38);
+        }
+
+        .textInput:focus {
+          border-color: rgba(255,255,255,0.18);
+          background: rgba(255,255,255,0.10);
+        }
+
+        .saveBtn {
+          height: 42px;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.16);
+          background: var(--blue);
+          color: white;
+          font-weight: 700;
+          padding: 0 16px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          white-space: nowrap;
+        }
+
+        .saveBtn:hover {
+          filter: brightness(1.05);
+        }
+
+        .saveBtn:disabled {
+          opacity: 0.65;
+          cursor: default;
         }
 
         .searchWrap {
           display: flex;
           align-items: center;
           gap: 10px;
-          border-radius: 16px;
+          border-radius: 18px;
           border: 1px solid rgba(255,255,255,0.08);
           background: rgba(255,255,255,0.06);
           padding: 12px 14px;
+          min-width: 0;
         }
 
         .searchIcon {
@@ -382,6 +577,7 @@ function DevWindow() {
 
         .searchInput {
           width: 100%;
+          min-width: 0;
           border: none;
           outline: none;
           background: transparent;
@@ -394,11 +590,11 @@ function DevWindow() {
         }
 
         .commandsArea {
-          min-height: 0;
-          overflow: auto;
+          min-height: 180px;
           padding-right: 4px;
           display: grid;
-          gap: 12px;
+          align-content: start;
+          gap: 10px;
         }
 
         .commandsArea::-webkit-scrollbar {
@@ -415,27 +611,73 @@ function DevWindow() {
           border: 1px solid rgba(255,255,255,0.08);
           background: rgba(255,255,255,0.05);
           overflow: hidden;
+          backdrop-filter: blur(12px) saturate(130%);
+          -webkit-backdrop-filter: blur(12px) saturate(130%);
+          min-height: 52px;
         }
 
-        .groupHeader {
+        .groupToggle {
+          width: 100%;
+          border: 0;
+          background: rgba(255,255,255,0.03);
+          color: white;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 12px 14px;
+          cursor: pointer;
+          text-align: left;
+        }
+
+        .groupToggle:hover {
+          background: rgba(255,255,255,0.06);
+        }
+
+        .groupHeaderLeft {
+          min-width: 0;
           display: flex;
           align-items: center;
           gap: 10px;
-          padding: 12px 14px;
-          border-bottom: 1px solid rgba(255,255,255,0.06);
-          background: rgba(255,255,255,0.03);
+        }
+
+        .groupMeta {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+
+        .groupTitle {
           font-size: 13px;
           font-weight: 700;
+          color: rgba(255,255,255,0.95);
+        }
+
+        .groupCount {
+          font-size: 11px;
+          color: rgba(255,255,255,0.56);
+        }
+
+        .chev {
+          flex-shrink: 0;
+          opacity: 0.72;
+          transition: transform 0.18s ease;
+        }
+
+        .chev.open {
+          transform: rotate(180deg);
         }
 
         .groupBody {
           display: grid;
+          border-top: 1px solid rgba(255,255,255,0.06);
         }
 
         .cmdRow {
           display: grid;
-          grid-template-columns: minmax(220px, 0.95fr) 1fr;
-          gap: 16px;
+          grid-template-columns: minmax(220px, 1fr) minmax(0, 1.1fr);
+          gap: 14px;
           padding: 12px 14px;
           border-top: 1px solid rgba(255,255,255,0.05);
         }
@@ -467,14 +709,62 @@ function DevWindow() {
           font-size: 13px;
         }
 
-        @media (max-width: 900px) {
+        @media (max-width: 1100px) {
           .stats {
             grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .identityGrid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .saveBtn {
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 760px) {
+          .shell {
+            padding: 8px;
+          }
+
+          .panel {
+            border-radius: 22px;
+          }
+
+          .header {
+            padding: 12px;
+          }
+
+          .content {
+            padding: 12px;
+            grid-template-rows: auto auto auto minmax(0, 1fr);
+          }
+
+          .content::-webkit-scrollbar {
+            width: 10px;
+          }
+
+          .content::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.12);
+            border-radius: 999px;
+          }
+
+          .stats {
+            grid-template-columns: 1fr;
+          }
+
+          .identityGrid {
+            grid-template-columns: 1fr;
           }
 
           .cmdRow {
             grid-template-columns: 1fr;
             gap: 6px;
+          }
+
+          .subtitle {
+            white-space: normal;
           }
         }
       `}</style>
@@ -494,10 +784,10 @@ function DevWindow() {
                 <GripHorizontal size={16} />
               </div>
 
-              <div>
+              <div className="titleWrap">
                 <div className="title">OpenBlob Dev Mode</div>
                 <div className="subtitle">
-                  Commands, Routing, Voice, Debug Info
+                  Commands, routing, voice, identity, debug info
                 </div>
               </div>
             </div>
@@ -536,7 +826,56 @@ function DevWindow() {
 
               <div className="card">
                 <div className="label">Commands</div>
-                <div className="value strong">{totalCommands}</div>
+                <div className="value strong">
+                  {search.trim()
+                    ? `${visibleCommands} / ${totalCommands}`
+                    : totalCommands}
+                </div>
+              </div>
+            </div>
+
+            <div className="card identityCard">
+              <div className="label">Companion Identity</div>
+
+              <div className="identityGrid">
+                <div className="field">
+                  <div className="fieldLabel">Blob Name</div>
+                  <input
+                    className="textInput"
+                    value={blobName}
+                    onChange={(e) => setBlobName(e.target.value)}
+                    placeholder="Blob Name"
+                  />
+                </div>
+
+                <div className="field">
+                  <div className="fieldLabel">Owner Name</div>
+                  <input
+                    className="textInput"
+                    value={ownerName}
+                    onChange={(e) => setOwnerName(e.target.value)}
+                    placeholder="Owner Name"
+                  />
+                </div>
+
+                <div className="field">
+                  <div className="fieldLabel">Language</div>
+                  <input
+                    className="textInput"
+                    value={language}
+                    onChange={(e) => setLanguage(e.target.value)}
+                    placeholder="Language (en/de)"
+                  />
+                </div>
+
+                <button
+                  className="saveBtn"
+                  onClick={() => void saveIdentity()}
+                  disabled={saving}
+                  type="button"
+                >
+                  {saving ? "Saving..." : "Save"}
+                </button>
               </div>
             </div>
 
@@ -558,26 +897,49 @@ function DevWindow() {
                   Keine Commands für diese Suche gefunden.
                 </div>
               ) : (
-                filteredGroups.map((group) => (
-                  <div className="group" key={group.title}>
-                    <div className="groupHeader">
-                      {group.icon}
-                      <span>{group.title}</span>
-                    </div>
+                filteredGroups.map((group) => {
+                  const isOpen = !!openGroups[group.title];
 
-                    <div className="groupBody">
-                      {group.items.map((item) => (
-                        <div
-                          className="cmdRow"
-                          key={`${group.title}-${item.command}-${item.description}`}
-                        >
-                          <div className="cmd">{item.command}</div>
-                          <div className="desc">{item.description}</div>
+                  return (
+                    <div className="group" key={group.title}>
+                      <button
+                        className="groupToggle"
+                        type="button"
+                        onClick={() => toggleGroup(group.title)}
+                      >
+                        <div className="groupHeaderLeft">
+                          {group.icon}
+                          <div className="groupMeta">
+                            <div className="groupTitle">{group.title}</div>
+                            <div className="groupCount">
+                              {group.items.length} command
+                              {group.items.length === 1 ? "" : "s"}
+                            </div>
+                          </div>
                         </div>
-                      ))}
+
+                        <ChevronDown
+                          size={16}
+                          className={`chev ${isOpen ? "open" : ""}`}
+                        />
+                      </button>
+
+                      {isOpen && (
+                        <div className="groupBody">
+                          {group.items.map((item) => (
+                            <div
+                              className="cmdRow"
+                              key={`${group.title}-${item.command}-${item.description}`}
+                            >
+                              <div className="cmd">{item.command}</div>
+                              <div className="desc">{item.description}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>

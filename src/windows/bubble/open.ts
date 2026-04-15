@@ -2,12 +2,50 @@ import { LogicalPosition } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 const BUBBLE_WIDTH = 1040;
-const BUBBLE_HEIGHT = 320;
-const BOTTOM_MARGIN = 22;
+const BUBBLE_HEIGHT = 135;
+
+// 0 = direkt auf Workarea-Unterkante
+// Falls du 2-4 px Luft willst, hier leicht erhöhen
+const BOTTOM_MARGIN = 0;
+
+function getWorkArea() {
+  const screenAny = window.screen as Screen & {
+    availLeft?: number;
+    availTop?: number;
+  };
+
+  return {
+    left: screenAny.availLeft ?? 0,
+    top: screenAny.availTop ?? 0,
+    width: window.screen.availWidth,
+    height: window.screen.availHeight,
+  };
+}
+
+export async function positionBubbleWindow(win?: WebviewWindow) {
+  const bubble = win ?? (await WebviewWindow.getByLabel("bubble"));
+  if (!bubble) return;
+
+  try {
+    const workArea = getWorkArea();
+
+    const x = Math.round(workArea.left + (workArea.width - BUBBLE_WIDTH) / 2);
+    const y = Math.round(
+      workArea.top + workArea.height - BUBBLE_HEIGHT - BOTTOM_MARGIN
+    );
+
+    await bubble.setPosition(new LogicalPosition(x, y));
+  } catch (error) {
+    console.error("failed to position bubble window", error);
+  }
+}
 
 export async function ensureBubbleWindow() {
   const existing = await WebviewWindow.getByLabel("bubble");
-  if (existing) return existing;
+  if (existing) {
+    await positionBubbleWindow(existing);
+    return existing;
+  }
 
   const win = new WebviewWindow("bubble", {
     url: "bubble.html",
@@ -21,20 +59,17 @@ export async function ensureBubbleWindow() {
     width: BUBBLE_WIDTH,
     height: BUBBLE_HEIGHT,
     visible: false,
+    focus: true,
   });
 
   win.once("tauri://created", async () => {
-    try {
-      const screenWidth = window.screen.availWidth;
-      const screenHeight = window.screen.availHeight;
+    await positionBubbleWindow(win);
 
-      const x = Math.round((screenWidth - BUBBLE_WIDTH) / 2);
-      const y = Math.round(screenHeight - BUBBLE_HEIGHT - BOTTOM_MARGIN);
-
-      await win.setPosition(new LogicalPosition(x, y));
-    } catch (error) {
-      console.error("failed to position bubble window", error);
-    }
+    // zweiter Pass für Windows/Tauri, weil die echte Fenstergeometrie
+    // oft erst kurz danach sauber sitzt
+    window.setTimeout(() => {
+      void positionBubbleWindow(win);
+    }, 80);
   });
 
   return win;
