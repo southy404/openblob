@@ -415,7 +415,6 @@ ollama pull qwen2.5vl:7b
     ├── docs/
     │   ├── architecture.md
     │   ├── design.md
-    │   ├── documentation.md
     │   ├── roadmap.md
     │   └── old/
     │       └── _____command_router old.rs
