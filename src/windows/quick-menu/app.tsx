@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import {
   MessageCircle,
   Clipboard,
@@ -24,12 +25,89 @@ type QuickMenuPayload = {
   pinned?: boolean;
 };
 
+type QuickAction = {
+  id: string;
+  label: string;
+  icon: React.ReactNode;
+};
+
+const actions: QuickAction[] = [
+  {
+    id: "open-bubble",
+    label: "Open Bubble",
+    icon: <MessageCircle size={16} />,
+  },
+  {
+    id: "capture-clipboard",
+    label: "Capture Clipboard",
+    icon: <Clipboard size={16} />,
+  },
+  {
+    id: "snip-screen",
+    label: "Snip Screen",
+    icon: <Scissors size={16} />,
+  },
+  {
+    id: "media-play-pause",
+    label: "Play / Pause",
+    icon: <Play size={16} />,
+  },
+  {
+    id: "media-prev",
+    label: "Previous Track",
+    icon: <SkipBack size={16} />,
+  },
+  {
+    id: "media-next",
+    label: "Next Track",
+    icon: <SkipForward size={16} />,
+  },
+  {
+    id: "volume-down",
+    label: "Volume Down",
+    icon: <Volume1 size={16} />,
+  },
+  {
+    id: "volume-up",
+    label: "Volume Up",
+    icon: <Volume2 size={16} />,
+  },
+  {
+    id: "toggle-mute",
+    label: "Toggle Mute",
+    icon: <VolumeX size={16} />,
+  },
+  {
+    id: "sleep-now",
+    label: "Sleep Now",
+    icon: <Moon size={16} />,
+  },
+  {
+    id: "close-app",
+    label: "Close",
+    icon: <Power size={16} />,
+  },
+];
+
 function QuickMenuApp() {
   const [hint, setHint] = useState("Ready.");
   const [activeApp, setActiveApp] = useState("unknown");
   const [pinned, setPinned] = useState(true);
 
   const mountedRef = useRef(false);
+
+  useEffect(() => {
+    const applyGlass = async () => {
+      try {
+        const win = getCurrentWindow();
+        await invoke("apply_glass_effect", { window: win });
+      } catch (error) {
+        console.error("failed to apply glass effect", error);
+      }
+    };
+
+    void applyGlass();
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -104,38 +182,22 @@ function QuickMenuApp() {
     }
   };
 
-  const glassButton: React.CSSProperties = {
-    width: "100%",
-    minHeight: 48,
-    border: "1px solid rgba(255,255,255,0.10)",
-    borderRadius: 18,
-    background: "rgba(255,255,255,0.08)",
-    color: "rgba(255,255,255,0.96)",
-    padding: "0 14px",
-    textAlign: "left",
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: "pointer",
-    transition: "all 140ms ease",
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-  };
-
-  const chipStyle: React.CSSProperties = {
-    padding: "6px 10px",
-    borderRadius: 999,
-    background: "rgba(255,255,255,0.08)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    fontSize: 11,
-    color: "rgba(255,255,255,0.76)",
-  };
-
   return (
     <>
       <style>{`
         :root {
           color-scheme: dark;
+          --text-main: rgba(255,255,255,0.96);
+          --text-soft: rgba(255,255,255,0.72);
+          --text-dim: rgba(255,255,255,0.48);
+          --glass-bg: rgba(18, 22, 30, 0.34);
+          --glass-bg-strong: rgba(18, 22, 30, 0.50);
+          --glass-fill: rgba(255,255,255,0.07);
+          --glass-fill-hover: rgba(255,255,255,0.13);
+          --glass-border: rgba(255,255,255,0.14);
+          --glass-border-soft: rgba(255,255,255,0.08);
+          --blue: rgba(10, 132, 255, 0.92);
+          --danger: rgba(255, 69, 58, 0.92);
         }
 
         * {
@@ -148,43 +210,40 @@ function QuickMenuApp() {
           margin: 0;
           overflow: hidden;
           background: transparent;
-          font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Inter, sans-serif;
+          color: var(--text-main);
         }
 
         .quick-shell {
           width: 100%;
           height: 100%;
-          padding: 12px;
           background: transparent;
         }
 
         .quick-menu {
-        position: relative;
-        width: 100%;
-        height: 100%;
-        overflow: hidden;
-        border-radius: 30px;
-        border: 1px solid rgba(255,255,255,0.18);
-        background:
-            linear-gradient(
-            180deg,
-            rgba(255,255,255,0.18),
-            rgba(255,255,255,0.08)
-            ),
-            rgba(16,20,28,0.84);
-        backdrop-filter: blur(24px) saturate(145%);
-        -webkit-backdrop-filter: blur(24px) saturate(145%);
-        box-shadow: none;
+          position: relative;
+          width: 100%;
+          height: 100%;
+          overflow: hidden;
+          border-radius: 30px;
+          isolation: isolate;
+          background: var(--glass-bg);
+          backdrop-filter: blur(24px) saturate(150%);
+          -webkit-backdrop-filter: blur(24px) saturate(150%);
+          border: 1px solid var(--glass-border);
+          box-shadow:
+            inset 0 1px 1px rgba(255,255,255,0.16),
+            inset 0 -1px 1px rgba(0,0,0,0.18);
         }
 
         .quick-menu::before {
           content: "";
           position: absolute;
           inset: 0;
-          border-radius: inherit;
           pointer-events: none;
+          border-radius: inherit;
           background:
-            radial-gradient(circle at 18% 0%, rgba(255,255,255,0.14), transparent 34%),
+            radial-gradient(circle at 14% 0%, rgba(255,255,255,0.12), transparent 30%),
             radial-gradient(circle at 100% 100%, rgba(117,163,255,0.10), transparent 24%);
         }
 
@@ -196,71 +255,129 @@ function QuickMenuApp() {
           gap: 12px;
           align-items: center;
           padding: 14px 14px 12px;
-          border-bottom: 1px solid rgba(255,255,255,0.08);
+          border-bottom: 1px solid rgba(255,255,255,0.06);
+          background: linear-gradient(
+            180deg,
+            rgba(255,255,255,0.05),
+            rgba(255,255,255,0.01)
+          );
         }
 
         .quick-title {
-          font-size: 13px;
+          font-size: 14px;
           font-weight: 800;
-          color: rgba(255,255,255,0.96);
           letter-spacing: 0.01em;
+          color: var(--text-main);
         }
 
         .quick-subtitle {
           margin-top: 4px;
           font-size: 11px;
-          color: rgba(236,240,248,0.64);
+          color: rgba(255,255,255,0.58);
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
         }
 
         .quick-close {
-        width: 40px;
-        height: 40px;
-        border-radius: 14px;
-        border: 1px solid rgba(255,255,255,0.10);
-        background: rgba(255,255,255,0.08);
-        color: white;
-        display: grid;
-        place-items: center;
-        cursor: pointer;
-        box-shadow: none;
+          width: 40px;
+          height: 40px;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.08);
+          color: white;
+          display: grid;
+          place-items: center;
+          cursor: pointer;
+          transition: all 0.2s ease;
         }
 
         .quick-close:hover {
           background: rgba(255,255,255,0.14);
+          border-color: rgba(255,255,255,0.16);
         }
 
         .quick-scroll {
           position: relative;
           z-index: 1;
-          height: calc(100% - 132px);
+          height: calc(100% - 136px);
           overflow-y: auto;
           padding: 12px;
           display: flex;
           flex-direction: column;
-          gap: 8px;
+          gap: 10px;
           scrollbar-width: thin;
-          scrollbar-color: rgba(255,255,255,0.24) transparent;
+          scrollbar-color: rgba(255,255,255,0.18) transparent;
+        }
+
+        .quick-scroll::-webkit-scrollbar {
+          width: 10px;
+        }
+
+        .quick-scroll::-webkit-scrollbar-thumb {
+          background: rgba(255,255,255,0.14);
+          border-radius: 999px;
+        }
+
+        .quick-btn {
+          width: 100%;
+          min-height: 50px;
+          border: 1px solid var(--glass-border-soft);
+          border-radius: 18px;
+          background: rgba(255,255,255,0.06);
+          color: var(--text-main);
+          padding: 0 14px;
+          text-align: left;
+          font-size: 13px;
+          font-weight: 650;
+          cursor: pointer;
+          transition: all 160ms ease;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          backdrop-filter: blur(14px) saturate(135%);
+          -webkit-backdrop-filter: blur(14px) saturate(135%);
         }
 
         .quick-btn:hover {
-          background: rgba(255,255,255,0.14) !important;
-          border-color: rgba(255,255,255,0.18) !important;
-          box-shadow:
-            inset 1px 1px 0 rgba(255,255,255,0.10),
-            0 6px 18px rgba(0,0,0,0.16);
+          background: var(--glass-fill-hover);
+          border-color: rgba(255,255,255,0.16);
+          transform: translateY(-1px);
+        }
+
+        .quick-btn:active {
+          transform: translateY(0);
+        }
+
+        .quick-btn-danger:hover {
+          background: rgba(255, 69, 58, 0.14);
+          border-color: rgba(255, 69, 58, 0.26);
+        }
+
+        .quick-btn-pin-active {
+          border-color: rgba(10,132,255,0.28);
+          background: rgba(10,132,255,0.14);
         }
 
         .quick-footer {
           position: relative;
           z-index: 1;
           padding: 10px 14px 14px;
-          border-top: 1px solid rgba(255,255,255,0.08);
+          border-top: 1px solid rgba(255,255,255,0.06);
           display: flex;
           flex-wrap: wrap;
           gap: 8px;
+        }
+
+        .chip {
+          padding: 6px 10px;
+          border-radius: 999px;
+          background: rgba(255,255,255,0.07);
+          border: 1px solid rgba(255,255,255,0.08);
+          font-size: 11px;
+          color: rgba(255,255,255,0.74);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
         }
       `}</style>
 
@@ -280,90 +397,23 @@ function QuickMenuApp() {
           </div>
 
           <div className="quick-scroll">
-            <button
-              className="quick-btn"
-              style={glassButton}
-              onClick={() => sendAction("open-bubble")}
-            >
-              <MessageCircle size={16} />
-              Open Bubble
-            </button>
+            {actions.map((action) => {
+              const isDanger = action.id === "close-app";
+
+              return (
+                <button
+                  key={action.id}
+                  className={`quick-btn ${isDanger ? "quick-btn-danger" : ""}`}
+                  onClick={() => sendAction(action.id)}
+                >
+                  {action.icon}
+                  {action.label}
+                </button>
+              );
+            })}
 
             <button
-              className="quick-btn"
-              style={glassButton}
-              onClick={() => sendAction("capture-clipboard")}
-            >
-              <Clipboard size={16} />
-              Capture Clipboard
-            </button>
-
-            <button
-              className="quick-btn"
-              style={glassButton}
-              onClick={() => sendAction("snip-screen")}
-            >
-              <Scissors size={16} />
-              Snip Screen
-            </button>
-
-            <button
-              className="quick-btn"
-              style={glassButton}
-              onClick={() => sendAction("media-play-pause")}
-            >
-              <Play size={16} />
-              Play / Pause
-            </button>
-
-            <button
-              className="quick-btn"
-              style={glassButton}
-              onClick={() => sendAction("media-prev")}
-            >
-              <SkipBack size={16} />
-              Previous Track
-            </button>
-
-            <button
-              className="quick-btn"
-              style={glassButton}
-              onClick={() => sendAction("media-next")}
-            >
-              <SkipForward size={16} />
-              Next Track
-            </button>
-
-            <button
-              className="quick-btn"
-              style={glassButton}
-              onClick={() => sendAction("volume-down")}
-            >
-              <Volume1 size={16} />
-              Volume Down
-            </button>
-
-            <button
-              className="quick-btn"
-              style={glassButton}
-              onClick={() => sendAction("volume-up")}
-            >
-              <Volume2 size={16} />
-              Volume Up
-            </button>
-
-            <button
-              className="quick-btn"
-              style={glassButton}
-              onClick={() => sendAction("toggle-mute")}
-            >
-              <VolumeX size={16} />
-              Toggle Mute
-            </button>
-
-            <button
-              className="quick-btn"
-              style={glassButton}
+              className={`quick-btn ${pinned ? "quick-btn-pin-active" : ""}`}
               onClick={() => {
                 const nextPinned = !pinned;
                 setPinned(nextPinned);
@@ -373,29 +423,11 @@ function QuickMenuApp() {
               <Pin size={16} />
               {pinned ? "Disable Always on Top" : "Enable Always on Top"}
             </button>
-
-            <button
-              className="quick-btn"
-              style={glassButton}
-              onClick={() => sendAction("sleep-now")}
-            >
-              <Moon size={16} />
-              Sleep Now
-            </button>
-
-            <button
-              className="quick-btn"
-              style={glassButton}
-              onClick={() => sendAction("close-app")}
-            >
-              <Power size={16} />
-              Close
-            </button>
           </div>
 
           <div className="quick-footer">
-            <div style={chipStyle}>app {activeApp}</div>
-            <div style={chipStyle}>{pinned ? "always on top" : "floating"}</div>
+            <div className="chip">app {activeApp}</div>
+            <div className="chip">{pinned ? "always on top" : "floating"}</div>
           </div>
         </div>
       </div>

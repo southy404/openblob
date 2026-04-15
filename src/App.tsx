@@ -795,8 +795,8 @@ async function positionBubbleWindow() {
   const bubble = await ensureBubbleWindow();
 
   const bubbleWidth = 1040;
-  const bubbleHeight = 320;
-  const bottomMargin = 22;
+  const bubbleHeight = 135;
+  const bottomMargin = 0;
 
   const screenWidth = window.screen.availWidth;
   const screenHeight = window.screen.availHeight;

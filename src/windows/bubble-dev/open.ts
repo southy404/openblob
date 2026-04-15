@@ -15,6 +15,8 @@ export async function ensureDevWindow() {
     resizable: true,
     width: 760,
     height: 560,
+    minWidth: 680,
+    minHeight: 460,
     visible: false,
     center: true,
   });

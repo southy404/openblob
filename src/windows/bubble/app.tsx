@@ -5,6 +5,7 @@ import { listen, emit, emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Mic, MicOff, Send, Volume2, VolumeX } from "lucide-react";
 import { ensureDevWindow } from "../bubble-dev/open";
+import { ensureSubtitleWindow } from "../bubble-subtitle/open";
 
 type ContextPayload = {
   text: string;
@@ -38,6 +39,8 @@ type SpeechRecognitionEventLike = {
   }>;
 };
 
+type BubbleMode = "command" | "chat";
+
 declare global {
   interface Window {
     webkitSpeechRecognition?: new () => SpeechRecognitionLike;
@@ -49,6 +52,8 @@ const STORAGE_KEYS = {
   model: "openblob-bubble-model",
   voiceShortcut: "openblob-bubble-voice-shortcut",
   speakEnabled: "openblob-bubble-speak-enabled",
+  subtitlesEnabled: "openblob-bubble-subtitles-enabled",
+  bubbleMode: "openblob-bubble-mode",
 };
 
 function readLocalStorageString(key: string, fallback: string) {
@@ -77,6 +82,11 @@ function normalizeShortcutLabel(input: string) {
     .replace(/escape/gi, "Esc")
     .replace(/command/gi, "Cmd")
     .trim();
+}
+
+function readBubbleMode(): BubbleMode {
+  const value = readLocalStorageString(STORAGE_KEYS.bubbleMode, "command");
+  return value === "chat" ? "chat" : "command";
 }
 
 async function speak(text: string, onError?: (msg: string) => void) {
@@ -192,8 +202,6 @@ function getDirectKnownUrl(input: string): string | null {
 
 function BubbleApp() {
   const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState("");
-  const [displayedAnswer, setDisplayedAnswer] = useState("");
   const [hint, setHint] = useState("Bereit.");
   const [model, setModel] = useState(
     readLocalStorageString(STORAGE_KEYS.model, "llama3.1:8b")
@@ -211,30 +219,122 @@ function BubbleApp() {
   const [speakEnabled, setSpeakEnabled] = useState(
     readLocalStorageBool(STORAGE_KEYS.speakEnabled, true)
   );
-  const [subtitleVisible, setSubtitleVisible] = useState(false);
+  const [subtitlesEnabled, setSubtitlesEnabled] = useState(
+    readLocalStorageBool(STORAGE_KEYS.subtitlesEnabled, true)
+  );
+  const [bubbleMode, setBubbleMode] = useState<BubbleMode>(readBubbleMode());
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  const revealTimerRef = useRef<number | null>(null);
-  const subtitleFadeTimerRef = useRef<number | null>(null);
   const finalVoiceTextRef = useRef("");
+  const visibleRef = useRef(visible);
+  const listeningRef = useRef(listening);
 
   const SpeechRecognitionCtor = useMemo(
     () => window.SpeechRecognition || window.webkitSpeechRecognition || null,
     []
   );
 
-  const clearRevealTimer = () => {
-    if (revealTimerRef.current !== null) {
-      window.clearInterval(revealTimerRef.current);
-      revealTimerRef.current = null;
-    }
-  };
+  useEffect(() => {
+    const applyGlass = async () => {
+      try {
+        const win = getCurrentWindow();
+        await invoke("apply_glass_effect", { window: win });
+      } catch (error) {
+        console.error("failed to apply glass effect", error);
+      }
+    };
 
-  const clearSubtitleFadeTimer = () => {
-    if (subtitleFadeTimerRef.current !== null) {
-      window.clearTimeout(subtitleFadeTimerRef.current);
-      subtitleFadeTimerRef.current = null;
+    void applyGlass();
+  }, []);
+
+  useEffect(() => {
+    const prepareSubtitleWindow = async () => {
+      try {
+        const subtitleWindow = await ensureSubtitleWindow();
+        await subtitleWindow.show().catch(() => {});
+        await new Promise((resolve) => window.setTimeout(resolve, 80));
+        await subtitleWindow.hide().catch(() => {});
+      } catch (error) {
+        console.error("failed to prepare subtitle window", error);
+      }
+    };
+
+    void prepareSubtitleWindow();
+  }, []);
+
+  useEffect(() => {
+    visibleRef.current = visible;
+  }, [visible]);
+
+  useEffect(() => {
+    listeningRef.current = listening;
+  }, [listening]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STORAGE_KEYS.model, model);
+    } catch {}
+  }, [model]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        STORAGE_KEYS.voiceShortcut,
+        normalizeShortcutLabel(voiceShortcut)
+      );
+    } catch {}
+  }, [voiceShortcut]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        STORAGE_KEYS.speakEnabled,
+        String(speakEnabled)
+      );
+    } catch {}
+  }, [speakEnabled]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        STORAGE_KEYS.subtitlesEnabled,
+        String(subtitlesEnabled)
+      );
+    } catch {}
+  }, [subtitlesEnabled]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STORAGE_KEYS.bubbleMode, bubbleMode);
+    } catch {}
+  }, [bubbleMode]);
+
+  useEffect(() => {
+    if (!subtitlesEnabled) {
+      void emitTo("bubble-subtitle", "bubble-subtitle-clear").catch(() => {});
+    }
+  }, [subtitlesEnabled]);
+
+  const showSubtitle = async (text: string, holdMs = 5200) => {
+    if (!subtitlesEnabled) {
+      try {
+        await emitTo("bubble-subtitle", "bubble-subtitle-clear");
+      } catch {}
+      return;
+    }
+
+    try {
+      const subtitleWindow = await ensureSubtitleWindow();
+      await subtitleWindow.show().catch(() => {});
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+
+      await emitTo("bubble-subtitle", "bubble-subtitle-show", {
+        text,
+        holdMs,
+      });
+    } catch (error) {
+      console.error("failed to show subtitle window", error);
     }
   };
 
@@ -277,42 +377,6 @@ function BubbleApp() {
     } catch {}
   };
 
-  const revealAnswerWordByWord = (text: string, holdMs = 4200) => {
-    clearRevealTimer();
-    clearSubtitleFadeTimer();
-
-    const trimmed = text.trim();
-    setAnswer(trimmed);
-    setDisplayedAnswer("");
-
-    if (!trimmed) {
-      setSubtitleVisible(false);
-      return;
-    }
-
-    const words = trimmed.split(/\s+/);
-    let index = 0;
-
-    setSubtitleVisible(true);
-
-    revealTimerRef.current = window.setInterval(() => {
-      index += 1;
-      setDisplayedAnswer(words.slice(0, index).join(" "));
-
-      if (index >= words.length) {
-        clearRevealTimer();
-
-        subtitleFadeTimerRef.current = window.setTimeout(() => {
-          setSubtitleVisible(false);
-        }, holdMs);
-      }
-    }, 34);
-  };
-
-  const showSubtitle = (text: string, holdMs = 5200) => {
-    revealAnswerWordByWord(text, holdMs);
-  };
-
   const openDevWindow = async () => {
     const dev = await ensureDevWindow();
     await dev.show();
@@ -329,14 +393,19 @@ function BubbleApp() {
 
     try {
       const result = await invoke<OllamaResult>("ask_ollama", {
-        mode: "ask",
+        mode: bubbleMode === "chat" ? "chat" : "ask",
         text: prompt,
         question: prompt,
         model,
       });
 
-      showSubtitle(result.content, 5600);
-      setHint(`Antwort von ${result.model}`);
+      await showSubtitle(result.content, 5600);
+
+      setHint(
+        bubbleMode === "chat"
+          ? `Chatting with ${result.model}`
+          : `Antwort von ${result.model}`
+      );
       setLastRoute("ollama");
 
       await emit("companion-speech", result.content.slice(0, 180));
@@ -370,32 +439,38 @@ function BubbleApp() {
 
     setBusy(true);
 
-    const directUrl = getDirectKnownUrl(input);
-
     try {
+      if (bubbleMode === "chat") {
+        setHint("Just chatting...");
+        await runOllamaAsk(input);
+        return;
+      }
+
+      const directUrl = getDirectKnownUrl(input);
+
       if (directUrl) {
         await invoke<string>("handle_voice_command", {
           input: `open ${directUrl}`,
         });
 
-        showSubtitle(`Öffne ${directUrl}.`, 4200);
+        await showSubtitle(`Öffne ${directUrl}.`, 4200);
         setHint("Bekannte Seite direkt geöffnet.");
         setLastRoute("command");
 
         if (speakEnabled) {
-          speak(`Öffne ${directUrl}.`);
+          void speak(`Öffne ${directUrl}.`);
         }
         return;
       }
 
       if (isHideAndSeekCommand(input)) {
         await emit("start-hide-and-seek");
-        showSubtitle("Okay, hide and seek started. Find me.", 4200);
+        await showSubtitle("Okay, hide and seek started. Find me.", 4200);
         setHint("Hide and seek started.");
         setLastRoute("command");
 
         if (speakEnabled) {
-          speak("Okay, hide and seek started. Find me.");
+          void speak("Okay, hide and seek started. Find me.");
         }
         return;
       }
@@ -405,7 +480,7 @@ function BubbleApp() {
       });
 
       if (actionResult !== "NO_ACTION") {
-        showSubtitle(actionResult, 4200);
+        await showSubtitle(actionResult, 4200);
         setHint("Befehl ausgeführt.");
         setLastRoute("command");
 
@@ -420,7 +495,7 @@ function BubbleApp() {
 
       if (looksLikeDirectCommand(input)) {
         const message = `Konnte den lokalen Befehl nicht ausführen: "${input}"`;
-        showSubtitle(message, 4200);
+        await showSubtitle(message, 4200);
         setHint("Befehl erkannt, aber lokal nichts Passendes gefunden.");
         setLastRoute("command");
 
@@ -435,9 +510,9 @@ function BubbleApp() {
     } catch (error) {
       const message = String(error);
 
-      showSubtitle(message, 4800);
+      await showSubtitle(message, 4800);
 
-      if (looksLikeDirectCommand(input)) {
+      if (bubbleMode === "command" && looksLikeDirectCommand(input)) {
         setHint("Lokaler Befehl fehlgeschlagen.");
         setLastRoute("command");
       } else {
@@ -556,51 +631,6 @@ function BubbleApp() {
     void emitBlobState("listening", false);
   };
 
-  const visibleRef = useRef(visible);
-  const listeningRef = useRef(listening);
-  const questionRef = useRef(question);
-  const busyRef = useRef(busy);
-
-  useEffect(() => {
-    visibleRef.current = visible;
-  }, [visible]);
-
-  useEffect(() => {
-    listeningRef.current = listening;
-  }, [listening]);
-
-  useEffect(() => {
-    questionRef.current = question;
-  }, [question]);
-
-  useEffect(() => {
-    busyRef.current = busy;
-  }, [busy]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(STORAGE_KEYS.model, model);
-    } catch {}
-  }, [model]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        STORAGE_KEYS.voiceShortcut,
-        normalizeShortcutLabel(voiceShortcut)
-      );
-    } catch {}
-  }, [voiceShortcut]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        STORAGE_KEYS.speakEnabled,
-        String(speakEnabled)
-      );
-    } catch {}
-  }, [speakEnabled]);
-
   useEffect(() => {
     let unlistenContext: null | (() => void) = null;
     let unlistenToggle: null | (() => void) = null;
@@ -615,11 +645,13 @@ function BubbleApp() {
           const payload = event.payload;
 
           if (payload.text?.trim()) {
-            showSubtitle(payload.text.trim(), 5200);
+            await showSubtitle(payload.text.trim(), 5200);
           }
 
           if (payload.hint) {
             setHint(payload.hint);
+          } else if (payload.text?.trim()) {
+            setHint(payload.text.trim());
           }
 
           if (payload.autoRun && payload.text?.trim()) {
@@ -631,11 +663,8 @@ function BubbleApp() {
       );
 
       unlistenToggle = await listen("bubble-toggle", async () => {
-        console.log("[bubble] bubble-toggle received");
-
         const win = getCurrentWindow();
         const isVisible = await win.isVisible();
-        console.log("[bubble] visible before toggle:", isVisible);
 
         if (isVisible) {
           stopVoiceInput();
@@ -646,19 +675,15 @@ function BubbleApp() {
       });
 
       unlistenShow = await listen("bubble-show", async () => {
-        console.log("[bubble] bubble-show received");
         await fadeInAndShow();
       });
 
       unlistenHide = await listen("bubble-hide", async () => {
-        console.log("[bubble] bubble-hide received");
         stopVoiceInput();
         await fadeOutAndHide();
       });
 
       unlistenVoiceToggle = await listen("companion-voice-toggle", async () => {
-        console.log("[bubble] companion-voice-toggle received");
-
         await fadeInAndShow();
 
         if (listeningRef.current) {
@@ -698,20 +723,19 @@ function BubbleApp() {
       ) {
         event.preventDefault();
 
-        if (listening) stopVoiceInput();
+        if (listeningRef.current) stopVoiceInput();
         else void startVoiceInput();
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [listening, voiceShortcut, busy]);
+  }, [voiceShortcut]);
 
   useEffect(() => {
     return () => {
-      clearRevealTimer();
-      clearSubtitleFadeTimer();
-      stopSpeaking();
+      void stopSpeaking();
+      void emitTo("bubble-subtitle", "bubble-subtitle-clear").catch(() => {});
 
       try {
         recognitionRef.current?.stop();
@@ -719,24 +743,29 @@ function BubbleApp() {
     };
   }, []);
 
+  const toggleBubbleMode = () => {
+    setBubbleMode((prev) => {
+      const next: BubbleMode = prev === "command" ? "chat" : "command";
+      setHint(
+        next === "chat" ? "Just chatting mode aktiv." : "Command mode aktiv."
+      );
+      return next;
+    });
+  };
+
+  const placeholder =
+    bubbleMode === "chat"
+      ? "rede mit mir …"
+      : "open youtube, mute, oder frag mich etwas …";
+
   return (
     <>
       <style>{`
         :root {
           color-scheme: dark;
-          --glass-base: rgba(16, 20, 28, 0.84);
-          --glass-tint: rgba(255, 255, 255, 0.16);
-          --glass-tint-soft: rgba(255, 255, 255, 0.09);
-          --glass-border: rgba(255, 255, 255, 0.18);
-          --glass-border-soft: rgba(255, 255, 255, 0.10);
-
-          --text-main: rgba(255, 255, 255, 0.98);
-          --text-soft: rgba(236, 240, 248, 0.82);
-          --text-dim: rgba(236, 240, 248, 0.56);
-
-          --subtitle-stroke: rgba(0, 0, 0, 0.92);
-          --button-bg: rgba(255, 255, 255, 0.10);
-          --button-bg-hover: rgba(255, 255, 255, 0.16);
+          --text-main: #ffffff;
+          --text-soft: rgba(255, 255, 255, 0.72);
+          --text-dim: rgba(255, 255, 255, 0.5);
         }
 
         html,
@@ -747,7 +776,7 @@ function BubbleApp() {
           margin: 0;
           background: transparent;
           overflow: hidden;
-          font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
           color: var(--text-main);
         }
 
@@ -758,43 +787,10 @@ function BubbleApp() {
         .bubble-stage {
           width: 100%;
           height: 100%;
-          padding: 24px 18px 26px;
           display: flex;
-          flex-direction: column;
-          justify-content: space-between;
+          justify-content: flex-end;
           align-items: center;
-          background: transparent;
-        }
-
-        .subtitle-stage {
-          width: min(1180px, calc(100vw - 56px));
-          min-height: 170px;
-          display: flex;
-          align-items: flex-end;
-          justify-content: center;
-          pointer-events: none;
-          padding-top: 8px;
-        }
-
-        .subtitle-text {
-          width: 100%;
-          text-align: center;
-          color: #fff;
-          font-size: clamp(24px, 2.15vw, 38px);
-          line-height: 1.24;
-          font-weight: 800;
-          letter-spacing: 0.01em;
-          white-space: pre-wrap;
-          word-break: break-word;
-          text-shadow:
-            0 1px 0 var(--subtitle-stroke),
-            0 2px 0 var(--subtitle-stroke),
-            0 3px 0 var(--subtitle-stroke),
-            0 0 18px rgba(0, 0, 0, 0.32);
-        }
-
-        .subtitle-placeholder {
-          color: rgba(255, 255, 255, 0);
+          padding: 0 18px 18px;
         }
 
         .bottom-stack {
@@ -802,60 +798,31 @@ function BubbleApp() {
           display: flex;
           flex-direction: column;
           align-items: center;
-          gap: 9px;
+          gap: 10px;
         }
 
         .bubble-shell {
           width: 100%;
           position: relative;
           border-radius: 999px;
-          overflow: hidden;
           isolation: isolate;
-          background:
-            linear-gradient(
-              180deg,
-              rgba(255,255,255,0.18),
-              rgba(255,255,255,0.08)
-            ),
-            var(--glass-base);
-          border: 1px solid var(--glass-border);
-          backdrop-filter: blur(24px) saturate(145%);
-          -webkit-backdrop-filter: blur(24px) saturate(145%);
-        }
-
-        .bubble-shell::before {
-          content: "";
-          position: absolute;
-          inset: 0;
-          border-radius: inherit;
-          background:
-            radial-gradient(circle at 18% 0%, rgba(255,255,255,0.18), transparent 34%),
-            radial-gradient(circle at 80% 100%, rgba(255,255,255,0.08), transparent 30%);
-          pointer-events: none;
-          z-index: 0;
-        }
-
-        .bubble-shell::after {
-          content: "";
-          position: absolute;
-          inset: 0;
-          border-radius: inherit;
-          pointer-events: none;
-          z-index: 0;
+          background: rgba(24, 24, 28, 0.28);
+          backdrop-filter: blur(18px) saturate(155%);
+          -webkit-backdrop-filter: blur(18px) saturate(155%);
+          border: 1px solid rgba(255, 255, 255, 0.14);
           box-shadow:
-            inset 1px 1px 0 rgba(255,255,255,0.28),
-            inset -1px -1px 0 rgba(255,255,255,0.05);
+            inset 0 1px 1px rgba(255, 255, 255, 0.18),
+            inset 0 -1px 1px rgba(0, 0, 0, 0.16);
+          backface-visibility: hidden;
         }
 
         .bubble-row {
-          position: relative;
-          z-index: 1;
           display: grid;
           grid-template-columns: 1fr auto auto auto;
           align-items: center;
-          gap: 10px;
-          min-height: 82px;
-          padding: 11px 12px;
+          gap: 12px;
+          min-height: 86px;
+          padding: 12px 16px 12px 24px;
         }
 
         .input-wrap {
@@ -863,20 +830,20 @@ function BubbleApp() {
           display: flex;
           flex-direction: column;
           justify-content: center;
-          gap: 7px;
+          gap: 4px;
         }
 
         .bubble-input {
           width: 100%;
-          height: 48px;
+          height: 40px;
           border: 0;
           outline: none;
           background: transparent;
-          color: var(--text-main);
-          font-size: 16px;
-          font-weight: 540;
-          padding: 0 10px;
-          text-shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
+          color: #ffffff;
+          font-size: 19px;
+          font-weight: 500;
+          padding: 0;
+          text-rendering: optimizeLegibility;
         }
 
         .bubble-input::placeholder {
@@ -887,72 +854,157 @@ function BubbleApp() {
           display: flex;
           gap: 10px;
           align-items: center;
-          flex-wrap: wrap;
-          padding-left: 10px;
+          font-size: 12px;
+          color: rgba(255, 255, 255, 0.62);
           min-height: 16px;
-        }
-
-        .bubble-hint {
-          font-size: 11px;
-          color: var(--text-soft);
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          max-width: 100%;
-        }
-
-        .bubble-live {
-          font-size: 11px;
-          color: rgba(206, 223, 255, 0.92);
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          max-width: 340px;
+          font-weight: 400;
         }
 
         .icon-btn {
           width: 52px;
           height: 52px;
-          border-radius: 999px;
-          border: 1px solid var(--glass-border-soft);
-          background: var(--button-bg);
+          border-radius: 50%;
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          background: rgba(255, 255, 255, 0.09);
           color: var(--text-main);
           display: grid;
           place-items: center;
           cursor: pointer;
-          transition:
-            transform 0.14s ease,
-            background 0.14s ease,
-            border-color 0.14s ease,
-            opacity 0.14s ease;
+          transition: all 0.2s cubic-bezier(0.2, 0, 0.2, 1);
+          position: relative;
+          isolation: isolate;
         }
 
         .icon-btn:hover {
-          background: var(--button-bg-hover);
-          border-color: rgba(255,255,255,0.18);
+          background: rgba(255, 255, 255, 0.16);
+          border-color: rgba(255, 255, 255, 0.24);
+          transform: scale(1.04);
         }
 
         .icon-btn:active {
-          transform: scale(0.98);
+          transform: scale(0.96);
         }
 
         .icon-btn:disabled {
-          opacity: 0.55;
+          opacity: 0.5;
           cursor: default;
+          transform: none;
         }
 
         .icon-btn-active {
-          background: rgba(255,255,255,0.18);
-          border-color: rgba(255,255,255,0.20);
+          background: rgba(255, 255, 255, 0.2);
+          border-color: rgba(255, 255, 255, 0.28);
+        }
+          
+        .send-btn {
+          position: relative;
+          border: none;
+          border-radius: 50%;
+          background: rgba(255, 255, 255, 0.09);
+          box-shadow:
+            inset 0 1px 1px rgba(255,255,255,0.22),
+            inset 0 -1px 1px rgba(0,0,0,0.16),
+            0 0 0 1px rgba(255,255,255,0.08);
+          overflow: visible;
+          isolation: isolate;
+
+          --glow-line-color: rgba(255,255,255,1);
+          --glow-accent-color: rgba(255,255,255,0.98);
+          --glow-line-thickness: 1px;
+          --glow-blur-size: 5px;
+          --glow-speed: 1650ms;
         }
 
+        .send-btn:hover {
+          background: rgba(255, 255, 255, 0.16);
+          transform: scale(1.045);
+        }
+
+        .send-glow {
+          pointer-events: none;
+          position: absolute;
+          inset: -2px;
+          width: calc(100% + 4px);
+          height: calc(100% + 4px);
+          opacity: 0;
+          z-index: 1;
+          overflow: visible;
+        }
+
+        .send-glow-line,
+        .send-glow-blur {
+          fill: none;
+          stroke-linecap: round;
+          vector-effect: non-scaling-stroke;
+          transform-origin: 50% 50%;
+        }
+
+        .send-glow-line {
+          stroke: var(--glow-line-color);
+          stroke-width: var(--glow-line-thickness);
+          stroke-dasharray: 20 30 20 30;
+          stroke-dashoffset: 0;
+          opacity: 0.92;
+          filter:
+            drop-shadow(0 0 1px rgba(255,255,255,0.92))
+            drop-shadow(0 0 3px rgba(255,255,255,0.38));
+        }
+
+        .send-glow-blur {
+          stroke: var(--glow-accent-color);
+          stroke-width: var(--glow-blur-size);
+          stroke-dasharray: 20 30 20 30;
+          stroke-dashoffset: 0;
+          opacity: 0.72;
+          filter: blur(6px);
+        }
+
+        .send-btn:hover .send-glow,
+        .send-btn:focus-visible .send-glow {
+          animation: sendGlowVisibility var(--glow-speed) ease-in-out infinite;
+        }
+
+        .send-btn:hover .send-glow-line,
+        .send-btn:hover .send-glow-blur,
+        .send-btn:focus-visible .send-glow-line,
+        .send-btn:focus-visible .send-glow-blur {
+          animation: sendGlowOrbit 2400ms cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+        }
+
+        .send-btn:disabled .send-glow {
+          opacity: 0;
+        }
+
+        @keyframes sendGlowOrbit {
+          from {
+            stroke-dashoffset: 0;
+          }
+          to {
+            stroke-dashoffset: -100;
+          }
+        }
+
+        @keyframes sendGlowVisibility {
+          0%, 100% {
+            opacity: 0.08;
+          }
+          18% {
+            opacity: 0.95;
+          }
+          50% {
+            opacity: 1;
+          }
+          82% {
+            opacity: 0.92;
+          }
+        }
         .tiny-links {
           width: 100%;
           display: flex;
           justify-content: center;
-          gap: 14px;
-          min-height: 16px;
+          gap: 16px;
           flex-wrap: wrap;
+          margin-top: 4px;
         }
 
         .tiny-link {
@@ -960,13 +1012,14 @@ function BubbleApp() {
           border: 0;
           background: transparent;
           padding: 0;
-          font-size: 11px;
-          color: rgba(255,255,255,0.68);
+          font-size: 12px;
+          color: rgba(255, 255, 255, 0.5);
           cursor: pointer;
+          transition: color 0.2s;
         }
 
         .tiny-link:hover {
-          color: rgba(255,255,255,0.94);
+          color: rgba(255, 255, 255, 0.9);
         }
 
         .tiny-link-static {
@@ -974,21 +1027,19 @@ function BubbleApp() {
         }
 
         @media (max-width: 820px) {
-          .subtitle-stage {
-            width: calc(100vw - 24px);
-            min-height: 130px;
-          }
-
-          .subtitle-text {
-            font-size: clamp(18px, 4vw, 28px);
-          }
-
           .bottom-stack {
             width: calc(100vw - 16px);
           }
 
           .bubble-row {
             grid-template-columns: 1fr auto auto;
+            padding: 10px 14px 10px 18px;
+            min-height: 76px;
+          }
+
+          .icon-btn {
+            width: 46px;
+            height: 46px;
           }
 
           .sound-btn {
@@ -1004,26 +1055,11 @@ function BubbleApp() {
           transform: visible
             ? "translateY(0px) scale(1)"
             : "translateY(14px) scale(0.992)",
-          transition: "opacity 180ms ease, transform 180ms ease",
+          transition:
+            "opacity 180ms ease, transform 180ms cubic-bezier(0.175, 0.885, 0.32, 1.1)",
           pointerEvents: visible ? "auto" : "none",
         }}
       >
-        <div
-          className="subtitle-stage"
-          style={{
-            opacity: subtitleVisible ? 1 : 0,
-            transform: subtitleVisible
-              ? "translateY(0px) scale(1)"
-              : "translateY(8px) scale(0.995)",
-            transition: "opacity 320ms ease, transform 320ms ease",
-            pointerEvents: "none",
-          }}
-        >
-          <div className="subtitle-text">
-            {displayedAnswer || <span className="subtitle-placeholder">.</span>}
-          </div>
-        </div>
-
         <div className="bottom-stack">
           <div className="bubble-shell">
             <div className="bubble-row">
@@ -1033,28 +1069,21 @@ function BubbleApp() {
                   value={question}
                   onChange={(e) => setQuestion(e.target.value)}
                   className="bubble-input"
-                  placeholder="open youtube, open arc raiders, mute, oder frag mich etwas …"
+                  placeholder={placeholder}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
                       void handleTypedSubmit();
                     }
-
                     if (e.key === "Escape") {
                       e.preventDefault();
                       void closeBubble();
                     }
                   }}
                 />
-
                 <div className="bubble-meta">
-                  <span className="bubble-hint">
-                    {busy ? "Verarbeite..." : hint}
-                  </span>
-
-                  {interimText ? (
-                    <span className="bubble-live">… {interimText}</span>
-                  ) : null}
+                  <span>{busy ? "Verarbeite..." : hint}</span>
+                  {interimText && <span>| … {interimText}</span>}
                 </div>
               </div>
 
@@ -1065,15 +1094,14 @@ function BubbleApp() {
                 onClick={() => {
                   setSpeakEnabled((prev) => {
                     const next = !prev;
-                    if (!next) stopSpeaking();
+                    if (!next) void stopSpeaking();
                     return next;
                   });
                 }}
                 title={speakEnabled ? "Sprachausgabe an" : "Sprachausgabe aus"}
-                aria-label="Sprachausgabe"
                 type="button"
               >
-                {speakEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                {speakEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
               </button>
 
               <button
@@ -1084,21 +1112,48 @@ function BubbleApp() {
                 }}
                 title={`Spracherkennung (${voiceShortcut})`}
                 disabled={busy}
-                aria-label="Spracherkennung"
                 type="button"
               >
-                {listening ? <MicOff size={18} /> : <Mic size={18} />}
+                {listening ? <MicOff size={20} /> : <Mic size={20} />}
               </button>
 
               <button
-                className="icon-btn"
+                className="icon-btn send-btn"
                 onClick={() => void handleTypedSubmit()}
                 title="Senden"
                 disabled={busy}
-                aria-label="Senden"
                 type="button"
               >
-                <Send size={18} />
+                <Send
+                  size={18}
+                  color="#ffffff"
+                  style={{
+                    marginLeft: "-1px",
+                    position: "relative",
+                    zIndex: 2,
+                  }}
+                />
+
+                <svg
+                  className="send-glow"
+                  viewBox="0 0 52 52"
+                  aria-hidden="true"
+                >
+                  <circle
+                    className="send-glow-blur"
+                    cx="26"
+                    cy="26"
+                    r="24.5"
+                    pathLength="100"
+                  />
+                  <circle
+                    className="send-glow-line"
+                    cx="26"
+                    cy="26"
+                    r="24.5"
+                    pathLength="100"
+                  />
+                </svg>
               </button>
             </div>
           </div>
@@ -1112,10 +1167,7 @@ function BubbleApp() {
               dev mode
             </button>
 
-            <span
-              className="tiny-link tiny-link-static"
-              title={`route: ${lastRoute}`}
-            >
+            <span className="tiny-link tiny-link-static">
               {lastRoute === "command"
                 ? "befehl ausgeführt"
                 : lastRoute === "ollama"
@@ -1128,6 +1180,24 @@ function BubbleApp() {
             </span>
 
             <span className="tiny-link tiny-link-static">model {model}</span>
+
+            <button
+              className="tiny-link"
+              onClick={() => {
+                setSubtitlesEnabled((prev) => !prev);
+              }}
+              type="button"
+            >
+              subtitles {subtitlesEnabled ? "on" : "off"}
+            </button>
+
+            <button
+              className="tiny-link"
+              onClick={toggleBubbleMode}
+              type="button"
+            >
+              mode {bubbleMode}
+            </button>
           </div>
         </div>
       </div>
