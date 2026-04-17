@@ -1,0 +1,962 @@
+import React, { useEffect, useMemo, useState } from "react";
+import ReactDOM from "react-dom/client";
+import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  AudioLines,
+  Bot,
+  CheckSquare,
+  LoaderCircle,
+  Mic,
+  Play,
+  Save,
+  Square,
+  UserRound,
+  Waves,
+  X,
+} from "lucide-react";
+
+type TranscriptSegment = {
+  start_ms: number;
+  end_ms: number;
+  speaker?: string | null;
+  text: string;
+  confidence?: number | null;
+};
+
+type TranscriptSession = {
+  id: string;
+  state: string;
+  started_at: string;
+  ended_at?: string | null;
+  context: {
+    app_name?: string | null;
+    window_title?: string | null;
+  };
+  segments: TranscriptSegment[];
+};
+
+type TranscriptStatus = {
+  state: "Idle" | "Recording" | "Stopping" | "Summarizing" | "Error";
+  active_session_id: string | null;
+  segment_count: number;
+};
+
+type SpeakerBlock = {
+  speaker: string;
+  text: string;
+};
+
+type ProcessedTranscriptResult = {
+  faithful_transcript: string;
+  speaker_blocks: SpeakerBlock[];
+  summary: string;
+  action_items: string[];
+};
+
+function formatMs(ms: number) {
+  const total = Math.floor(ms / 1000);
+  const min = Math.floor(total / 60);
+  const sec = total % 60;
+  return `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+
+function segmentKey(seg: TranscriptSegment) {
+  return `${seg.start_ms}-${seg.end_ms}-${seg.text.trim()}`;
+}
+
+function TranscriptApp() {
+  const [status, setStatus] = useState<TranscriptStatus | null>(null);
+  const [session, setSession] = useState<TranscriptSession | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const [faithfulTranscript, setFaithfulTranscript] = useState("");
+  const [speakerBlocks, setSpeakerBlocks] = useState<SpeakerBlock[]>([]);
+  const [summary, setSummary] = useState("");
+  const [actionItems, setActionItems] = useState<string[]>([]);
+
+  const refresh = async () => {
+    try {
+      const nextStatus = await invoke<TranscriptStatus>(
+        "get_transcript_status"
+      );
+      const nextSession = await invoke<TranscriptSession | null>(
+        "get_current_transcript"
+      );
+
+      setStatus(nextStatus);
+      if (nextSession) {
+        setSession(nextSession);
+      }
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  useEffect(() => {
+    const applyGlass = async () => {
+      try {
+        const win = getCurrentWindow();
+        await invoke("apply_glass_effect", { window: win });
+      } catch (error) {
+        console.error("failed to apply glass effect", error);
+      }
+    };
+
+    void applyGlass();
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+
+    let unlistenSegment: null | (() => void) = null;
+    let unlistenError: null | (() => void) = null;
+
+    const setup = async () => {
+      unlistenSegment = await listen<TranscriptSegment>(
+        "transcript://segment",
+        (event) => {
+          const segment = event.payload;
+
+          setSession((prev) => {
+            if (!prev) return prev;
+
+            const exists = prev.segments.some(
+              (s) => segmentKey(s) === segmentKey(segment)
+            );
+
+            if (exists) return prev;
+
+            return {
+              ...prev,
+              segments: [...prev.segments, segment],
+            };
+          });
+
+          setStatus((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  state: "Recording",
+                  segment_count: (prev.segment_count ?? 0) + 1,
+                }
+              : prev
+          );
+        }
+      );
+
+      unlistenError = await listen<string>("transcript://error", (event) => {
+        setError(String(event.payload || "Transcript error"));
+      });
+    };
+
+    void setup();
+
+    return () => {
+      unlistenSegment?.();
+      unlistenError?.();
+    };
+  }, []);
+
+  const uniqueSegments = useMemo(() => {
+    const seen = new Set<string>();
+    const result: TranscriptSegment[] = [];
+
+    for (const seg of session?.segments ?? []) {
+      const key = segmentKey(seg);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(seg);
+    }
+
+    return result;
+  }, [session]);
+
+  const cleanTranscript = useMemo(() => {
+    return uniqueSegments
+      .map((seg) => seg.text.trim())
+      .filter(Boolean)
+      .join("\n");
+  }, [uniqueSegments]);
+
+  const derivedSegmentCount = uniqueSegments.length;
+  const isRecording = status?.state === "Recording";
+  const canProcess = derivedSegmentCount > 0 && !busy;
+  const canSave = isRecording && !busy;
+
+  const startTranscript = async () => {
+    try {
+      setBusy(true);
+      setError(null);
+      setFaithfulTranscript("");
+      setSpeakerBlocks([]);
+      setSummary("");
+      setActionItems([]);
+
+      await invoke("start_transcript", {
+        source: "system",
+        appName: session?.context?.app_name ?? "unknown",
+        windowTitle: session?.context?.window_title ?? "Transcript Window",
+      });
+
+      await refresh();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stopTranscript = async () => {
+    try {
+      setBusy(true);
+      setError(null);
+
+      await invoke("stop_transcript");
+
+      setStatus((prev) =>
+        prev
+          ? {
+              ...prev,
+              state: "Idle",
+              active_session_id: null,
+            }
+          : prev
+      );
+
+      await refresh();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveTranscript = async () => {
+    try {
+      setBusy(true);
+      setError(null);
+      await invoke("save_current_transcript");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const processTranscript = async () => {
+    try {
+      setBusy(true);
+      setError(null);
+
+      const result = await invoke<ProcessedTranscriptResult>(
+        "process_transcript"
+      );
+
+      setFaithfulTranscript(result.faithful_transcript || "");
+      setSpeakerBlocks(result.speaker_blocks || []);
+      setSummary(result.summary || "");
+      setActionItems(result.action_items || []);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const closeWindow = async () => {
+    await getCurrentWindow()
+      .hide()
+      .catch(() => {});
+  };
+
+  const transcriptStatusLabel = useMemo(() => {
+    if (busy && isRecording) return "processing";
+    if (busy) return "working";
+    if (isRecording) return "recording";
+    return "idle";
+  }, [busy, isRecording]);
+
+  return (
+    <>
+      <style>{`
+        :root {
+          color-scheme: dark;
+          --text-main: rgba(255,255,255,0.96);
+          --text-soft: rgba(255,255,255,0.74);
+          --text-dim: rgba(255,255,255,0.48);
+          --glass-bg: rgba(18, 22, 30, 0.34);
+          --glass-bg-strong: rgba(18, 22, 30, 0.52);
+          --glass-fill: rgba(255,255,255,0.06);
+          --glass-fill-strong: rgba(255,255,255,0.08);
+          --glass-fill-hover: rgba(255,255,255,0.12);
+          --glass-border: rgba(255,255,255,0.14);
+          --glass-border-soft: rgba(255,255,255,0.08);
+          --blue: rgba(10,132,255,0.92);
+          --danger: rgba(255,69,58,0.92);
+          --success: rgba(52,199,89,0.92);
+          --warn: rgba(255,159,10,0.92);
+        }
+
+        * {
+          box-sizing: border-box;
+        }
+
+        html, body, #root {
+          width: 100%;
+          height: 100%;
+          margin: 0;
+          overflow: hidden;
+          background: transparent;
+          font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Inter, sans-serif;
+          color: var(--text-main);
+        }
+
+        .body-scroll {
+          position: relative;
+          z-index: 2;
+          flex: 1;
+          min-height: 0;
+          overflow-y: auto;
+          padding-bottom: 16px;
+          scrollbar-width: thin;
+          scrollbar-color: rgba(255,255,255,0.18) transparent;
+        }
+
+        .body-scroll::-webkit-scrollbar {
+          width: 10px;
+        }
+
+        .body-scroll::-webkit-scrollbar-thumb {
+          background: rgba(255,255,255,0.14);
+          border-radius: 999px;
+        }
+
+        .shell {
+          width: 100%;
+          height: 100%;
+          padding: 18px;
+          background: transparent;
+        }
+
+        .window {
+          position: relative;
+          width: 100%;
+          height: 100%;
+          display: flex;
+          flex-direction: column;
+          border-radius: 30px;
+          overflow: hidden;
+          isolation: isolate;
+          background: var(--glass-bg);
+          backdrop-filter: blur(24px) saturate(150%);
+          -webkit-backdrop-filter: blur(24px) saturate(150%);
+          border: 1px solid var(--glass-border);
+          box-shadow:
+            inset 0 1px 1px rgba(255,255,255,0.16),
+            inset 0 -1px 1px rgba(0,0,0,0.18);
+        }
+
+        .window::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          border-radius: inherit;
+          background:
+            radial-gradient(circle at 12% 0%, rgba(255,255,255,0.12), transparent 28%),
+            radial-gradient(circle at 100% 100%, rgba(117,163,255,0.10), transparent 24%);
+        }
+
+        .topbar {
+          position: relative;
+          z-index: 3;
+          display: grid;
+          grid-template-columns: 1fr auto;
+          gap: 12px;
+          align-items: center;
+          padding: 14px 16px 12px;
+          border-bottom: 1px solid rgba(255,255,255,0.06);
+          background: linear-gradient(
+            180deg,
+            rgba(255,255,255,0.05),
+            rgba(255,255,255,0.01)
+          );
+          -webkit-app-region: drag;
+        }
+
+        .title-wrap {
+          min-width: 0;
+        }
+
+        .title {
+          font-size: 15px;
+          font-weight: 800;
+          letter-spacing: 0.01em;
+        }
+
+        .subtitle {
+          margin-top: 4px;
+          font-size: 11px;
+          color: rgba(255,255,255,0.58);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .window-actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          -webkit-app-region: no-drag;
+        }
+
+        .icon-btn {
+          width: 40px;
+          height: 40px;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.08);
+          color: white;
+          display: grid;
+          place-items: center;
+          cursor: pointer;
+          transition: all 0.18s ease;
+          -webkit-app-region: no-drag;
+        }
+
+        .icon-btn:hover {
+          background: rgba(255,255,255,0.14);
+          border-color: rgba(255,255,255,0.16);
+        }
+
+        .toolbar {
+          position: relative;
+          z-index: 2;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+          padding: 14px 16px 0;
+          -webkit-app-region: no-drag;
+        }
+
+        .btn {
+          min-height: 42px;
+          border-radius: 14px;
+          border: 1px solid var(--glass-border-soft);
+          background: rgba(255,255,255,0.07);
+          color: var(--text-main);
+          padding: 0 14px;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          cursor: pointer;
+          font-size: 13px;
+          font-weight: 650;
+          transition: all 0.18s ease;
+          backdrop-filter: blur(14px) saturate(135%);
+          -webkit-backdrop-filter: blur(14px) saturate(135%);
+          -webkit-app-region: no-drag;
+        }
+
+        .btn:hover {
+          background: var(--glass-fill-hover);
+          border-color: rgba(255,255,255,0.16);
+          transform: translateY(-1px);
+        }
+
+        .btn:disabled {
+          opacity: 0.56;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .btn-start {
+          border-color: rgba(52,199,89,0.22);
+          background: rgba(52,199,89,0.12);
+        }
+
+        .btn-stop {
+          border-color: rgba(255,69,58,0.22);
+          background: rgba(255,69,58,0.12);
+        }
+
+        .meta {
+          position: relative;
+          z-index: 2;
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+          padding: 12px 16px 0;
+          -webkit-app-region: no-drag;
+        }
+
+        .chip {
+          padding: 6px 10px;
+          border-radius: 999px;
+          background: rgba(255,255,255,0.07);
+          border: 1px solid rgba(255,255,255,0.08);
+          font-size: 11px;
+          color: rgba(255,255,255,0.76);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+        }
+
+        .chip-recording {
+          border-color: rgba(52,199,89,0.22);
+          background: rgba(52,199,89,0.12);
+          color: rgba(255,255,255,0.92);
+        }
+
+        .chip-busy {
+          border-color: rgba(255,159,10,0.22);
+          background: rgba(255,159,10,0.12);
+          color: rgba(255,255,255,0.92);
+        }
+
+        .error {
+          position: relative;
+          z-index: 2;
+          margin: 12px 16px 0;
+          padding: 12px 14px;
+          border-radius: 16px;
+          font-size: 12px;
+          line-height: 1.45;
+          color: rgba(255,255,255,0.94);
+          background: rgba(255,69,58,0.14);
+          border: 1px solid rgba(255,69,58,0.22);
+          white-space: pre-wrap;
+        }
+
+        .content {
+          position: relative;
+          z-index: 2;
+          display: grid;
+          grid-template-columns: 0.95fr 1.05fr;
+          gap: 14px;
+          padding: 14px 16px 16px;
+          min-height: 520px;
+        }
+
+        @media (max-width: 980px) {
+          .content {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        .panel {
+          min-width: 0;
+          min-height: 0;
+          display: flex;
+          flex-direction: column;
+          border-radius: 24px;
+          background: rgba(255,255,255,0.04);
+          border: 1px solid rgba(255,255,255,0.08);
+          box-shadow: inset 0 1px 1px rgba(255,255,255,0.05);
+          overflow: hidden;
+        }
+
+        .panel-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 14px 14px 12px;
+          border-bottom: 1px solid rgba(255,255,255,0.06);
+          background: linear-gradient(
+            180deg,
+            rgba(255,255,255,0.04),
+            rgba(255,255,255,0.01)
+          );
+        }
+
+        .panel-title {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 13px;
+          font-weight: 750;
+        }
+
+        .panel-subtitle {
+          font-size: 11px;
+          color: rgba(255,255,255,0.5);
+        }
+
+        .panel-scroll {
+          flex: 1;
+          min-height: 0;
+          overflow-y: auto;
+          padding: 14px;
+          scrollbar-width: thin;
+          scrollbar-color: rgba(255,255,255,0.18) transparent;
+        }
+
+        .panel-scroll::-webkit-scrollbar {
+          width: 10px;
+        }
+
+        .panel-scroll::-webkit-scrollbar-thumb {
+          background: rgba(255,255,255,0.14);
+          border-radius: 999px;
+        }
+
+        .raw-text {
+          white-space: pre-wrap;
+          line-height: 1.62;
+          font-size: 14px;
+          color: rgba(255,255,255,0.94);
+        }
+
+        .section {
+          margin-bottom: 14px;
+          padding: 12px;
+          border-radius: 18px;
+          background: rgba(255,255,255,0.03);
+          border: 1px solid rgba(255,255,255,0.07);
+        }
+
+        .section-label {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 12px;
+          font-weight: 750;
+          color: rgba(255,255,255,0.82);
+          margin-bottom: 8px;
+        }
+
+        .section-text {
+          white-space: pre-wrap;
+          line-height: 1.62;
+          font-size: 14px;
+          color: rgba(255,255,255,0.94);
+        }
+
+        .speaker-card {
+          margin-bottom: 10px;
+          padding: 12px;
+          border-radius: 16px;
+          background: rgba(255,255,255,0.025);
+          border: 1px solid rgba(255,255,255,0.06);
+        }
+
+        .speaker-name {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 12px;
+          font-weight: 750;
+          color: rgba(255,255,255,0.82);
+          margin-bottom: 8px;
+        }
+
+        .speaker-text {
+          white-space: pre-wrap;
+          line-height: 1.6;
+          font-size: 14px;
+          color: rgba(255,255,255,0.94);
+        }
+
+        .action-list {
+          margin: 0;
+          padding-left: 18px;
+          line-height: 1.7;
+          color: rgba(255,255,255,0.94);
+        }
+
+        .live-list {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+
+        .live-segment {
+          padding: 10px 12px;
+          border: 1px solid rgba(255,255,255,0.06);
+          border-radius: 14px;
+          background: rgba(255,255,255,0.02);
+        }
+
+        .live-time {
+          font-size: 11px;
+          color: rgba(255,255,255,0.56);
+          margin-bottom: 4px;
+        }
+
+        .live-text {
+          font-size: 13px;
+          line-height: 1.48;
+          color: rgba(255,255,255,0.94);
+        }
+
+        .empty {
+          color: rgba(255,255,255,0.54);
+          font-size: 13px;
+          line-height: 1.5;
+        }
+
+        .spin {
+          animation: spin 0.9s linear infinite;
+        }
+
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
+
+      <div className="shell">
+        <div className="window">
+          <div className="topbar" data-tauri-drag-region>
+            <div className="title-wrap">
+              <div className="title">Transcript Studio</div>
+              <div
+                className="subtitle"
+                title={`${session?.context?.app_name ?? "-"} • ${
+                  session?.context?.window_title ?? "-"
+                }`}
+              >
+                {session?.context?.app_name ?? "-"} •{" "}
+                {session?.context?.window_title ?? "-"}
+              </div>
+            </div>
+
+            <div className="window-actions">
+              <button className="icon-btn" onClick={closeWindow} title="Close">
+                <X size={16} />
+              </button>
+            </div>
+          </div>
+
+          <div className="body-scroll">
+            <div className="toolbar">
+              {!isRecording ? (
+                <button
+                  className="btn btn-start"
+                  onClick={startTranscript}
+                  disabled={busy}
+                >
+                  {busy ? (
+                    <LoaderCircle size={16} className="spin" />
+                  ) : (
+                    <Play size={16} />
+                  )}
+                  Start Transcript
+                </button>
+              ) : (
+                <button
+                  className="btn btn-stop"
+                  onClick={stopTranscript}
+                  disabled={busy}
+                >
+                  {busy ? (
+                    <LoaderCircle size={16} className="spin" />
+                  ) : (
+                    <Square size={16} />
+                  )}
+                  Stop Transcript
+                </button>
+              )}
+
+              <button
+                className="btn"
+                onClick={saveTranscript}
+                disabled={!canSave}
+              >
+                <Save size={16} />
+                Save
+              </button>
+
+              <button
+                className="btn"
+                onClick={processTranscript}
+                disabled={!canProcess}
+              >
+                {busy ? (
+                  <LoaderCircle size={16} className="spin" />
+                ) : (
+                  <Bot size={16} />
+                )}
+                Process
+              </button>
+            </div>
+
+            <div className="meta">
+              <div className="chip">session {session?.id ?? "-"}</div>
+              <div className="chip">segments {derivedSegmentCount}</div>
+              <div className="chip">
+                app {session?.context?.app_name ?? "-"}
+              </div>
+              <div
+                className={`chip ${
+                  busy ? "chip-busy" : isRecording ? "chip-recording" : ""
+                }`}
+              >
+                {transcriptStatusLabel}
+              </div>
+            </div>
+
+            {error && <div className="error">{error}</div>}
+
+            <div className="content">
+              <div className="panel">
+                <div className="panel-header">
+                  <div>
+                    <div className="panel-title">
+                      <Waves size={15} />
+                      Raw Clean Transcript
+                    </div>
+                    <div className="panel-subtitle">
+                      direct cleaned stream from the current session
+                    </div>
+                  </div>
+                </div>
+
+                <div className="panel-scroll">
+                  {cleanTranscript ? (
+                    <div className="raw-text">{cleanTranscript}</div>
+                  ) : (
+                    <div className="empty">No transcript text yet.</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="panel-header">
+                  <div>
+                    <div className="panel-title">
+                      <AudioLines size={15} />
+                      Processed Output
+                    </div>
+                    <div className="panel-subtitle">
+                      faithful transcript, speaker grouping and summary
+                    </div>
+                  </div>
+                </div>
+
+                <div className="panel-scroll">
+                  {faithfulTranscript ? (
+                    <>
+                      <div className="section">
+                        <div className="section-label">
+                          <Mic size={14} />
+                          Faithful Transcript
+                        </div>
+                        <div className="section-text">{faithfulTranscript}</div>
+                      </div>
+
+                      <div className="section">
+                        <div className="section-label">
+                          <UserRound size={14} />
+                          Speaker Blocks
+                        </div>
+
+                        {speakerBlocks.length ? (
+                          speakerBlocks.map((block, index) => (
+                            <div
+                              key={`${block.speaker}-${index}`}
+                              className="speaker-card"
+                            >
+                              <div className="speaker-name">
+                                <UserRound size={13} />
+                                {block.speaker}
+                              </div>
+                              <div className="speaker-text">{block.text}</div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="empty">
+                            No speaker blocks returned.
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="section">
+                        <div className="section-label">
+                          <Bot size={14} />
+                          Summary
+                        </div>
+                        <div className="section-text">
+                          {summary || "No summary returned."}
+                        </div>
+                      </div>
+
+                      <div className="section" style={{ marginBottom: 0 }}>
+                        <div className="section-label">
+                          <CheckSquare size={14} />
+                          Action Items
+                        </div>
+
+                        {actionItems.length ? (
+                          <ul className="action-list">
+                            {actionItems.map((item, index) => (
+                              <li key={`${item}-${index}`}>{item}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <div className="empty">No action items found.</div>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="empty">
+                      No processed output yet. Click <strong>Process</strong>.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                position: "relative",
+                zIndex: 2,
+                padding: "0 16px 16px",
+              }}
+            >
+              <div className="panel" style={{ minHeight: 220 }}>
+                <div className="panel-header">
+                  <div>
+                    <div className="panel-title">
+                      <Waves size={15} />
+                      Live Segments
+                    </div>
+                    <div className="panel-subtitle">
+                      latest unique timestamped chunks
+                    </div>
+                  </div>
+                </div>
+
+                <div className="panel-scroll">
+                  {uniqueSegments.length ? (
+                    <div className="live-list">
+                      {uniqueSegments.map((seg, i) => (
+                        <div
+                          key={`${segmentKey(seg)}-${i}`}
+                          className="live-segment"
+                        >
+                          <div className="live-time">
+                            {formatMs(seg.start_ms)} - {formatMs(seg.end_ms)}
+                          </div>
+                          <div className="live-text">{seg.text}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="empty">No transcript segments yet.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")!).render(<TranscriptApp />);

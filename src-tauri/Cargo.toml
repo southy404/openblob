@@ -38,13 +38,22 @@ tauri-plugin-opener = "2"
 once_cell = "1"
 rand = "0.8"
 window-vibrancy = "0.7"
+crossbeam-channel = "0.5"
+anyhow = "1"
+thiserror = "2"
+bytemuck = "1"
+
 
 windows = { version = "0.52", features = [
   "Win32_Foundation",
   "Win32_System",
-  "Win32_System_ProcessStatus",
+  "Win32_System_Com",
   "Win32_System_Threading",
+  "Win32_Media_Audio",
+  "Win32_Media_KernelStreaming",
+  "Win32_Security",
   "Win32_UI",
   "Win32_UI_WindowsAndMessaging",
-  "Win32_UI_Input_KeyboardAndMouse"
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_System_ProcessStatus"
 ] }

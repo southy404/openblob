@@ -30,6 +30,11 @@ src-tauri/target/
 src-tauri/.tauri/
 src-tauri/models/*.onnx
 src-tauri/models/*.json
+src-tauri/gen/
+
+# runtime debug
+*.trace
+*.dump
 
 # IDE
 .vscode/
@@ -38,3 +43,22 @@ src-tauri/models/*.json
 # Misc
 *.tmp
 *.bak
+
+# Local tools / experiments
+tools/tmp/
+tools/cache/
+
+# OpenBlob runtime data
+openblob-data/
+D:/openblob-data/
+transcripts/
+
+# Audio / transcript artifacts
+*.wav
+*.mp3
+
+# AI models
+*.bin
+*.ggml
+models/
+voice/models/

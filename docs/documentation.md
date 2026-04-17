@@ -15,6 +15,7 @@
    - [Command Router](#command-router)
    - [Browser Automation](#browser-automation)
    - [Screen & Vision](#screen--vision)
+   - [Transcript System](#transcript-system)
    - [Memory System](#memory-system)
    - [Companion Identity](#companion-identity)
    - [Text-to-Speech](#text-to-speech)
@@ -60,7 +61,7 @@ OpenBlob is split into three major layers:
 ┌─────────────────────────────────────────────────┐
 │                   UI Layer (React)               │
 │  bubble · dev-window · quick-menu · snip-panel  │
-│        snip-overlay · timer-overlay             │
+│  transcript · snip-overlay · timer-overlay      │
 └────────────────────┬────────────────────────────┘
                      │ invoke / emit / listen
 ┌────────────────────▼────────────────────────────┐
@@ -71,7 +72,7 @@ OpenBlob is split into three major layers:
 ┌────────────────────▼────────────────────────────┐
 │             Runtime Layer (Rust)                 │
 │  Command routing · Browser automation           │
-│  Screen capture · Memory · Identity · TTS       │
+│  Screen capture · Transcript · Memory · TTS     │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -151,6 +152,7 @@ openblob/
 │   │   ├── bubble/             # Main companion interaction surface
 │   │   ├── bubble-dev/         # Dev window (settings + debug)
 │   │   ├── quick-menu/         # Fast-access command menu
+│   │   ├── transcript/         # Transcript window + AI post-processing
 │   │   ├── snip-overlay/       # Screenshot capture overlay
 │   │   ├── snip-panel/         # Screenshot analysis panel
 │   │   └── timer-overlay/      # Timer utility overlay
@@ -187,6 +189,7 @@ openblob/
 │       │   │   └── paths.rs
 │       │   ├── browser_automations.rs
 │       │   ├── screen_capture.rs
+│       │   ├── transcript/     # System audio capture + transcription pipeline
 │       │   ├── session_memory.rs
 │       │   ├── context.rs
 │       │   ├── context_resolver.rs
@@ -324,6 +327,176 @@ Set the active model in app configuration or the Rust backend config.
 
 ---
 
+### Transcript System
+
+**Location:** `src-tauri/src/modules/transcript/` · `src/windows/transcript/`
+
+The transcript system adds a **continuous listening and transcription pipeline** to OpenBlob. It allows the companion to capture system audio, transcribe it locally, surface the live text in a dedicated window, and optionally run AI post-processing to produce cleaner output, summaries, and speaker-style blocks.
+
+This turns OpenBlob into more than a command layer — it becomes a **local meeting, podcast, and media understanding tool**.
+
+#### Supported input mode
+
+| Source        | Status | Notes                                       |
+| ------------- | ------ | ------------------------------------------- |
+| System audio  | ✅     | Implemented via Windows loopback capture    |
+| Microphone    | ⚠️     | Planned, not yet implemented in the runtime |
+| Mixed capture | ⚠️     | Planned future mode for mic + system blend  |
+
+#### End-to-end flow
+
+```
+System audio (loopback)
+        │
+        ▼
+WASAPI capture
+        │
+        ▼
+Mono chunk buffering
+        │
+        ▼
+Temporary WAV write
+        │
+        ▼
+Local Whisper CLI
+        │
+        ▼
+Transcript segments
+        │
+        ├── Live transcript window
+        ├── Session persistence
+        └── AI post-processing
+```
+
+#### Core responsibilities
+
+| File                   | Purpose                                                      |
+| ---------------------- | ------------------------------------------------------------ |
+| `audio_capture.rs`     | Windows loopback capture, mono conversion, chunk buffering   |
+| `runtime.rs`           | Worker loop, chunk merge, transcription execution            |
+| `transcript_engine.rs` | WAV writing + Whisper CLI execution                          |
+| `session.rs`           | Active transcript session lifecycle and segment append       |
+| `summary.rs`           | Lightweight session summary support                          |
+| `processor.rs`         | AI-based cleanup, manuscript, speaker grouping, action items |
+| `transcript_store.rs`  | Markdown + JSON persistence for finished sessions            |
+| `types.rs`             | Shared transcript structs and enums                          |
+
+#### Audio capture design
+
+The current implementation uses **WASAPI loopback** on Windows. This means OpenBlob listens to the audio being played by the system rather than recording the microphone. That makes it suitable for:
+
+- Google Meet / Zoom / Teams playback
+- YouTube videos and podcasts
+- lectures, tutorials, and streamed media
+- browser-based voice conversations
+
+#### Chunking strategy
+
+The runtime avoids sending tiny fragments to Whisper. Instead it builds larger chunks for better quality and lower overhead.
+
+| Parameter       | Current role                                 |
+| --------------- | -------------------------------------------- |
+| target duration | preferred flush threshold for a merged chunk |
+| max duration    | upper bound to prevent too much latency      |
+| final flush     | sends remaining buffered audio when stopping |
+
+This improves transcript stability versus very small chunk sizes, especially for natural speech.
+
+#### Whisper integration
+
+OpenBlob currently uses a **local Whisper CLI** binary and local model files.
+
+Example path layout:
+
+```
+D:\openblob\voice\bin\whisper-cli.exe
+D:\openblob\voice\models\ggml-base.en.bin
+```
+
+The transcription engine:
+
+- validates executable, model, and input paths
+- writes a temporary WAV file for each merged chunk
+- runs Whisper locally
+- reads the generated transcript output
+- normalizes punctuation and spacing
+- removes temporary output files again
+
+#### Session model
+
+Each transcript run is represented as a `TranscriptSession`.
+
+Typical data includes:
+
+- session id
+- source kind
+- start / end timestamps
+- active app / window context
+- ordered transcript segments
+
+Each segment contains:
+
+- `start_ms`
+- `end_ms`
+- `text`
+- optional speaker field
+- optional confidence field
+
+#### Live events
+
+The transcript runtime communicates with the frontend over Tauri events.
+
+| Event                  | Purpose                                 |
+| ---------------------- | --------------------------------------- |
+| `transcript://segment` | Emits a new transcript segment          |
+| `transcript://error`   | Emits runtime or transcription failures |
+
+These events drive the live transcript window and quick-menu transcript status.
+
+#### AI post-processing
+
+After capture, the transcript can be processed into more useful formats. The processing layer is designed to preserve the original meaning while improving readability.
+
+Outputs include:
+
+| Output type         | Purpose                                                      |
+| ------------------- | ------------------------------------------------------------ |
+| Faithful transcript | cleaner readable transcript with minimal distortion          |
+| Speaker blocks      | grouped conversation blocks such as `Speaker 1`, `Speaker 2` |
+| Summary             | compact overview of what was discussed                       |
+| Action items        | extracted tasks, follow-ups, or decisions                    |
+
+This layer is especially useful for:
+
+- daily standups
+- recorded meetings
+- lectures and workshops
+- podcast / video note extraction
+
+#### Storage behavior
+
+Transcript sessions are persisted locally as structured data and markdown exports.
+
+Typical outputs:
+
+```
+openblob-data/transcripts/<session-id>/session.json
+openblob-data/transcripts/<session-id>/transcript.md
+```
+
+Temporary chunk audio is used during processing, but the current direction is to **avoid keeping unnecessary audio artifacts** after a session completes. This keeps the feature practical and prevents data clutter.
+
+#### Design goals
+
+The transcript module is being shaped around four priorities:
+
+1. local-first processing
+2. readable output over raw noise
+3. optional AI enhancement after capture
+4. architecture ready for future speaker diarization and memory integration
+
+---
+
 ### Memory System
 
 **Location:** `src-tauri/src/modules/memory/`
@@ -409,14 +582,15 @@ src-tauri/models/
 
 Each UI surface in OpenBlob is a separate React app running in its own Tauri window.
 
-| Window            | Path                         | Purpose                                             |
-| ----------------- | ---------------------------- | --------------------------------------------------- |
-| **Bubble**        | `src/windows/bubble/`        | Primary interaction: input, voice, subtitles        |
-| **Dev Window**    | `src/windows/bubble-dev/`    | Internal settings, command catalog, identity editor |
-| **Quick Menu**    | `src/windows/quick-menu/`    | Fast-access panel for common actions                |
-| **Snip Overlay**  | `src/windows/snip-overlay/`  | Region selection for screenshots                    |
-| **Snip Panel**    | `src/windows/snip-panel/`    | Analysis results for screenshots                    |
-| **Timer Overlay** | `src/windows/timer-overlay/` | Countdown/timer utility                             |
+| Window            | Path                         | Purpose                                               |
+| ----------------- | ---------------------------- | ----------------------------------------------------- |
+| **Bubble**        | `src/windows/bubble/`        | Primary interaction: input, voice, subtitles          |
+| **Dev Window**    | `src/windows/bubble-dev/`    | Internal settings, command catalog, identity editor   |
+| **Quick Menu**    | `src/windows/quick-menu/`    | Fast-access panel for common actions                  |
+| **Transcript**    | `src/windows/transcript/`    | Live transcription, processing, and transcript review |
+| **Snip Overlay**  | `src/windows/snip-overlay/`  | Region selection for screenshots                      |
+| **Snip Panel**    | `src/windows/snip-panel/`    | Analysis results for screenshots                      |
+| **Timer Overlay** | `src/windows/timer-overlay/` | Countdown/timer utility                               |
 
 ### Window communication
 
@@ -504,6 +678,16 @@ OpenBlob uses natural language parsing. Commands are fuzzy-matched — exact wor
 | `next video`                       | Skip to next           |
 | `forward <seconds>`                | Seek forward           |
 
+### Transcript
+
+| Command              | Description                               |
+| -------------------- | ----------------------------------------- |
+| `start transcript`   | Start system audio transcription          |
+| `stop transcript`    | Stop the active transcript runtime        |
+| `open transcript`    | Open the transcript window                |
+| `process transcript` | Generate cleaned AI output from a session |
+| `save transcript`    | Persist the current transcript session    |
+
 > **Note:** Commands like `youtube lofi beats`, `play lofi beats on youtube`, and `search youtube for lofi beats` all resolve to the same action.
 
 ---
@@ -524,6 +708,10 @@ tauri::Builder::default()
         get_companion_config,
         update_companion_config,
         start_snip,
+        start_transcript,
+        stop_transcript,
+        get_transcript_status,
+        process_transcript,
         // ...
     ])
     .run(tauri::generate_context!())
@@ -542,7 +730,7 @@ app.global_shortcut().register("CTRL+SPACE", || {
 
 ### Window management
 
-Windows are opened via `open.ts` files in each window directory:
+Windows are opened via `open.ts` files in each window directory. This now includes dedicated windows like the transcript window, which follows the same pattern as the bubble, dev, snip, and quick-menu surfaces:
 
 ```typescript
 // src/windows/bubble/open.ts
@@ -582,6 +770,7 @@ Use cases:
 - general explanations
 - translation (when no local route is active)
 - vision analysis (screenshot flows)
+- transcript cleanup, speaker grouping, summaries, and action extraction
 
 ### Model configuration
 
@@ -595,13 +784,14 @@ All persistent data lives in local JSON files managed by `storage/json_store.rs`
 
 ### Data categories
 
-| Category         | File                    | Contents                         |
-| ---------------- | ----------------------- | -------------------------------- |
-| Companion config | `companion_config.json` | Name, language, future wake-word |
-| User profile     | `user_profile.json`     | Owner name, app familiarity      |
-| Episodic memory  | `episodic_memory.json`  | Interaction history              |
-| Semantic memory  | `semantic_memory.json`  | Learned facts and patterns       |
-| Onboarding state | `onboarding_state.json` | Reserved for future onboarding   |
+| Category         | File                         | Contents                                           |
+| ---------------- | ---------------------------- | -------------------------------------------------- |
+| Companion config | `companion_config.json`      | Name, language, future wake-word                   |
+| User profile     | `user_profile.json`          | Owner name, app familiarity                        |
+| Episodic memory  | `episodic_memory.json`       | Interaction history                                |
+| Semantic memory  | `semantic_memory.json`       | Learned facts and patterns                         |
+| Onboarding state | `onboarding_state.json`      | Reserved for future onboarding                     |
+| Transcript data  | `openblob-data/transcripts/` | Session JSON, markdown, temporary processing files |
 
 File paths are resolved via `storage/paths.rs`, typically inside the app's local data directory.
 
@@ -696,6 +886,9 @@ All contributions are welcome — code, design, documentation, ideas, and testin
 | Error handling consistency     | ⚠️ Inconsistent across modules                        |
 | Settings UI                    | ❌ Not yet implemented                                |
 | Identity propagation           | ⚠️ Not all answer paths are identity-aware yet        |
+| Transcript language quality    | ⚠️ English currently performs better than German      |
+| Speaker separation             | ⚠️ AI-grouped, not true acoustic diarization yet      |
+| Transcript post-processing     | ⚠️ Still being tuned for higher fidelity              |
 
 ---
 
@@ -716,6 +909,7 @@ All contributions are welcome — code, design, documentation, ideas, and testin
 - [ ] Wake-word configuration
 - [ ] Memory inspector UI
 - [ ] Cleaner multi-model routing
+- [ ] Transcript window polish and session UX improvements
 
 ### Phase 3 — Intelligence
 
@@ -723,6 +917,8 @@ All contributions are welcome — code, design, documentation, ideas, and testin
 - [ ] Structured reasoning pipeline
 - [ ] Tool-based agent system
 - [ ] Better multi-app context awareness
+- [ ] Better transcript cleanup and faithful manuscript generation
+- [ ] Stronger AI-assisted speaker grouping and transcript understanding
 
 ### Phase 4 — Platform
 
@@ -730,6 +926,8 @@ All contributions are welcome — code, design, documentation, ideas, and testin
 - [ ] Community skill packs
 - [ ] Personality and bonding influence
 - [ ] Cross-platform exploration
+- [ ] Future microphone + mixed audio transcript modes
+- [ ] Transcript-to-memory and meeting intelligence workflows
 
 ---
 
@@ -744,6 +942,8 @@ All contributions are welcome — code, design, documentation, ideas, and testin
 | Vision models       | gemma3 / qwen2.5vl / llama vision |
 | Motion / animations | Framer Motion                     |
 | TTS                 | Piper (ONNX) + Kokoro             |
+| Speech-to-text      | Whisper CLI (local)               |
+| Audio capture       | Windows WASAPI loopback           |
 | Platform            | Windows 10 / 11                   |
 
 ---

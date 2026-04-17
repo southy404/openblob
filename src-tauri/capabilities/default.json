@@ -11,7 +11,9 @@
     "snip-overlay",
     "snip-panel",
     "quick-menu",
-    "timer-overlay"
+    "timer-overlay",
+    "transcript",
+    "transcript-overlay"
   ],
   "permissions": [
     "core:default",
