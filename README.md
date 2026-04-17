@@ -142,6 +142,31 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 
 ---
 
+### ✍️ Transcript & Audio Intelligence
+
+| Command              | Description                              |
+| -------------------- | ---------------------------------------- |
+| `start transcript`   | Start system-audio transcription         |
+| `stop transcript`    | Stop the active transcript session       |
+| `open transcript`    | Open the transcript window               |
+| `process transcript` | Generate structured AI transcript output |
+| `save transcript`    | Persist the current transcript session   |
+
+**What this adds**
+
+- real-time transcription of **system audio**
+- dedicated **Transcript window**
+- cleaned live transcript stream
+- AI post-processing into:
+  - faithful transcript
+  - speaker-style blocks
+  - summary
+  - action items
+
+> Current transcript flow is optimized for **system audio** such as meetings, YouTube, podcasts, and browser playback. Microphone and hybrid diarization are planned next.
+
+---
+
 ### 🧠 Context & AI
 
 | Command                | Description              |
@@ -236,6 +261,10 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 | i18n groundwork for `en` / `de`                        | ✅     |
 | Speech bubble / companion bubble windows               | ✅     |
 | Quick menu as separate window                          | ⚠️     |
+| Transcript module (system audio capture)               | ✅     |
+| Transcript window (live + processed views)             | ✅     |
+| AI transcript processing (summary / action items)      | ✅     |
+| Temporary audio chunk cleanup                          | ✅     |
 | Global shortcut: CTRL + SPACE to toggle UI             | ✅     |
 | Hide & Seek mini game mode                             | ✅     |
 | Open-source-friendly structure cleanup                 | ✅     |
@@ -248,6 +277,9 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 - Plugin / capability system
 - Persistent long-term memory
 - Structured reasoning / tool-based agent system
+- Real speaker diarization / stronger voice separation
+- Microphone + mixed audio transcript modes
+- Meeting-first transcript workflows
 - More mini games and interactive blob modes
 - Personality system with persistent character state
 - Better onboarding experience
@@ -268,6 +300,8 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 | Browser automation reliability           | ⚠️ some commands no longer execute as reliably after refactors |
 | Multi-model routing                      | ⚠️ fallback logic still rough                                  |
 | Voice pipeline                           | ⚠️ occasional recognition failures                             |
+| Transcript word accuracy                 | ⚠️ depends on audio quality, model, and speaker clarity        |
+| Speaker assignment in transcript output  | ⚠️ currently inferred, not true diarization                    |
 | Context detection edge cases             | ⚠️ fallback to last known app isn't always correct             |
 | Error handling across modules            | ⚠️ inconsistent, needs improvement                             |
 | Settings UI                              | ❌ not yet implemented                                         |
@@ -278,15 +312,16 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 
 ## Tech Stack
 
-| Layer    | Technology                               |
-| -------- | ---------------------------------------- |
-| Frontend | React + TypeScript + Vite                |
-| Desktop  | Tauri v2                                 |
-| Backend  | Rust                                     |
-| AI       | Ollama (multi-model orchestration)       |
-| Vision   | gemma3 / qwen2.5vl / llama vision models |
-| Motion   | Framer Motion                            |
-| Platform | Windows 10 / 11                          |
+| Layer          | Technology                               |
+| -------------- | ---------------------------------------- |
+| Frontend       | React + TypeScript + Vite                |
+| Desktop        | Tauri v2                                 |
+| Backend        | Rust                                     |
+| AI             | Ollama (multi-model orchestration)       |
+| Vision         | gemma3 / qwen2.5vl / llama vision models |
+| Transcript ASR | local Whisper CLI                        |
+| Motion         | Framer Motion                            |
+| Platform       | Windows 10 / 11                          |
 
 ---
 
@@ -304,6 +339,7 @@ This is expected behavior due to:
 - active window & process inspection
 - browser automation (remote debugging)
 - local AI execution
+- system audio capture for transcript sessions
 
 ---
 
@@ -385,7 +421,27 @@ Optional — for vision features:
 ollama pull qwen2.5vl:7b
 ```
 
-> If your local model setup differs, adapt the model name in the app configuration or Rust backend.
+### Transcript setup (optional but recommended)
+
+OpenBlob's transcript module currently uses a **local Whisper CLI** setup for system-audio transcription.
+
+Typical local layout:
+
+```text
+D:\openblob\voice\
+├── bin\
+│   └── whisper-cli.exe
+└── models\
+    └── ggml-base.en.bin
+```
+
+This enables:
+
+- local audio chunk transcription
+- live transcript sessions
+- AI post-processing after recording
+
+> If your local model setup differs, adapt the transcript runtime paths in the Rust backend.
 
 ---
 
@@ -408,6 +464,7 @@ ollama pull qwen2.5vl:7b
     ├── snip-panel.html
     ├── speech.html
     ├── timer-overlay.html
+    ├── transcript.html
     ├── tsconfig.app.json
     ├── tsconfig.json
     ├── tsconfig.node.json
@@ -433,6 +490,9 @@ ollama pull qwen2.5vl:7b
     │       │   ├── app.tsx
     │       │   └── open.ts
     │       ├── quick-menu/
+    │       │   ├── app.tsx
+    │       │   └── open.ts
+    │       ├── transcript/
     │       │   ├── app.tsx
     │       │   └── open.ts
     │       ├── snip-overlay/
@@ -480,6 +540,16 @@ ollama pull qwen2.5vl:7b
     │           ├── system.rs
     │           ├── voice.rs
     │           ├── windows_discovery.rs
+    │           ├── transcript/
+    │           │   ├── audio_capture.rs
+    │           │   ├── runtime.rs
+    │           │   ├── transcript_engine.rs
+    │           │   ├── session.rs
+    │           │   ├── processor.rs
+    │           │   ├── transcript_store.rs
+    │           │   ├── summary.rs
+    │           │   ├── types.rs
+    │           │   └── mod.rs
     │           ├── command_router/
     │           │   ├── constants.rs
     │           │   ├── extract.rs
@@ -579,6 +649,9 @@ Fun interactions and real productivity are not opposites.
 - [ ] Better multi-model routing
 - [ ] Structured reasoning pipeline
 - [ ] Tool-based agent system
+- [ ] Higher-accuracy transcript cleanup pipeline
+- [ ] Real speaker diarization
+- [ ] Transcript-to-memory extraction
 
 ### Avatar / UX
 
@@ -637,6 +710,34 @@ OpenBlob can capture your screen or a selected region and reason about what it s
 
 ---
 
+## Transcript / Audio Intelligence
+
+OpenBlob can now transcribe **system audio in real time** and turn it into more usable material after recording.
+
+Current transcript workflow:
+
+- capture system audio through local loopback
+- split audio into local processing chunks
+- transcribe chunks with local Whisper CLI
+- show live segments in a dedicated Transcript window
+- process the session into:
+  - a cleaner faithful transcript
+  - speaker-style grouped blocks
+  - summary
+  - action items
+
+This is especially useful for:
+
+- YouTube videos
+- podcasts
+- online meetings
+- spoken walkthroughs
+- lectures and demos
+
+> The current system is intentionally local-first. Temporary audio chunks are created for processing and then cleaned up to avoid unnecessary data buildup.
+
+---
+
 ## Mini Games
 
 OpenBlob has a growing interactive side beyond just being an assistant.
@@ -660,6 +761,7 @@ Contributions are welcome — all kinds, not just code.
 | Quality        | tests, CI, issue templates                                    |
 | Mini games     | new game modes, interaction ideas                             |
 | AI experiments | prompting strategies, model routing, agent ideas              |
+| Transcript     | ASR cleanup, diarization, transcript UX, meeting workflows    |
 
 Please open an issue before large changes so we can align on direction.
 
@@ -692,6 +794,7 @@ Recent work focused on:
 - making the structure more open-source-friendly
 - preparing multilingual support (`en` / `de`)
 - separating larger UI elements into dedicated windows (like the quick menu)
+- introducing the first transcript module + transcript window
 - improving long-term maintainability
 
 The project is already functional, but still has rough edges and active regressions in some areas. Expect rapid changes, experimental ideas, and ongoing cleanup.
@@ -718,7 +821,7 @@ Built with inspiration from:
 
 ## Topics
 
-`desktop-copilot` `tauri` `react` `rust` `ollama` `local-ai` `open-source` `desktop-assistant` `automation` `windows` `voice` `vision` `screenshot` `framer-motion` `mini-games` `context-aware`
+`desktop-copilot` `tauri` `react` `rust` `ollama` `local-ai` `open-source` `desktop-assistant` `automation` `windows` `voice` `vision` `screenshot` `transcript` `speech-to-text` `whisper` `framer-motion` `mini-games` `context-aware`
 
 ---
 

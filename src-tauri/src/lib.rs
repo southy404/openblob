@@ -2,6 +2,11 @@ use device_query::{DeviceQuery, DeviceState};
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use tauri::{Emitter, Manager};
 use window_vibrancy::{apply_blur, NSVisualEffectMaterial};
+use once_cell::sync::Lazy;
+use std::sync::Mutex;
+
+static TRANSCRIPT_RUNTIME: Lazy<Mutex<Option<modules::transcript::runtime::TranscriptRuntimeHandle>>> =
+    Lazy::new(|| Mutex::new(None));
 
 mod core;
 mod modules {
@@ -24,6 +29,7 @@ mod modules {
     pub mod tts;
     pub mod voice;
     pub mod windows_discovery;
+    pub mod transcript;
 }
 
 use crate::core::app::run_command_pipeline;
@@ -49,6 +55,106 @@ fn initialize_companion_persistence() -> Result<(), String> {
     let _user_profile = load_or_create_user_profile()?;
     let _semantic_memory = load_or_create_semantic_memory()?;
     Ok(())
+}
+
+#[tauri::command]
+fn start_transcript(
+    app: tauri::AppHandle,
+    source: String,
+    app_name: Option<String>,
+    window_title: Option<String>,
+) -> Result<modules::transcript::types::TranscriptSession, String> {
+    use modules::transcript::types::{StartTranscriptRequest, TranscriptSourceKind};
+
+    let source = match source.trim().to_lowercase().as_str() {
+        "system" | "system_audio" => TranscriptSourceKind::SystemAudio,
+        "microphone" | "mic" => TranscriptSourceKind::Microphone,
+        "mixed" => TranscriptSourceKind::Mixed,
+        _ => return Err("Unsupported transcript source".into()),
+    };
+
+    {
+        let guard = TRANSCRIPT_RUNTIME
+            .lock()
+            .map_err(|_| "Failed to lock transcript runtime".to_string())?;
+
+        if guard.is_some() {
+            return Err("Transcript is already running".into());
+        }
+    }
+
+    let session = modules::transcript::session::start_session(StartTranscriptRequest {
+        source: source.clone(),
+        app_name,
+        window_title,
+    })?;
+
+    let runtime = modules::transcript::runtime::start_runtime(app, session.clone())?;
+
+    {
+        let mut guard = TRANSCRIPT_RUNTIME
+            .lock()
+            .map_err(|_| "Failed to lock transcript runtime".to_string())?;
+        *guard = Some(runtime);
+    }
+
+    Ok(session)
+}
+
+#[tauri::command]
+fn stop_transcript() -> Result<modules::transcript::types::TranscriptSession, String> {
+    {
+        let mut guard = TRANSCRIPT_RUNTIME
+            .lock()
+            .map_err(|_| "Failed to lock transcript runtime".to_string())?;
+
+        if let Some(runtime) = guard.take() {
+            runtime.stop()?;
+        } else {
+            return Err("No active transcript runtime".into());
+        }
+    }
+
+    let _ = modules::transcript::session::stop_session()?;
+    let session = modules::transcript::session::finish_session()?;
+    let _ = modules::transcript::transcript_store::save_session(&session);
+
+    Ok(session)
+}
+
+#[tauri::command]
+fn get_transcript_status() -> Result<modules::transcript::types::TranscriptStatus, String> {
+    modules::transcript::session::get_status()
+}
+
+#[tauri::command]
+fn get_current_transcript(
+) -> Result<Option<modules::transcript::types::TranscriptSession>, String> {
+    modules::transcript::session::get_active_session()
+}
+
+#[tauri::command]
+fn save_current_transcript() -> Result<String, String> {
+    let session = modules::transcript::session::get_active_session()?
+        .ok_or_else(|| "No active transcript session".to_string())?;
+
+    let dir = modules::transcript::transcript_store::save_session(&session)?;
+    Ok(dir.display().to_string())
+}
+
+#[tauri::command]
+fn summarize_current_transcript(
+) -> Result<modules::transcript::types::TranscriptSummary, String> {
+    let session = modules::transcript::session::get_active_session()?
+        .ok_or_else(|| "No active transcript session".to_string())?;
+
+    Ok(modules::transcript::summary::summarize_session(&session))
+}
+
+#[tauri::command]
+async fn process_transcript(
+) -> Result<modules::transcript::types::ProcessedTranscriptResult, String> {
+    modules::transcript::processor::process_best_available_transcript().await
 }
 
 #[tauri::command]
@@ -493,6 +599,13 @@ pub fn run() {
             analyze_snip,
             capture_snip_region,
             snip_file_exists,
+            start_transcript,
+            stop_transcript,
+            get_transcript_status,
+            get_current_transcript,
+            save_current_transcript,
+            summarize_current_transcript,
+            process_transcript,
             modules::system::get_system_volume,
             modules::system::set_system_volume,
             modules::system::change_system_volume,
