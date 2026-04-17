@@ -50,7 +50,7 @@ the foundation is there, the architecture is evolving, and the project is active
 
 ## Documentation
 
-For a full technical deep-dive — architecture, core systems, Tauri bridge, module reference, transcript system, and contribution guide — see the developer documentation:
+For a full technical deep-dive — architecture, core systems, Tauri bridge, module reference, and contribution guide — see the developer documentation:
 
 📄 **[docs/documentation.md](./docs/documentation.md)**
 
