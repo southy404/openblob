@@ -76,6 +76,14 @@ pub struct CompanionConfig {
     pub appearance: AppearanceConfig,
     pub behavior: BehaviorConfig,
     pub privacy: PrivacyConfig,
+    #[serde(default)]
+    pub wake_word_enabled: bool,
+    #[serde(default = "default_wake_word_phrase")]
+    pub wake_word_phrase: String,
+}
+
+fn default_wake_word_phrase() -> String {
+    "hey blob".into()
 }
 
 impl Default for CompanionConfig {
@@ -94,6 +102,8 @@ impl Default for CompanionConfig {
             appearance: AppearanceConfig::default(),
             behavior: BehaviorConfig::default(),
             privacy: PrivacyConfig::default(),
+            wake_word_enabled: false,
+            wake_word_phrase: default_wake_word_phrase(),
         }
     }
 }
@@ -130,6 +140,10 @@ impl CompanionConfig {
 
         if self.voice_id.trim().is_empty() {
             self.voice_id = "default".into();
+        }
+
+        if self.wake_word_phrase.trim().is_empty() {
+            self.wake_word_phrase = format!("hey {}", self.blob_name.to_lowercase());
         }
 
         self

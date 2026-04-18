@@ -14,4 +14,5 @@ pub mod storage;
 pub mod streaming;
 pub mod system;
 pub mod voice;
+pub mod wake_word;
 pub mod windows_discovery;

@@ -54,6 +54,8 @@ const STORAGE_KEYS = {
   speakEnabled: "openblob-bubble-speak-enabled",
   subtitlesEnabled: "openblob-bubble-subtitles-enabled",
   bubbleMode: "openblob-bubble-mode",
+  wakeWordEnabled: "openblob-bubble-wake-word-enabled",
+  wakeWordPhrase: "openblob-bubble-wake-word-phrase",
 };
 
 function readLocalStorageString(key: string, fallback: string) {
@@ -223,12 +225,20 @@ function BubbleApp() {
     readLocalStorageBool(STORAGE_KEYS.subtitlesEnabled, true)
   );
   const [bubbleMode, setBubbleMode] = useState<BubbleMode>(readBubbleMode());
+  const [wakeWordEnabled, setWakeWordEnabled] = useState(
+    readLocalStorageBool(STORAGE_KEYS.wakeWordEnabled, false)
+  );
+  const [wakeWordPhrase, setWakeWordPhrase] = useState(
+    readLocalStorageString(STORAGE_KEYS.wakeWordPhrase, "hey blob")
+  );
+  const [wakeWordDraft, setWakeWordDraft] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const finalVoiceTextRef = useRef("");
   const visibleRef = useRef(visible);
   const listeningRef = useRef(listening);
+  const busyRef = useRef(busy);
 
   const SpeechRecognitionCtor = useMemo(
     () => window.SpeechRecognition || window.webkitSpeechRecognition || null,
@@ -272,6 +282,10 @@ function BubbleApp() {
   }, [listening]);
 
   useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
+  useEffect(() => {
     try {
       window.localStorage.setItem(STORAGE_KEYS.model, model);
     } catch {}
@@ -309,6 +323,21 @@ function BubbleApp() {
       window.localStorage.setItem(STORAGE_KEYS.bubbleMode, bubbleMode);
     } catch {}
   }, [bubbleMode]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        STORAGE_KEYS.wakeWordEnabled,
+        String(wakeWordEnabled)
+      );
+    } catch {}
+  }, [wakeWordEnabled]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STORAGE_KEYS.wakeWordPhrase, wakeWordPhrase);
+    } catch {}
+  }, [wakeWordPhrase]);
 
   useEffect(() => {
     if (!subtitlesEnabled) {
@@ -637,8 +666,34 @@ function BubbleApp() {
     let unlistenShow: null | (() => void) = null;
     let unlistenHide: null | (() => void) = null;
     let unlistenVoiceToggle: null | (() => void) = null;
+    let unlistenWakeWord: null | (() => void) = null;
 
     const setup = async () => {
+      // Load wake word settings from backend and start listener if enabled
+      try {
+        const settings = await invoke<{ enabled: boolean; phrase: string }>(
+          "get_wake_word_settings"
+        );
+        setWakeWordEnabled(settings.enabled);
+        setWakeWordPhrase(settings.phrase);
+
+        if (settings.enabled) {
+          await invoke("start_wake_word").catch((e: unknown) =>
+            console.error("start_wake_word failed", e)
+          );
+        }
+      } catch (e) {
+        console.error("get_wake_word_settings failed", e);
+      }
+
+      unlistenWakeWord = await listen("wake-word-detected", async () => {
+        // Ignore if already listening for a command or if busy
+        if (listeningRef.current || busyRef.current) return;
+
+        await fadeInAndShow();
+        await startVoiceInput();
+      });
+
       unlistenContext = await listen<ContextPayload>(
         "companion-context",
         async (event) => {
@@ -702,6 +757,8 @@ function BubbleApp() {
       unlistenShow?.();
       unlistenHide?.();
       unlistenVoiceToggle?.();
+      unlistenWakeWord?.();
+      void invoke("stop_wake_word").catch(() => {});
     };
   }, []);
 
@@ -751,6 +808,17 @@ function BubbleApp() {
       );
       return next;
     });
+  };
+
+  const saveWakeWordSettings = async (enabled: boolean, phrase: string) => {
+    try {
+      await invoke("save_wake_word_settings", { enabled, phrase });
+      setWakeWordEnabled(enabled);
+      setWakeWordPhrase(phrase);
+      setWakeWordDraft(null);
+    } catch (e) {
+      console.error("save_wake_word_settings failed", e);
+    }
   };
 
   const placeholder =
@@ -1198,6 +1266,74 @@ function BubbleApp() {
             >
               mode {bubbleMode}
             </button>
+
+            <button
+              className="tiny-link"
+              onClick={() =>
+                void saveWakeWordSettings(!wakeWordEnabled, wakeWordPhrase)
+              }
+              type="button"
+              title={
+                wakeWordEnabled
+                  ? `Wake word active: "${wakeWordPhrase}"`
+                  : "Enable wake word"
+              }
+            >
+              wake {wakeWordEnabled ? "on" : "off"}
+            </button>
+
+            {wakeWordEnabled && (
+              <span className="tiny-link tiny-link-static">
+                {wakeWordDraft !== null ? (
+                  <>
+                    <input
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        borderBottom: "1px solid rgba(255,255,255,0.4)",
+                        color: "rgba(255,255,255,0.9)",
+                        fontSize: "12px",
+                        outline: "none",
+                        width: "90px",
+                        padding: "0 2px",
+                      }}
+                      value={wakeWordDraft}
+                      onChange={(e) => setWakeWordDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          const phrase = wakeWordDraft.trim() || wakeWordPhrase;
+                          void saveWakeWordSettings(true, phrase);
+                        }
+                        if (e.key === "Escape") {
+                          setWakeWordDraft(null);
+                        }
+                      }}
+                      autoFocus
+                    />
+                    <button
+                      className="tiny-link"
+                      style={{ marginLeft: "4px" }}
+                      onClick={() => {
+                        const phrase = (wakeWordDraft ?? "").trim() || wakeWordPhrase;
+                        void saveWakeWordSettings(true, phrase);
+                      }}
+                      type="button"
+                    >
+                      ✓
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="tiny-link"
+                    onClick={() => setWakeWordDraft(wakeWordPhrase)}
+                    type="button"
+                    title="Edit wake phrase"
+                  >
+                    "{wakeWordPhrase}"
+                  </button>
+                )}
+              </span>
+            )}
           </div>
         </div>
       </div>

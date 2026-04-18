@@ -8,6 +8,9 @@ use std::sync::Mutex;
 static TRANSCRIPT_RUNTIME: Lazy<Mutex<Option<modules::transcript::runtime::TranscriptRuntimeHandle>>> =
     Lazy::new(|| Mutex::new(None));
 
+static WAKE_WORD_HANDLE: Lazy<Mutex<Option<modules::wake_word::WakeWordHandle>>> =
+    Lazy::new(|| Mutex::new(None));
+
 mod core;
 mod modules {
     pub mod app_profiles;
@@ -28,6 +31,7 @@ mod modules {
     pub mod system;
     pub mod tts;
     pub mod voice;
+    pub mod wake_word;
     pub mod windows_discovery;
     pub mod transcript;
 }
@@ -475,6 +479,84 @@ async fn stop_tts() -> Result<(), String> {
     modules::tts::manager::stop().await
 }
 
+#[derive(serde::Serialize)]
+struct WakeWordSettings {
+    enabled: bool,
+    phrase: String,
+}
+
+#[tauri::command]
+fn get_wake_word_settings() -> Result<WakeWordSettings, String> {
+    let config = load_or_create_companion_config()?;
+    Ok(WakeWordSettings {
+        enabled: config.wake_word_enabled,
+        phrase: config.wake_word_phrase,
+    })
+}
+
+#[tauri::command]
+fn start_wake_word(app: tauri::AppHandle) -> Result<(), String> {
+    let config = load_or_create_companion_config()?;
+    let phrase = config.wake_word_phrase.clone();
+
+    let mut guard = WAKE_WORD_HANDLE
+        .lock()
+        .map_err(|_| "Failed to lock wake word handle".to_string())?;
+
+    if guard.is_some() {
+        return Ok(()); // already running
+    }
+
+    let handle = modules::wake_word::start_wake_word_listener(app, phrase)?;
+    *guard = Some(handle);
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_wake_word() -> Result<(), String> {
+    let mut guard = WAKE_WORD_HANDLE
+        .lock()
+        .map_err(|_| "Failed to lock wake word handle".to_string())?;
+
+    if let Some(handle) = guard.take() {
+        handle.stop();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn save_wake_word_settings(
+    app: tauri::AppHandle,
+    enabled: bool,
+    phrase: String,
+) -> Result<(), String> {
+    let mut config = load_or_create_companion_config()?;
+    config.wake_word_enabled = enabled;
+    if !phrase.trim().is_empty() {
+        config.wake_word_phrase = phrase.trim().to_lowercase();
+    }
+    save_companion_config(&config)?;
+
+    // Start or stop listener based on new setting
+    let mut guard = WAKE_WORD_HANDLE
+        .lock()
+        .map_err(|_| "Failed to lock wake word handle".to_string())?;
+
+    if let Some(existing) = guard.take() {
+        existing.stop();
+    }
+
+    if enabled {
+        let handle = modules::wake_word::start_wake_word_listener(
+            app,
+            config.wake_word_phrase.clone(),
+        )?;
+        *guard = Some(handle);
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -618,7 +700,11 @@ pub fn run() {
             modules::system::volume_key_up,
             modules::system::volume_key_down,
             modules::system::volume_key_mute,
-            modules::voice::record_and_transcribe_voice
+            modules::voice::record_and_transcribe_voice,
+            get_wake_word_settings,
+            start_wake_word,
+            stop_wake_word,
+            save_wake_word_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
