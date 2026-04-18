@@ -108,9 +108,8 @@ fn listener_loop(
                 }
 
                 let reader = BufReader::new(stdout);
-                let mut last_match = std::time::Instant::now()
-                    .checked_sub(Duration::from_secs(COOLDOWN_SECS + 1))
-                    .unwrap_or(std::time::Instant::now());
+                // Use Option<Instant> to track last match; None means "never matched"
+                let mut last_match: Option<std::time::Instant> = None;
 
                 for line in reader.lines() {
                     if stop_flag.load(Ordering::SeqCst) {
@@ -128,13 +127,16 @@ fn listener_loop(
 
                     println!("[wake_word] whisper: {}", line);
 
-                    if last_match.elapsed() < Duration::from_secs(COOLDOWN_SECS) {
+                    if last_match
+                        .map(|t| t.elapsed() < Duration::from_secs(COOLDOWN_SECS))
+                        .unwrap_or(false)
+                    {
                         continue;
                     }
 
                     if phrase_matches(&line, &phrase) {
                         println!("[wake_word] phrase detected: '{}'", phrase);
-                        last_match = std::time::Instant::now();
+                        last_match = Some(std::time::Instant::now());
                         let _ = app.emit("wake-word-detected", ());
                     }
                 }
@@ -174,11 +176,11 @@ fn spawn_whisper_stream() -> Result<Child, String> {
             "-m",
             &model_path(),
             "--step",
-            "2000",
+            "2000", // audio step size in ms (slide window by 2 seconds)
             "--length",
-            "4000",
+            "4000", // audio window length in ms (4-second context)
             "-vth",
-            "0.4",
+            "0.4", // voice activity detection threshold (0–1)
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

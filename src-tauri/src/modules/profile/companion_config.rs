@@ -144,6 +144,8 @@ impl CompanionConfig {
 
         if self.wake_word_phrase.trim().is_empty() {
             self.wake_word_phrase = format!("hey {}", self.blob_name.to_lowercase());
+        } else {
+            self.wake_word_phrase = self.wake_word_phrase.trim().to_lowercase();
         }
 
         self

@@ -1301,8 +1301,10 @@ function BubbleApp() {
                       onChange={(e) => setWakeWordDraft(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
-                          const phrase = wakeWordDraft.trim() || wakeWordPhrase;
-                          void saveWakeWordSettings(true, phrase);
+                          void saveWakeWordSettings(
+                            true,
+                            wakeWordDraft.trim() || wakeWordPhrase
+                          );
                         }
                         if (e.key === "Escape") {
                           setWakeWordDraft(null);
@@ -1314,8 +1316,10 @@ function BubbleApp() {
                       className="tiny-link"
                       style={{ marginLeft: "4px" }}
                       onClick={() => {
-                        const phrase = (wakeWordDraft ?? "").trim() || wakeWordPhrase;
-                        void saveWakeWordSettings(true, phrase);
+                        void saveWakeWordSettings(
+                          true,
+                          wakeWordDraft.trim() || wakeWordPhrase
+                        );
                       }}
                       type="button"
                     >
