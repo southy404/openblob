@@ -32,6 +32,10 @@ src-tauri/models/*.onnx
 src-tauri/models/*.json
 src-tauri/gen/
 
+# runtime debug
+*.trace
+*.dump
+
 # IDE
 .vscode/
 .idea/

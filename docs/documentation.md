@@ -25,10 +25,11 @@
 9. [AI & Model Integration](#ai--model-integration)
 10. [Configuration & Profiles](#configuration--profiles)
 11. [Global Shortcuts](#global-shortcuts)
-12. [Contributing](#contributing)
-13. [Known Issues](#known-issues)
-14. [Roadmap](#roadmap)
-15. [License](#license)
+12. [Blob Connectors](#blob-connectors)
+13. [Contributing](#contributing)
+14. [Known Issues](#known-issues)
+15. [Roadmap](#roadmap)
+16. [License](#license)
 
 ---
 
@@ -44,6 +45,7 @@ It goes beyond a simple chatbot — it acts as an **operating-layer assistant** 
 - remember context across sessions
 - speak to you using TTS
 - grow with you through a configurable companion identity
+- be reached from anywhere via Telegram, Discord, Slack, and Email
 
 **Core design principle:**
 
@@ -73,13 +75,20 @@ OpenBlob is split into three major layers:
 │             Runtime Layer (Rust)                 │
 │  Command routing · Browser automation           │
 │  Screen capture · Transcript · Memory · TTS     │
+│  External command server (localhost:7842)        │
+└─────────────────────────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────┐
+│          Blob Connectors Layer (Python)          │
+│  Telegram · Discord · Slack · Email             │
+│  Memory bridge · Ollama fallback                │
 └─────────────────────────────────────────────────┘
 ```
 
 ### Data Flow
 
 ```
-User Input (text / voice)
+User Input (text / voice / external channel)
        │
        ▼
 Command Router
@@ -92,7 +101,7 @@ Direct Action   Ollama Fallback
   │               │
   └────┬──────────┘
        │
-Subtitle Output + TTS
+Subtitle Output + TTS + Channel Response
 ```
 
 ---
@@ -109,6 +118,7 @@ Subtitle Output + TTS
 | Tauri CLI      | v2       | via `cargo install tauri-cli`    |
 | Ollama         | latest   | [ollama.com](https://ollama.com) |
 | Chrome or Edge | any      | Required for browser automation  |
+| Python         | ≥ 3.11   | Required for Blob Connectors     |
 
 ### Install & Run
 
@@ -138,7 +148,7 @@ npm run build
 ### First Launch Notes
 
 - On first run, Windows Defender or SmartScreen may show warnings — this is expected due to system-level access (keyboard hooks, screen capture, browser debugging).
-- Allow the app through your antivirus if you trust it. See [Security Notice](#security-notice).
+- Allow the app through your antivirus if you trust it.
 - Chrome/Edge must have the remote debugging port `9222` available for browser automation.
 
 ---
@@ -189,7 +199,7 @@ openblob/
 │       │   │   └── paths.rs
 │       │   ├── browser_automations.rs
 │       │   ├── screen_capture.rs
-│       │   ├── transcript/     # System audio capture + transcription pipeline
+│       │   ├── transcript/
 │       │   ├── session_memory.rs
 │       │   ├── context.rs
 │       │   ├── context_resolver.rs
@@ -200,6 +210,18 @@ openblob/
 │           └── commands/
 │               ├── en.json
 │               └── de.json
+│
+├── blob_connectors/            # External channel connectors (Python)
+│   ├── base.py                 # Message model + BlobConnector interface
+│   ├── run.py                  # Connector runner + AI handler
+│   ├── requirements.txt
+│   ├── .env.example
+│   ├── README.md
+│   └── connectors/
+│       ├── telegram.py
+│       ├── slack.py
+│       ├── discord_connector.py
+│       └── email.py
 │
 ├── docs/                       # Architecture + design docs
 ├── tools/piper/                # Bundled TTS binary
@@ -225,19 +247,19 @@ The command router is the brain of OpenBlob. It processes every user input and d
 4. System / app commands   → launch, volume, media
 5. Snip / vision commands  → screenshot, explain, translate
 6. Streaming commands      → Netflix, YouTube playback
-7. Ollama fallback          → ask, explain, translate (model)
+7. Ollama fallback         → ask, explain, translate (model)
 ```
 
 #### Key modules
 
-| File           | Purpose                                       |
-| -------------- | --------------------------------------------- |
-| `intents.rs`   | Maps normalized input to recognized intents   |
-| `matchers.rs`  | Pattern matching per command group            |
-| `fuzzy.rs`     | Fuzzy string similarity for tolerant matching |
-| `parser.rs`    | Tokenizes and classifies input                |
-| `normalize.rs` | Lowercasing, trimming, language normalization |
-| `types.rs`     | `CommandRoute`, `RouteResult`, `Intent` types |
+| File           | Purpose                                              |
+| -------------- | ---------------------------------------------------- |
+| `intents.rs`   | Maps normalized input to recognized intents          |
+| `matchers.rs`  | Pattern matching per command group                   |
+| `fuzzy.rs`     | Fuzzy string similarity for tolerant matching        |
+| `parser.rs`    | Tokenizes and classifies input                       |
+| `normalize.rs` | Lowercasing, trimming, language normalization        |
+| `types.rs`     | `CompanionAction`, `IntentKind`, `IntentScore` types |
 
 #### Extending the router
 
@@ -247,6 +269,19 @@ To add a new command:
 2. Add matchers in `matchers.rs`
 3. Add i18n keys to `i18n/commands/en.json` and `de.json`
 4. Wire the handler in `mod.rs`
+
+#### External command server
+
+OpenBlob exposes a local HTTP server on `localhost:7842` that accepts commands from external sources (Blob Connectors). Commands go through the same pipeline as voice/text input from the UI.
+
+```
+POST http://localhost:7842/command
+Content-Type: application/json
+
+{ "input": "open spotify", "channel": "telegram" }
+```
+
+The server is started automatically when OpenBlob launches and only listens on localhost. External connectors fall back to Ollama automatically if this server is not available.
 
 ---
 
@@ -276,35 +311,11 @@ chrome.exe --remote-debugging-port=9222
 
 > OpenBlob attempts to launch the browser automatically with the correct flags. If it fails, start Chrome/Edge manually with the flag above.
 
-#### Current limitations
-
-- Requires the debug browser to be running before browser commands work
-- Some commands may be less reliable after page navigations
-- Browser binary paths are currently hardcoded — this is being improved
-
 ---
 
 ### Screen & Vision
 
 **Location:** `src-tauri/src/modules/screen_capture.rs` · `snip_session.rs`
-
-The snip system enables screenshot-based interactions.
-
-#### Workflow
-
-```
-User triggers snip
-       │
-Snip overlay opens
-       │
-User selects screen region
-       │
-Image captured with context metadata (active app, window title)
-       │
-Passed to Ollama vision model (gemma3 / qwen2.5vl)
-       │
-Returns structured result
-```
 
 #### Analysis modes
 
@@ -316,59 +327,34 @@ Returns structured result
 | Search      | Generate a useful search query from the content          |
 | Game assist | Detect game UI / quest text / errors and suggest actions |
 
-#### Vision model setup
-
-```bash
-ollama pull gemma3        # default vision model
-ollama pull qwen2.5vl:7b  # higher quality alternative
-```
-
-Set the active model in app configuration or the Rust backend config.
-
 ---
 
 ### Transcript System
 
 **Location:** `src-tauri/src/modules/transcript/` · `src/windows/transcript/`
 
-The transcript system adds a **continuous listening and transcription pipeline** to OpenBlob. It allows the companion to capture system audio, transcribe it locally, surface the live text in a dedicated window, and optionally run AI post-processing to produce cleaner output, summaries, and speaker-style blocks.
-
-This turns OpenBlob into more than a command layer — it becomes a **local meeting, podcast, and media understanding tool**.
-
-#### Supported input mode
-
-| Source        | Status | Notes                                       |
-| ------------- | ------ | ------------------------------------------- |
-| System audio  | ✅     | Implemented via Windows loopback capture    |
-| Microphone    | ⚠️     | Planned, not yet implemented in the runtime |
-| Mixed capture | ⚠️     | Planned future mode for mic + system blend  |
+The transcript system adds a **continuous listening and transcription pipeline** to OpenBlob using Windows WASAPI loopback capture and a local Whisper CLI.
 
 #### End-to-end flow
 
 ```
 System audio (loopback)
-        │
-        ▼
-WASAPI capture
-        │
-        ▼
-Mono chunk buffering
-        │
-        ▼
-Temporary WAV write
-        │
-        ▼
-Local Whisper CLI
-        │
+        │ WASAPI capture
+        │ Mono chunk buffering
+        │ Temporary WAV write
+        │ Local Whisper CLI
         ▼
 Transcript segments
-        │
         ├── Live transcript window
         ├── Session persistence
         └── AI post-processing
+             ├── Faithful transcript
+             ├── Speaker-style blocks
+             ├── Summary
+             └── Action items
 ```
 
-#### Core responsibilities
+#### Core files
 
 | File                   | Purpose                                                      |
 | ---------------------- | ------------------------------------------------------------ |
@@ -376,124 +362,8 @@ Transcript segments
 | `runtime.rs`           | Worker loop, chunk merge, transcription execution            |
 | `transcript_engine.rs` | WAV writing + Whisper CLI execution                          |
 | `session.rs`           | Active transcript session lifecycle and segment append       |
-| `summary.rs`           | Lightweight session summary support                          |
 | `processor.rs`         | AI-based cleanup, manuscript, speaker grouping, action items |
 | `transcript_store.rs`  | Markdown + JSON persistence for finished sessions            |
-| `types.rs`             | Shared transcript structs and enums                          |
-
-#### Audio capture design
-
-The current implementation uses **WASAPI loopback** on Windows. This means OpenBlob listens to the audio being played by the system rather than recording the microphone. That makes it suitable for:
-
-- Google Meet / Zoom / Teams playback
-- YouTube videos and podcasts
-- lectures, tutorials, and streamed media
-- browser-based voice conversations
-
-#### Chunking strategy
-
-The runtime avoids sending tiny fragments to Whisper. Instead it builds larger chunks for better quality and lower overhead.
-
-| Parameter       | Current role                                 |
-| --------------- | -------------------------------------------- |
-| target duration | preferred flush threshold for a merged chunk |
-| max duration    | upper bound to prevent too much latency      |
-| final flush     | sends remaining buffered audio when stopping |
-
-This improves transcript stability versus very small chunk sizes, especially for natural speech.
-
-#### Whisper integration
-
-OpenBlob currently uses a **local Whisper CLI** binary and local model files.
-
-Example path layout:
-
-```
-D:\openblob\voice\bin\whisper-cli.exe
-D:\openblob\voice\models\ggml-base.en.bin
-```
-
-The transcription engine:
-
-- validates executable, model, and input paths
-- writes a temporary WAV file for each merged chunk
-- runs Whisper locally
-- reads the generated transcript output
-- normalizes punctuation and spacing
-- removes temporary output files again
-
-#### Session model
-
-Each transcript run is represented as a `TranscriptSession`.
-
-Typical data includes:
-
-- session id
-- source kind
-- start / end timestamps
-- active app / window context
-- ordered transcript segments
-
-Each segment contains:
-
-- `start_ms`
-- `end_ms`
-- `text`
-- optional speaker field
-- optional confidence field
-
-#### Live events
-
-The transcript runtime communicates with the frontend over Tauri events.
-
-| Event                  | Purpose                                 |
-| ---------------------- | --------------------------------------- |
-| `transcript://segment` | Emits a new transcript segment          |
-| `transcript://error`   | Emits runtime or transcription failures |
-
-These events drive the live transcript window and quick-menu transcript status.
-
-#### AI post-processing
-
-After capture, the transcript can be processed into more useful formats. The processing layer is designed to preserve the original meaning while improving readability.
-
-Outputs include:
-
-| Output type         | Purpose                                                      |
-| ------------------- | ------------------------------------------------------------ |
-| Faithful transcript | cleaner readable transcript with minimal distortion          |
-| Speaker blocks      | grouped conversation blocks such as `Speaker 1`, `Speaker 2` |
-| Summary             | compact overview of what was discussed                       |
-| Action items        | extracted tasks, follow-ups, or decisions                    |
-
-This layer is especially useful for:
-
-- daily standups
-- recorded meetings
-- lectures and workshops
-- podcast / video note extraction
-
-#### Storage behavior
-
-Transcript sessions are persisted locally as structured data and markdown exports.
-
-Typical outputs:
-
-```
-openblob-data/transcripts/<session-id>/session.json
-openblob-data/transcripts/<session-id>/transcript.md
-```
-
-Temporary chunk audio is used during processing, but the current direction is to **avoid keeping unnecessary audio artifacts** after a session completes. This keeps the feature practical and prevents data clutter.
-
-#### Design goals
-
-The transcript module is being shaped around four priorities:
-
-1. local-first processing
-2. readable output over raw noise
-3. optional AI enhancement after capture
-4. architecture ready for future speaker diarization and memory integration
 
 ---
 
@@ -501,15 +371,17 @@ The transcript module is being shaped around four priorities:
 
 **Location:** `src-tauri/src/modules/memory/`
 
-OpenBlob uses a layered memory architecture.
+OpenBlob uses a layered memory architecture that persists locally as JSON files. All memory files are also read by the Blob Connectors layer to provide context to external channel conversations.
 
 #### Memory layers
 
-| Layer    | File                 | Purpose                                                   |
-| -------- | -------------------- | --------------------------------------------------------- |
-| Episodic | `episodic_memory.rs` | Logs of past interactions and events                      |
-| Semantic | `semantic_memory.rs` | Recurring facts: known apps, topics, patterns             |
-| Session  | `session_memory.rs`  | Runtime context: last command, last search, browser state |
+| Layer       | File                     | Purpose                                                   |
+| ----------- | ------------------------ | --------------------------------------------------------- |
+| Episodic    | `episodic_memory.jsonl`  | Timestamped log of past interactions and events           |
+| Semantic    | `semantic_memory.json`   | Recurring facts: known apps, topics, communication style  |
+| Session     | `session_memory.rs`      | Runtime context: last command, last search, browser state |
+| Personality | `personality_state.json` | Energy, curiosity, affection, playfulness, focus bias     |
+| Bonding     | `bonding_state.json`     | Relationship level, trust score, shared session count     |
 
 #### Design rule
 
@@ -517,17 +389,32 @@ OpenBlob uses a layered memory architecture.
 
 Memory is loaded and saved asynchronously. If a memory operation fails, core commands still execute.
 
-#### Storage
+#### Episodic memory entry structure
 
-Memory is persisted to local JSON files via `storage/json_store.rs`. File paths are resolved through `storage/paths.rs`.
+Each entry in `episodic_memory.jsonl` contains:
+
+```json
+{
+  "version": 1,
+  "id": "ep_1234567890",
+  "timestamp": "2025-04-19T22:00:00Z",
+  "kind": "external_command",
+  "app_name": "telegram",
+  "context_domain": "external",
+  "user_input": "open spotify",
+  "summary": "OpenApp { target: spotify }",
+  "outcome": "success",
+  "importance": 0.6
+}
+```
+
+The `app_name` field reflects the channel (telegram, discord, slack, email, or desktop) so the blob knows where interactions originated.
 
 ---
 
 ### Companion Identity
 
 **Location:** `src-tauri/src/modules/profile/companion_config.rs`
-
-OpenBlob maintains a configurable identity layer for its companion persona.
 
 #### Identity fields
 
@@ -537,13 +424,7 @@ OpenBlob maintains a configurable identity layer for its companion persona.
 | `owner_name`         | ""      | Your name — used in self-reference |
 | `preferred_language` | "en"    | Controls i18n command parsing      |
 
-#### Editing identity
-
-Identity is editable in the **Dev Window** under the Identity section. Full onboarding UI is planned for a future release.
-
-#### Current status
-
-Identity values are stored and editable. Not every answer path is fully identity-aware yet — this is an ongoing alignment task across the codebase.
+Identity is editable in the **Dev Window**. Both the desktop UI and Blob Connectors read these values — the blob will introduce itself by name and address you by name across all channels.
 
 ---
 
@@ -551,36 +432,16 @@ Identity values are stored and editable. Not every answer path is fully identity
 
 **Location:** `src-tauri/src/modules/tts/`
 
-OpenBlob includes native TTS using bundled voice models.
-
-#### Engines
-
-| Engine | File        | Notes                                  |
-| ------ | ----------- | -------------------------------------- |
-| Piper  | `piper.rs`  | Fast, local ONNX-based voice synthesis |
-| Kokoro | `kokoro.rs` | Alternative engine (experimental)      |
-
-#### Bundled models
-
-```
-src-tauri/models/
-├── de_DE-thorsten-medium.onnx.json   # German voice
-└── en_US-lessac-high.onnx.json       # English voice
-```
-
-#### TTS manager
-
-`manager.rs` handles:
-
-- selecting the correct engine and model based on language
-- queuing and interrupting speech
-- toggling TTS on/off from the bubble UI
+| Engine | Notes                                  |
+| ------ | -------------------------------------- |
+| Piper  | Fast, local ONNX-based voice synthesis |
+| Kokoro | Alternative engine (experimental)      |
 
 ---
 
 ## Frontend Windows
 
-Each UI surface in OpenBlob is a separate React app running in its own Tauri window.
+Each UI surface is a separate React app running in its own Tauri window.
 
 | Window            | Path                         | Purpose                                               |
 | ----------------- | ---------------------------- | ----------------------------------------------------- |
@@ -592,159 +453,31 @@ Each UI surface in OpenBlob is a separate React app running in its own Tauri win
 | **Snip Panel**    | `src/windows/snip-panel/`    | Analysis results for screenshots                      |
 | **Timer Overlay** | `src/windows/timer-overlay/` | Countdown/timer utility                               |
 
-### Window communication
-
-Windows communicate via Tauri's event system:
-
-```typescript
-// Emit from any window
-import { emit } from "@tauri-apps/api/event";
-await emit("snip-complete", { imagePath: "..." });
-
-// Listen in any window
-import { listen } from "@tauri-apps/api/event";
-await listen("snip-complete", (event) => {
-  console.log(event.payload);
-});
-```
-
-### Tauri invoke (calling Rust from frontend)
-
-```typescript
-import { invoke } from "@tauri-apps/api/core";
-
-// Execute a user command
-const result = await invoke("handle_command", { input: "open youtube" });
-
-// Get current companion config
-const config = await invoke("get_companion_config");
-```
-
----
-
-## Command Reference
-
-OpenBlob uses natural language parsing. Commands are fuzzy-matched — exact wording is not required. German and English are both supported.
-
-### Browser & Navigation
-
-| Command              | Description              |
-| -------------------- | ------------------------ |
-| `google <query>`     | Google search            |
-| `youtube <query>`    | YouTube search           |
-| `open <url>`         | Open a website           |
-| `go back` / `zurück` | Navigate back            |
-| `open new tab`       | New browser tab          |
-| `close tab`          | Close current tab        |
-| `click first result` | Click first visible link |
-| `type <text>`        | Type into active field   |
-| `scroll down / up`   | Scroll current page      |
-
-### System & Apps
-
-| Command                         | Description        |
-| ------------------------------- | ------------------ |
-| `open <app>`                    | Launch application |
-| `volume up / down`              | System volume      |
-| `mute / unmute`                 | Toggle audio       |
-| `next track` / `previous track` | Media navigation   |
-| `play music`                    | Media play         |
-
-### Screenshot & Vision
-
-| Command          | Description                           |
-| ---------------- | ------------------------------------- |
-| `screenshot`     | Start snip mode                       |
-| `explain this`   | Analyze current screenshot            |
-| `translate this` | Translate on-screen text              |
-| `search this`    | Generate search query from screenshot |
-
-### Utility
-
-| Command                 | Description     |
-| ----------------------- | --------------- |
-| `what time is it`       | Current time    |
-| `what date is it`       | Current date    |
-| `weather today`         | Current weather |
-| `start timer 5 minutes` | Start a timer   |
-| `coin flip`             | Flip a coin     |
-
-### Streaming
-
-| Command                            | Description            |
-| ---------------------------------- | ---------------------- |
-| `play <title> on netflix`          | Open Netflix title     |
-| `play something <mood> on netflix` | Netflix recommendation |
-| `next video`                       | Skip to next           |
-| `forward <seconds>`                | Seek forward           |
-
-### Transcript
-
-| Command              | Description                               |
-| -------------------- | ----------------------------------------- |
-| `start transcript`   | Start system audio transcription          |
-| `stop transcript`    | Stop the active transcript runtime        |
-| `open transcript`    | Open the transcript window                |
-| `process transcript` | Generate cleaned AI output from a session |
-| `save transcript`    | Persist the current transcript session    |
-
-> **Note:** Commands like `youtube lofi beats`, `play lofi beats on youtube`, and `search youtube for lofi beats` all resolve to the same action.
-
 ---
 
 ## Tauri Bridge Layer
 
-**Location:** `src-tauri/src/main.rs`
+**Location:** `src-tauri/src/lib.rs`
 
-The Tauri layer connects the React frontend to the Rust backend.
+The Tauri layer connects the React frontend to the Rust backend, and also hosts the external command server used by Blob Connectors.
 
-### Registering Tauri commands
+### External command server (Blob Connectors bridge)
 
-```rust
-// In main.rs
-tauri::Builder::default()
-    .invoke_handler(tauri::generate_handler![
-        handle_command,
-        get_companion_config,
-        update_companion_config,
-        start_snip,
-        start_transcript,
-        stop_transcript,
-        get_transcript_status,
-        process_transcript,
-        // ...
-    ])
-    .run(tauri::generate_context!())
-    .expect("error running OpenBlob");
-```
-
-### Registering global shortcuts
+The server is started in the `.setup()` block using axum and the AppHandle is passed via state so commands go through the full pipeline:
 
 ```rust
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
+// Started automatically in .setup()
+tauri::async_runtime::spawn(async move {
+    let router = Router::new()
+        .route("/command", post(handle_external_command))
+        .with_state(ExternalCommandState { app: app_handle });
 
-app.global_shortcut().register("CTRL+SPACE", || {
-    // toggle bubble window
-})?;
+    let listener = TcpListener::bind("127.0.0.1:7842").await.unwrap();
+    axum::serve(listener, router).await.unwrap();
+});
 ```
 
-### Window management
-
-Windows are opened via `open.ts` files in each window directory. This now includes dedicated windows like the transcript window, which follows the same pattern as the bubble, dev, snip, and quick-menu surfaces:
-
-```typescript
-// src/windows/bubble/open.ts
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-
-export function openBubble() {
-  new WebviewWindow("bubble", {
-    url: "bubble.html",
-    transparent: true,
-    alwaysOnTop: true,
-    decorations: false,
-  });
-}
-```
+The handler resolves context, runs `run_command_pipeline`, writes an episodic memory entry, and returns the result — identical to how voice commands are processed.
 
 ---
 
@@ -762,38 +495,26 @@ OpenBlob integrates with **Ollama** for local model inference.
 
 ### When Ollama is used
 
-Ollama is invoked as a **fallback only** when no deterministic route matches the input.
-
-Use cases:
-
-- open-ended questions
-- general explanations
-- translation (when no local route is active)
-- vision analysis (screenshot flows)
-- transcript cleanup, speaker grouping, summaries, and action extraction
-
-### Model configuration
-
-Adjust default models in the Rust backend configuration. A settings UI for model selection is planned.
+Ollama is invoked as a **fallback only** when no deterministic route matches the input — both in the desktop UI and in Blob Connectors.
 
 ---
 
 ## Configuration & Profiles
 
-All persistent data lives in local JSON files managed by `storage/json_store.rs`.
+All persistent data lives in local JSON files under `%APPDATA%\OpenBlob\`.
 
 ### Data categories
 
-| Category         | File                         | Contents                                           |
-| ---------------- | ---------------------------- | -------------------------------------------------- |
-| Companion config | `companion_config.json`      | Name, language, future wake-word                   |
-| User profile     | `user_profile.json`          | Owner name, app familiarity                        |
-| Episodic memory  | `episodic_memory.json`       | Interaction history                                |
-| Semantic memory  | `semantic_memory.json`       | Learned facts and patterns                         |
-| Onboarding state | `onboarding_state.json`      | Reserved for future onboarding                     |
-| Transcript data  | `openblob-data/transcripts/` | Session JSON, markdown, temporary processing files |
-
-File paths are resolved via `storage/paths.rs`, typically inside the app's local data directory.
+| Category         | Path                            | Contents                                   |
+| ---------------- | ------------------------------- | ------------------------------------------ |
+| Companion config | `config/companion_config.json`  | Name, language, future wake-word           |
+| User profile     | `config/user_profile.json`      | Owner name, app familiarity                |
+| Episodic memory  | `memory/episodic_memory.jsonl`  | Timestamped interaction log (JSONL format) |
+| Semantic memory  | `memory/semantic_memory.json`   | Learned facts and patterns                 |
+| Personality      | `memory/personality_state.json` | Energy, affection, playfulness, focus bias |
+| Bonding          | `memory/bonding_state.json`     | Relationship level, trust score            |
+| Onboarding state | `config/onboarding_state.json`  | Reserved for future onboarding             |
+| Transcript data  | `openblob-data/transcripts/`    | Session JSON, markdown, processing files   |
 
 ---
 
@@ -805,36 +526,134 @@ File paths are resolved via `storage/paths.rs`, typically inside the app's local
 | `ALT + M`        | Toggle voice input      |
 | `CTRL + ALT + S` | Start snip / screenshot |
 
-> `CTRL + SPACE` is currently slightly unstable and being improved.
-
 ---
 
-## Security Notice
+## Blob Connectors
 
-OpenBlob uses deep system integration. Some security software may flag it.
+Blob Connectors is a Python layer that bridges external messaging channels to the OpenBlob core. It lives in the `blob_connectors/` directory and runs as a separate process alongside OpenBlob.
 
-**Capabilities that may trigger warnings:**
+### How it works
 
-- Global keyboard shortcuts (keyboard hooks)
-- Screen capture and region snipping
-- Input simulation (keyboard and mouse)
-- Active window and process inspection
-- Browser automation via remote debugging
-- Local AI model execution
+```
+Telegram / Discord / Slack / Email
+              │
+     blob_connectors/run.py
+              │
+    ┌─────────┴──────────────┐
+    │                        │
+OpenBlob running?       Ollama fallback
+POST localhost:7842     POST localhost:11434
+    │
+run_command_pipeline (Rust)
+    │
+Desktop action + episodic memory entry
+```
 
-**What OpenBlob does NOT do:**
+When OpenBlob is running, commands like `open spotify` sent via Telegram are executed on the desktop exactly as if typed into the bubble. When OpenBlob is not running, the connector falls back to the Ollama model for conversational responses.
 
-- Send your data to external servers (unless you configure an external API or model)
-- Store any data outside your local machine
-- Run hidden background processes beyond what Tauri requires
+### Quickstart
 
-**OpenBlob is fully open-source.** You can read every line of code before running it.
+```bash
+cd blob_connectors
+pip install -r requirements.txt
+cp .env.example .env   # fill in tokens
+python run.py
+```
 
-If you encounter antivirus blocks:
+### Supported channels
 
-1. Add the OpenBlob directory to your antivirus exclusion list
-2. Allow the app through Windows Defender
-3. Ensure port `9222` is not blocked by a firewall (needed for browser automation)
+| Channel  | Library             | Auth method            | Server required  |
+| -------- | ------------------- | ---------------------- | ---------------- |
+| Telegram | python-telegram-bot | BotFather token        | No               |
+| Discord  | discord.py          | Developer Portal token | No               |
+| Slack    | slack-bolt          | Bot token + App token  | No (Socket Mode) |
+| Email    | stdlib IMAP/SMTP    | App password           | No               |
+
+### Environment variables
+
+```dotenv
+# Telegram
+TELEGRAM_BOT_TOKEN=
+
+# Slack
+SLACK_BOT_TOKEN=
+SLACK_APP_TOKEN=
+
+# Discord
+DISCORD_BOT_TOKEN=
+
+# Email
+EMAIL_ADDRESS=
+EMAIL_PASSWORD=
+IMAP_HOST=imap.gmail.com
+SMTP_HOST=smtp.gmail.com
+IMAP_PORT=993
+SMTP_PORT=587
+```
+
+Only channels with tokens set are started. You can run just one connector to start.
+
+### Message normalization
+
+All channels normalize to the same `Message` object before reaching the AI handler:
+
+```python
+@dataclass
+class Message:
+    session_id: str     # unique per user/conversation
+    user_id: str        # sender identifier in that system
+    text: str           # cleaned message content
+    channel: str        # "telegram" | "discord" | "slack" | "email"
+    username: str       # display name
+    message_id: str
+    timestamp: datetime
+    attachments: list[Attachment]
+    raw: Any            # original payload for channel-specific features
+```
+
+### Memory context
+
+Before each Ollama call, the connector reads OpenBlob's local memory files and builds a rich system prompt:
+
+- blob name and owner name from `companion_config.json` and `user_profile.json`
+- communication style, favorite apps, recurring topics from `semantic_memory.json`
+- recent interaction history from `episodic_memory.jsonl`
+- current mood derived from `personality_state.json`
+- relationship level and trust from `bonding_state.json`
+- current channel
+
+This means the blob knows its own name, addresses you by name, and has context from desktop usage — across all channels.
+
+### Adding a new connector
+
+Subclass `BlobConnector` and implement three methods:
+
+```python
+from blob_connectors.base import BlobConnector, Message
+
+class MyConnector(BlobConnector):
+    def __init__(self):
+        super().__init__("myplatform")
+
+    async def receive_message(self, raw) -> Message | None:
+        # normalize raw payload to Message
+        # return None to ignore this message
+
+    async def send_response(self, original: Message, response: str) -> None:
+        # send response back to the user
+
+    async def start(self) -> None:
+        # start polling / webhook / socket
+
+    async def stop(self) -> None:
+        # clean shutdown
+```
+
+Then register it in `build_connectors()` in `run.py`.
+
+### Episodic memory from external channels
+
+When a command is executed via an external connector, the Rust backend writes an episodic memory entry with `app_name` set to the channel name. This means the blob's memory reflects activity across all surfaces — desktop, Telegram, Discord, Slack, and Email — in a single unified log.
 
 ---
 
@@ -850,25 +669,26 @@ All contributions are welcome — code, design, documentation, ideas, and testin
 
 ### Areas open for contribution
 
-| Area        | Examples                                     |
-| ----------- | -------------------------------------------- |
-| Core        | New commands, better routing, bug fixes      |
-| Frontend    | UI polish, new windows, animations           |
-| AI          | Better prompting, model routing, agent ideas |
-| TTS / Voice | Voice pipeline improvements, new models      |
-| Browser     | More reliable automation, consent handling   |
-| Memory      | Memory inspector UI, smarter retrieval       |
-| Mini games  | New game modes, blob interactions            |
-| i18n        | New language support beyond `en` / `de`      |
-| Tests       | Unit + integration tests across Rust modules |
-| Docs        | Architecture docs, guides, examples          |
+| Area            | Examples                                                         |
+| --------------- | ---------------------------------------------------------------- |
+| Core            | New commands, better routing, bug fixes                          |
+| Frontend        | UI polish, new windows, animations                               |
+| AI              | Better prompting, model routing, agent ideas                     |
+| TTS / Voice     | Voice pipeline improvements, new models                          |
+| Browser         | More reliable automation, consent handling                       |
+| Memory          | Memory inspector UI, smarter retrieval, RAG over episodic memory |
+| Mini games      | New game modes, blob interactions                                |
+| i18n            | New language support beyond `en` / `de`                          |
+| Tests           | Unit + integration tests across Rust modules                     |
+| Docs            | Architecture docs, guides, examples                              |
+| Blob Connectors | New channel connectors, calendar/tool integrations, WhatsApp     |
 
 ### Development tips
 
 - Run `npm run tauri dev` for hot-reload during development
 - Rust changes require a rebuild — use `cargo check` for faster feedback
 - Each window is independent — you can work on one UI surface without affecting others
-- Check `docs/architecture.md` for system-level design notes
+- The external command server on `localhost:7842` starts automatically with OpenBlob
 
 ---
 
@@ -876,7 +696,6 @@ All contributions are welcome — code, design, documentation, ideas, and testin
 
 | Area                           | Status                                                |
 | ------------------------------ | ----------------------------------------------------- |
-| `CTRL + SPACE` global shortcut | ⚠️ Slightly unstable, WIP                             |
 | Snip capture region            | ⚠️ May only trigger reliably on second attempt        |
 | Quick menu window              | ⚠️ Event/capability flow being refined after refactor |
 | Browser automation reliability | ⚠️ Some commands less reliable after recent refactors |
@@ -888,7 +707,7 @@ All contributions are welcome — code, design, documentation, ideas, and testin
 | Identity propagation           | ⚠️ Not all answer paths are identity-aware yet        |
 | Transcript language quality    | ⚠️ English currently performs better than German      |
 | Speaker separation             | ⚠️ AI-grouped, not true acoustic diarization yet      |
-| Transcript post-processing     | ⚠️ Still being tuned for higher fidelity              |
+| Connector session persistence  | ⚠️ Session history lost on connector restart          |
 
 ---
 
@@ -919,8 +738,9 @@ All contributions are welcome — code, design, documentation, ideas, and testin
 - [ ] Better multi-app context awareness
 - [ ] Better transcript cleanup and faithful manuscript generation
 - [ ] Stronger AI-assisted speaker grouping and transcript understanding
+- [ ] Semantic memory retrieval over episodic history (RAG)
 
-### Phase 4 — Platform
+### Phase 4 — Platform & Connectors
 
 - [ ] Plugin / capability registry
 - [ ] Community skill packs
@@ -928,23 +748,29 @@ All contributions are welcome — code, design, documentation, ideas, and testin
 - [ ] Cross-platform exploration
 - [ ] Future microphone + mixed audio transcript modes
 - [ ] Transcript-to-memory and meeting intelligence workflows
+- [ ] Google Calendar integration via Blob Connectors
+- [ ] Voice message support in Telegram connector
+- [ ] WhatsApp and Matrix connectors
+- [ ] Per-channel permission system
 
 ---
 
 ## Tech Stack
 
-| Layer               | Technology                        |
-| ------------------- | --------------------------------- |
-| Frontend            | React + TypeScript + Vite         |
-| Desktop shell       | Tauri v2                          |
-| Backend runtime     | Rust                              |
-| AI inference        | Ollama (multi-model)              |
-| Vision models       | gemma3 / qwen2.5vl / llama vision |
-| Motion / animations | Framer Motion                     |
-| TTS                 | Piper (ONNX) + Kokoro             |
-| Speech-to-text      | Whisper CLI (local)               |
-| Audio capture       | Windows WASAPI loopback           |
-| Platform            | Windows 10 / 11                   |
+| Layer                   | Technology                        |
+| ----------------------- | --------------------------------- |
+| Frontend                | React + TypeScript + Vite         |
+| Desktop shell           | Tauri v2                          |
+| Backend runtime         | Rust                              |
+| External command server | axum (localhost:7842)             |
+| AI inference            | Ollama (multi-model)              |
+| Vision models           | gemma3 / qwen2.5vl / llama vision |
+| Motion / animations     | Framer Motion                     |
+| TTS                     | Piper (ONNX) + Kokoro             |
+| Speech-to-text          | Whisper CLI (local)               |
+| Audio capture           | Windows WASAPI loopback           |
+| Blob Connectors         | Python 3.11+ / aiohttp            |
+| Platform                | Windows 10 / 11                   |
 
 ---
 
