@@ -1,0 +1,28 @@
+# Blob Connectors — Dependencies
+#
+# Install all:
+#   pip install -r requirements.txt
+#
+# Install individual connectors:
+#   pip install python-telegram-bot        # Telegram
+#   pip install slack-bolt                 # Slack
+#   pip install "discord.py"               # Discord
+#   pip install beautifulsoup4             # Email (HTML parsing)
+
+# Telegram
+python-telegram-bot>=21.0
+
+# Slack
+slack-bolt>=1.18
+
+# Discord
+discord.py>=2.3
+
+# Email (HTML body parsing)
+beautifulsoup4>=4.12
+
+# Optional: .env file support
+python-dotenv>=1.0
+
+# Optional: GitIngest for code context
+# gitingest>=0.1

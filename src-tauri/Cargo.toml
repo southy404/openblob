@@ -42,6 +42,7 @@ crossbeam-channel = "0.5"
 anyhow = "1"
 thiserror = "2"
 bytemuck = "1"
+axum = "0.7"
 
 
 windows = { version = "0.52", features = [

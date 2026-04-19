@@ -42,6 +42,7 @@ OpenBlob aims to be different:
 - **extensible** — designed for modules, plugins, and future capability packs
 - **community-built** — welcoming to devs, designers, tinkerers, and curious builders
 - **high-quality UX** — polished, expressive, playful, and useful
+- **reachable everywhere** — talk to your blob via Telegram, Discord, Slack, or Email
 
 OpenBlob is currently in an **early but ambitious stage**:
 the foundation is there, the architecture is evolving, and the project is actively being reorganized to become more contributor-friendly and easier to extend.
@@ -50,7 +51,7 @@ the foundation is there, the architecture is evolving, and the project is active
 
 ## Documentation
 
-For a full technical deep-dive — architecture, core systems, Tauri bridge, module reference, transcript system, and contribution guide — see the developer documentation:
+For a full technical deep-dive — architecture, core systems, Tauri bridge, module reference, transcript system, blob connectors, and contribution guide — see the developer documentation:
 
 📄 **[docs/documentation.md](./docs/documentation.md)**
 
@@ -178,7 +179,7 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 
 ---
 
-### 🌦️ Daily Info & Smart Replies (NEW)
+### 🌦️ Daily Info & Smart Replies
 
 | Command                  | Description             |
 | ------------------------ | ----------------------- |
@@ -220,391 +221,91 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 - Language can be mixed (German + English)
 - Context is used to resolve intent (e.g. browser vs app vs game)
 - Some commands adapt based on the current active application
-- Some actions (like YouTube playback) use **keyboard-level control** instead of UI clicking for higher reliability
-- Commands like `play`, `pause`, or `skip` adapt based on current context (e.g. active YouTube tab)
-- Daily queries (time, weather, clothing) are handled locally and designed for quick interactions
-
-> Example:  
-> `youtube lofi beats`  
-> `play lofi beats on youtube`  
-> `search youtube for lofi beats`  
-> → all resolve to the same action
-
-## Features
-
-### Current / in progress
-
-| Feature                                                | Status |
-| ------------------------------------------------------ | ------ |
-| Desktop companion UI (transparent Tauri window)        | ✅     |
-| Organic blob avatar with Framer Motion                 | ✅     |
-| Emotional states (idle, thinking, love, sleepy, music) | ✅     |
-| Petting interaction → heart mode                       | ✅     |
-| Music-reactive dancing                                 | ✅     |
-| Sleep / hide / wake states                             | ✅     |
-| Voice + typed command routing                          | ✅     |
-| Ollama local AI integration (multi-model)              | ✅     |
-| Multi-model fallback system (vision + text)            | ✅     |
-| Active window / app context detection                  | ✅     |
-| Context-aware responses (games, apps, UI)              | ✅     |
-| Screen capture + region snipping                       | ⚠️     |
-| OCR, translation & explanation via screenshot          | ✅     |
-| Vision-based search query generation                   | ✅     |
-| Game UI / quest / error recognition via screenshot     | ✅     |
-| Browser automation via Chrome/Edge remote debugging    | ⚠️     |
-| Local app launching                                    | ✅     |
-| Steam game detection & launching                       | ✅     |
-| Input simulation (keyboard/mouse)                      | ⚠️     |
-| Clipboard integration                                  | ✅     |
-| Session memory for recent interactions                 | ✅     |
-| Natural command parsing (German + English)             | ✅     |
-| i18n groundwork for `en` / `de`                        | ✅     |
-| Speech bubble / companion bubble windows               | ✅     |
-| Quick menu as separate window                          | ⚠️     |
-| Transcript module (system audio capture)               | ✅     |
-| Transcript window (live + processed views)             | ✅     |
-| AI transcript processing (summary / action items)      | ✅     |
-| Temporary audio chunk cleanup                          | ✅     |
-| Global shortcut: CTRL + SPACE to toggle UI             | ✅     |
-| Hide & Seek mini game mode                             | ✅     |
-| Open-source-friendly structure cleanup                 | ✅     |
-
-> ⚠️ = feature exists but is still unstable, being refactored, or in active refinement
-
-### Planned
-
-- Settings UI
-- Plugin / capability system
-- Persistent long-term memory
-- Structured reasoning / tool-based agent system
-- Real speaker diarization / stronger voice separation
-- Microphone + mixed audio transcript modes
-- Meeting-first transcript workflows
-- More mini games and interactive blob modes
-- Personality system with persistent character state
-- Better onboarding experience
-- Community skill packs
-- More local model support
-- Cross-platform exploration
 
 ---
 
-## Known Issues / Rough Edges
+## 📡 Blob Connectors
 
-| Area                                     | Status                                                         |
-| ---------------------------------------- | -------------------------------------------------------------- |
-| Global shortcut (CTRL + SPACE)           | ⚠️ slightly unstable, WIP                                      |
-| Snip capture                             | ⚠️ region capture may only trigger reliably on the second try  |
-| Quick menu window                        | ⚠️ recent refactor, event/capability flow still being refined  |
-| Browser automation consent / permissions | ⚠️ needs clearer user controls                                 |
-| Browser automation reliability           | ⚠️ some commands no longer execute as reliably after refactors |
-| Multi-model routing                      | ⚠️ fallback logic still rough                                  |
-| Voice pipeline                           | ⚠️ occasional recognition failures                             |
-| Transcript word accuracy                 | ⚠️ depends on audio quality, model, and speaker clarity        |
-| Speaker assignment in transcript output  | ⚠️ currently inferred, not true diarization                    |
-| Context detection edge cases             | ⚠️ fallback to last known app isn't always correct             |
-| Error handling across modules            | ⚠️ inconsistent, needs improvement                             |
-| Settings UI                              | ❌ not yet implemented                                         |
+![Telegram](https://img.shields.io/badge/Telegram-26A5E4?style=flat-square&logo=telegram&logoColor=white)
+![Discord](https://img.shields.io/badge/Discord-5865F2?style=flat-square&logo=discord&logoColor=white)
+![Slack](https://img.shields.io/badge/Slack-4A154B?style=flat-square&logo=slack&logoColor=white)
+![Email](https://img.shields.io/badge/Email-EA4335?style=flat-square&logo=gmail&logoColor=white)
 
-> Expect rapid changes, rough edges, and ongoing refactors — this is early-stage, actively evolving software.
+OpenBlob can be reached from the outside world via **Blob Connectors** — a lightweight Python layer that bridges Telegram, Discord, Slack, and Email to the OpenBlob core running on your desktop.
 
----
+When OpenBlob is running, the connectors forward commands directly to the same pipeline used by voice and text input. When it is not running, they fall back to the local Ollama model automatically.
 
-## Tech Stack
+```
+Telegram / Discord / Slack / Email
+              │
+        Blob Connectors (Python)
+              │
+    ┌─────────┴─────────┐
+    │                   │
+OpenBlob running?    Ollama fallback
+(localhost:7842)     (localhost:11434)
+    │
+Command Router (Rust)
+    │
+Desktop action executed
+```
 
-| Layer          | Technology                               |
-| -------------- | ---------------------------------------- |
-| Frontend       | React + TypeScript + Vite                |
-| Desktop        | Tauri v2                                 |
-| Backend        | Rust                                     |
-| AI             | Ollama (multi-model orchestration)       |
-| Vision         | gemma3 / qwen2.5vl / llama vision models |
-| Transcript ASR | local Whisper CLI                        |
-| Motion         | Framer Motion                            |
-| Platform       | Windows 10 / 11                          |
+### What this enables
 
----
+- Send `open spotify` via Telegram → Spotify opens on your desktop
+- Ask a question in Discord → Blob answers using your local Ollama model
+- Email the blob → it replies with context from your memory
+- All channels share the same identity, memory, and personality
 
-## ⚠️ Security & Antivirus Notice
-
-OpenBlob is a **local-first desktop application with deep system integration**.
-
-Because of its capabilities, some antivirus or Windows security systems may flag or block parts of the application.
-
-This is expected behavior due to:
-
-- global keyboard shortcuts
-- screen capture & snipping
-- input simulation (keyboard / mouse)
-- active window & process inspection
-- browser automation (remote debugging)
-- local AI execution
-- system audio capture for transcript sessions
-
----
-
-### What this means
-
-- Windows Defender or other antivirus tools **may warn or block execution**
-- SmartScreen may show **"unknown publisher" warnings**
-- Some features (like browser control or input simulation) may be restricted
-
----
-
-### What you can do
-
-If you trust the project:
-
-- allow the app through Windows Defender
-- add an exclusion/whitelist for the OpenBlob directory
-- ensure Chrome/Edge debugging port (9222) is not blocked
-- run the app with sufficient permissions if needed
-
----
-
-### Transparency
-
-OpenBlob is:
-
-- **open-source** — you can inspect everything
-- **local-first** — no hidden cloud processing
-- **explicit about system access**
-
-No data is sent externally unless explicitly triggered (e.g. APIs or model calls you configure).
-
----
-
-> ⚠️ Always review the code before running software that interacts deeply with your system.
-
----
-
-## Getting Started
-
-### Requirements
-
-- Windows 10 or 11
-- [Node.js](https://nodejs.org/)
-- [Rust](https://rustup.rs/) + Cargo
-- [Tauri prerequisites](https://tauri.app/v1/guides/getting-started/prerequisites)
-- [Ollama](https://ollama.com/) installed locally
-- Chrome or Edge (for browser automation features)
-
-### Install dependencies
+### Quickstart
 
 ```bash
-npm install
+cd blob_connectors
+pip install -r requirements.txt
+cp .env.example .env   # fill in your tokens
+python run.py
 ```
 
-### Run in development
+Only connectors with tokens set will start. You can begin with just Telegram and add others later.
 
-```bash
-npm run tauri dev
+### Supported channels
+
+| Channel  | Method       | Notes                                      |
+| -------- | ------------ | ------------------------------------------ |
+| Telegram | Long-polling | Easiest to set up — no server needed       |
+| Discord  | Gateway      | DMs + @mentions — no server needed         |
+| Slack    | Socket Mode  | No public endpoint needed                  |
+| Email    | IMAP polling | Works with Gmail + App Password or Outlook |
+
+### Architecture
+
+All channels normalize to the same `Message` object before reaching the AI handler. Community contributors can add new connectors by subclassing `BlobConnector` and implementing three methods: `receive_message`, `send_response`, and `start`.
+
+```python
+class MyConnector(BlobConnector):
+    async def receive_message(self, raw) -> Message | None: ...
+    async def send_response(self, original: Message, response: str) -> None: ...
+    async def start(self) -> None: ...
 ```
 
-### Build frontend only
+Full setup guides for each channel are in [`blob_connectors/README.md`](./blob_connectors/README.md).
 
-```bash
-npm run build
-```
+### Memory integration
 
-### Ollama setup
+Blob Connectors read OpenBlob's local memory files directly:
 
-```bash
-ollama serve
-ollama pull llama3.1:8b
-ollama pull gemma3
-```
+- `companion_config.json` — blob name and preferred language
+- `user_profile.json` — owner name
+- `semantic_memory.json` — known apps, topics, communication style
+- `episodic_memory.jsonl` — past interactions across all channels
+- `personality_state.json` — current mood (energy, affection, playfulness)
+- `bonding_state.json` — relationship level and trust score
 
-Optional — for vision features:
-
-```bash
-ollama pull qwen2.5vl:7b
-```
-
-### Transcript setup (optional but recommended)
-
-OpenBlob's transcript module currently uses a **local Whisper CLI** setup for system-audio transcription.
-
-Typical local layout:
-
-```text
-D:\openblob\voice\
-├── bin\
-│   └── whisper-cli.exe
-└── models\
-    └── ggml-base.en.bin
-```
-
-This enables:
-
-- local audio chunk transcription
-- live transcript sessions
-- AI post-processing after recording
-
-> If your local model setup differs, adapt the transcript runtime paths in the Rust backend.
+The richer your OpenBlob usage, the more context the connectors carry into every conversation.
 
 ---
 
-## Project Structure
-
-```text
-
-    openblob/
-    ├── README.md
-    ├── bubble-dev.html
-    ├── bubble.html
-    ├── CHANGELOG.md
-    ├── index.html
-    ├── LICENSE
-    ├── package.json
-    ├── quick-menu.html
-    ├── rust-toolchain.toml
-    ├── SECURITY.md
-    ├── snip-overlay.html
-    ├── snip-panel.html
-    ├── speech.html
-    ├── timer-overlay.html
-    ├── transcript.html
-    ├── tsconfig.app.json
-    ├── tsconfig.json
-    ├── tsconfig.node.json
-    ├── vite.config.ts
-    ├── docs/
-    │   ├── architecture.md
-    │   ├── design.md
-    │   ├── documentation.md
-    │   ├── roadmap.md
-    │   └── old/
-    │       └── _____command_router old.rs
-    ├── src/
-    │   ├── App.tsx
-    │   ├── index.css
-    │   ├── main.tsx
-    │   ├── speech.tsx
-    │   ├── vite-env.d.ts
-    │   └── windows/
-    │       ├── bubble/
-    │       │   ├── app.tsx
-    │       │   └── open.ts
-    │       ├── bubble-dev/
-    │       │   ├── app.tsx
-    │       │   └── open.ts
-    │       ├── quick-menu/
-    │       │   ├── app.tsx
-    │       │   └── open.ts
-    │       ├── transcript/
-    │       │   ├── app.tsx
-    │       │   └── open.ts
-    │       ├── snip-overlay/
-    │       │   ├── app.tsx
-    │       │   ├── open.ts
-    │       │   └── snip-overlay.css
-    │       ├── snip-panel/
-    │       │   ├── app.tsx
-    │       │   └── open.ts
-    │       └── timer-overlay/
-    │           ├── app.tsx
-    │           └── open.ts
-    ├── src-tauri/
-    │   ├── 2
-    │   ├── build.rs
-    │   ├── Cargo.toml
-    │   ├── openblob - Verknüpfung.lnk
-    │   ├── tauri.conf.json
-    │   ├── capabilities/
-    │   │   ├── default.json
-    │   │   └── desktop.json
-    │   ├── gen/
-    │   │   └── schemas/
-    │   │       └── capabilities.json
-    │   ├── models/
-    │   │   ├── de_DE-thorsten-medium.onnx.json
-    │   │   └── en_US-lessac-high.onnx.json
-    │   └── src/
-    │       ├── main.rs
-    │       ├── i18n/
-    │       │   └── commands/
-    │       │       ├── de.json
-    │       │       └── en.json
-    │       └── modules/
-    │           ├── app_profiles.rs
-    │           ├── browser_automations.rs
-    │           ├── context.rs
-    │           ├── context_resolver.rs
-    │           ├── mod.rs
-    │           ├── screen_capture.rs
-    │           ├── session_memory.rs
-    │           ├── snip_session.rs
-    │           ├── steam_games.rs
-    │           ├── streaming.rs
-    │           ├── system.rs
-    │           ├── voice.rs
-    │           ├── windows_discovery.rs
-    │           ├── transcript/
-    │           │   ├── audio_capture.rs
-    │           │   ├── runtime.rs
-    │           │   ├── transcript_engine.rs
-    │           │   ├── session.rs
-    │           │   ├── processor.rs
-    │           │   ├── transcript_store.rs
-    │           │   ├── summary.rs
-    │           │   ├── types.rs
-    │           │   └── mod.rs
-    │           ├── command_router/
-    │           │   ├── constants.rs
-    │           │   ├── extract.rs
-    │           │   ├── fuzzy.rs
-    │           │   ├── intents.rs
-    │           │   ├── matchers.rs
-    │           │   ├── media.rs
-    │           │   ├── mod.rs
-    │           │   ├── normalize.rs
-    │           │   ├── parser.rs
-    │           │   ├── types.rs
-    │           │   └── utilities.rs
-    │           ├── companion/
-    │           │   ├── bonding.rs
-    │           │   ├── mod.rs
-    │           │   └── personality.rs
-    │           ├── i18n/
-    │           │   ├── command_locale.rs
-    │           │   └── mod.rs
-    │           ├── memory/
-    │           │   ├── episodic_memory.rs
-    │           │   ├── mod.rs
-    │           │   └── semantic_memory.rs
-    │           ├── profile/
-    │           │   ├── companion_config.rs
-    │           │   ├── mod.rs
-    │           │   ├── onboarding_state.rs
-    │           │   └── user_profile.rs
-    │           ├── snippets/
-    │           │   └── mod.rs
-    │           ├── storage/
-    │           │   ├── json_store.rs
-    │           │   ├── mod.rs
-    │           │   └── paths.rs
-    │           └── tts/
-    │               ├── kokoro.rs
-    │               ├── manager.rs
-    │               ├── mod.rs
-    │               ├── piper.rs
-    │               └── tts_config.rs
-    ├── tools/
-    │   └── piper/
-    └── .github/
-        ├── PULL_REQUEST_TEMPLATE.md
-        ├── ISSUE_TEMPLATE/
-        │   ├── bug_report.md
-        │   └── feature_request.md
-        └── workflows/
-            └── ci.yml
-
-```
-
----
-
-## Philosophy
+## Design Principles
 
 **1. Local-first**
 Whenever possible, things run locally on the user's machine.
@@ -652,6 +353,17 @@ Fun interactions and real productivity are not opposites.
 - [ ] Higher-accuracy transcript cleanup pipeline
 - [ ] Real speaker diarization
 - [ ] Transcript-to-memory extraction
+- [ ] Semantic memory retrieval (RAG over episodic memory)
+
+### Blob Connectors
+
+- [ ] Google Calendar integration (create, read, delete events)
+- [ ] Semantic memory retrieval per channel
+- [ ] Persistent session history across restarts
+- [ ] WhatsApp connector
+- [ ] Matrix / Element connector
+- [ ] Voice message support (Telegram voice → Whisper → command)
+- [ ] Per-channel permission system
 
 ### Avatar / UX
 
@@ -712,7 +424,7 @@ OpenBlob can capture your screen or a selected region and reason about what it s
 
 ## Transcript / Audio Intelligence
 
-OpenBlob can now transcribe **system audio in real time** and turn it into more usable material after recording.
+OpenBlob can transcribe **system audio in real time** and turn it into more usable material after recording.
 
 Current transcript workflow:
 
@@ -726,13 +438,7 @@ Current transcript workflow:
   - summary
   - action items
 
-This is especially useful for:
-
-- YouTube videos
-- podcasts
-- online meetings
-- spoken walkthroughs
-- lectures and demos
+This is especially useful for YouTube videos, podcasts, online meetings, spoken walkthroughs, and lectures.
 
 > The current system is intentionally local-first. Temporary audio chunks are created for processing and then cleaned up to avoid unnecessary data buildup.
 
@@ -752,16 +458,17 @@ More game modes are planned as the project grows.
 
 Contributions are welcome — all kinds, not just code.
 
-| Area           | Examples                                                      |
-| -------------- | ------------------------------------------------------------- |
-| Code           | bug fixes, refactors, new commands, new modules               |
-| Design         | avatar animations, UI/UX improvements, onboarding             |
-| Docs           | architecture, guides, contribution ideas                      |
-| Ideas          | new integrations, capability proposals, architecture feedback |
-| Quality        | tests, CI, issue templates                                    |
-| Mini games     | new game modes, interaction ideas                             |
-| AI experiments | prompting strategies, model routing, agent ideas              |
-| Transcript     | ASR cleanup, diarization, transcript UX, meeting workflows    |
+| Area            | Examples                                                         |
+| --------------- | ---------------------------------------------------------------- |
+| Code            | bug fixes, refactors, new commands, new modules                  |
+| Design          | avatar animations, UI/UX improvements, onboarding                |
+| Docs            | architecture, guides, contribution ideas                         |
+| Ideas           | new integrations, capability proposals, architecture feedback    |
+| Quality         | tests, CI, issue templates                                       |
+| Mini games      | new game modes, interaction ideas                                |
+| AI experiments  | prompting strategies, model routing, agent ideas                 |
+| Transcript      | ASR cleanup, diarization, transcript UX, meeting workflows       |
+| Blob Connectors | new channel connectors, memory improvements, calendar/tool hooks |
 
 Please open an issue before large changes so we can align on direction.
 
@@ -796,6 +503,8 @@ Recent work focused on:
 - separating larger UI elements into dedicated windows (like the quick menu)
 - introducing the first transcript module + transcript window
 - improving long-term maintainability
+- adding Blob Connectors for Telegram, Discord, Slack, and Email
+- connecting external channels to the Rust command pipeline via local HTTP
 
 The project is already functional, but still has rough edges and active regressions in some areas. Expect rapid changes, experimental ideas, and ongoing cleanup.
 
@@ -821,7 +530,7 @@ Built with inspiration from:
 
 ## Topics
 
-`desktop-copilot` `tauri` `react` `rust` `ollama` `local-ai` `open-source` `desktop-assistant` `automation` `windows` `voice` `vision` `screenshot` `transcript` `speech-to-text` `whisper` `framer-motion` `mini-games` `context-aware`
+`desktop-copilot` `tauri` `react` `rust` `ollama` `local-ai` `open-source` `desktop-assistant` `automation` `windows` `voice` `vision` `screenshot` `transcript` `speech-to-text` `whisper` `framer-motion` `mini-games` `context-aware` `telegram` `discord` `slack` `connectors`
 
 ---
 

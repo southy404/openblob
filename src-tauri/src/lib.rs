@@ -33,6 +33,7 @@ mod modules {
 }
 
 use crate::core::app::run_command_pipeline;
+use crate::modules::memory::episodic_memory::{EpisodicMemoryEntry, append_episode};
 use modules::companion::bonding::load_or_create_bonding_state;
 use modules::companion::personality::{load_or_create_personality_state, load_personality_state};
 use modules::context::{is_internal_companion_app, resolve_active_context};
@@ -509,7 +510,107 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            use axum::{extract::State, routing::post, Json, Router};
+            use serde::{Deserialize, Serialize};
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+            #[derive(Clone)]
+            struct ExternalCommandState {
+                app: tauri::AppHandle,
+            }
+
+            #[derive(Deserialize)]
+            struct CommandRequest {
+                input: String,
+                channel: Option<String>,
+            }
+
+            #[derive(Serialize)]
+            struct CommandResponse {
+                result: String,
+                action_taken: bool,
+            }
+
+            async fn handle_external_command(
+                State(state): State<ExternalCommandState>,
+                Json(payload): Json<CommandRequest>,
+            ) -> Json<CommandResponse> {
+                let input = payload.input.trim().to_string();
+
+                if input.is_empty() {
+                    return Json(CommandResponse {
+                        result: "NO_ACTION".to_string(),
+                        action_taken: false,
+                    });
+                }
+
+                let mut ctx = resolve_active_context();
+                let active_app = get_active_app();
+
+                if is_internal_companion_app(&ctx.app_name) && active_app != "unknown" {
+                    ctx.app_name = active_app.clone();
+
+                    if ctx.domain == "companion" || ctx.domain == "desktop" {
+                        ctx.domain = "browser".to_string();
+                    }
+
+                    if ctx.window_title.trim().is_empty()
+                        || is_internal_companion_app(&ctx.window_title)
+                    {
+                        ctx.window_title = active_app;
+                    }
+                }
+
+                match run_command_pipeline(&state.app, &input, &ctx).await {
+                    Ok(pipeline) => {
+                        let result_msg = pipeline
+                            .result
+                            .map(|r| r.message)
+                            .unwrap_or_else(|| "NO_ACTION".to_string());
+
+                        // Episode speichern
+                        if result_msg != "NO_ACTION" {
+                            let entry = EpisodicMemoryEntry::new(
+                                "external_command",
+                                &payload.channel.unwrap_or_else(|| "unknown".to_string()),
+                                "external",
+                                &input,
+                                &result_msg,
+                                "success",
+                                0.6,
+                            );
+                            let _ = append_episode(&entry);
+                        }
+
+                        Json(CommandResponse {
+                            action_taken: result_msg != "NO_ACTION",
+                            result: result_msg,
+                        })
+                    }
+                    Err(err) => Json(CommandResponse {
+                        result: format!("ERROR: {}", err),
+                        action_taken: false,
+                    }),
+                }
+            }
+
+            let app_handle = app.handle().clone();
+
+            tauri::async_runtime::spawn(async move {
+                let router = Router::new()
+                    .route("/command", post(handle_external_command))
+                    .with_state(ExternalCommandState { app: app_handle });
+
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:7842")
+                    .await
+                    .expect("Konnte lokalen Command-Server nicht starten");
+
+                println!("[openblob] Command-Server läuft auf http://127.0.0.1:7842");
+
+                if let Err(err) = axum::serve(listener, router).await {
+                    eprintln!("[openblob] Command-Server Fehler: {}", err);
+                }
+            });
 
             if let Some(window) = app.get_webview_window("bubble") {
                 #[cfg(target_os = "macos")]
