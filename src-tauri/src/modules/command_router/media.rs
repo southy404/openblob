@@ -65,6 +65,17 @@ pub fn parse_media_command(normalized: &str) -> Option<CompanionAction> {
     let service = detect_streaming_service(normalized, &toks);
 
     if matches!(service.as_deref(), Some("youtube")) {
+        if is_direct_service_open_command(normalized) {
+            return None;
+        }
+        let has_content_verb =
+            contains_any_phrase(normalized, &["open ", "play ", "spiele ", "oeffne "]);
+        if has_content_verb {
+            let title = extract_stream_title(normalized, "youtube");
+            if let Some(t) = title {
+                return Some(CompanionAction::YouTubeSearch { query: t });
+            }
+        }
         return None;
     }
     if is_direct_service_open_command(normalized) {

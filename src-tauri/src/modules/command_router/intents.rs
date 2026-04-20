@@ -12,6 +12,27 @@ pub fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
 
     let locale = command_locale();
 
+    let has_scroll = fuzzy_has_any(toks, SCROLL_WORDS, 0.82);
+    if has_scroll {
+        let has_down = fuzzy_has_any(toks, SCROLL_DOWN_WORDS, 0.82)
+            || normalized.contains("runter")
+            || normalized.contains("down")
+            || normalized.contains("nach unten")
+            || normalized.contains("abwaerts");
+        let has_up = fuzzy_has_any(toks, SCROLL_UP_WORDS, 0.82)
+            || normalized.contains("hoch")
+            || normalized.contains(" up")
+            || normalized.contains("nach oben")
+            || normalized.contains("aufwaerts");
+
+        if has_down && !has_up {
+            return IntentKind::BrowserScrollDown;
+        }
+        if has_up && !has_down {
+            return IntentKind::BrowserScrollUp;
+        }
+    }
+
     let mut scores = vec![
         IntentScore {
             kind: IntentKind::CurrentTime,
@@ -224,11 +245,19 @@ pub fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
         },
         IntentScore {
             kind: IntentKind::BrowserScrollDown,
-            score: score(toks, SCROLL_DOWN_WORDS, 0.80, 2.2),
+            score: if has_scroll {
+                score(toks, SCROLL_DOWN_WORDS, 0.80, 2.2)
+            } else {
+                0.0
+            },
         },
         IntentScore {
             kind: IntentKind::BrowserScrollUp,
-            score: score(toks, SCROLL_UP_WORDS, 0.80, 2.2),
+            score: if has_scroll {
+                score(toks, SCROLL_UP_WORDS, 0.80, 2.2)
+            } else {
+                0.0
+            },
         },
         IntentScore {
             kind: IntentKind::BrowserTypeText,

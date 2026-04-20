@@ -276,7 +276,7 @@ pub fn parse_voice_command_with_context(
         let has_skip = contains_locale_words(&normalized, &locale.skip_words, 0.84);
         let has_ad = contains_locale_words(&normalized, &locale.ad_words, 0.84);
 
-        if has_skip {
+        if has_skip && has_ad {
             return CompanionAction::YouTubeSkipAd;
         }
 
