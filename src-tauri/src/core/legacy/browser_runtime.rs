@@ -175,6 +175,18 @@ pub async fn ensure_debug_browser() -> Result<(), String> {
     )
 }
 
+async fn open_or_navigate_debug_url(url: &str) -> Result<(), String> {
+    if ensure_debug_browser().await.is_ok() {
+        if browser_automations::navigate_best_tab(url).await.is_err() {
+            browser_automations::new_tab(url).await?;
+        }
+    } else {
+        open_url_normal_browser(url, false, false)?;
+    }
+
+    Ok(())
+}
+
 pub async fn browser_new_tab_with_url(url: String) -> Result<String, String> {
     if ensure_debug_browser().await.is_ok() {
         browser_automations::new_tab(&url).await?;
@@ -239,7 +251,10 @@ pub async fn browser_open_url(
                 return Ok(reply("browser_url_opened_new_tab"));
             }
 
-            browser_automations::navigate_best_tab(&url).await?;
+            if browser_automations::navigate_best_tab(&url).await.is_err() {
+                browser_automations::new_tab(&url).await?;
+            }
+
             Ok(reply("browser_url_opened"))
         }
         Err(_) => {
@@ -320,11 +335,7 @@ pub async fn google_search(query: &str) -> Result<String, String> {
         urlencoding::encode(query)
     );
 
-    if ensure_debug_browser().await.is_ok() {
-        browser_automations::navigate_best_tab(&url).await?;
-    } else {
-        open_url_normal_browser(&url, false, false)?;
-    }
+    open_or_navigate_debug_url(&url).await?;
 
     Ok(reply_with(
         "browser_google_search",
@@ -333,15 +344,12 @@ pub async fn google_search(query: &str) -> Result<String, String> {
 }
 
 pub async fn youtube_search(query: &str) -> Result<String, String> {
-    if ensure_debug_browser().await.is_ok() {
-        browser_automations::youtube_search(query, false).await?;
-    } else {
-        let url = format!(
-            "https://www.youtube.com/results?search_query={}",
-            urlencoding::encode(query)
-        );
-        open_url_normal_browser(&url, false, false)?;
-    }
+    let url = format!(
+        "https://www.youtube.com/results?search_query={}",
+        urlencoding::encode(query)
+    );
+
+    open_or_navigate_debug_url(&url).await?;
 
     Ok(reply_with(
         "browser_youtube_search",
@@ -355,11 +363,7 @@ pub async fn youtube_play_title(title: &str) -> Result<String, String> {
         urlencoding::encode(title)
     );
 
-    if ensure_debug_browser().await.is_ok() {
-        browser_automations::navigate_best_tab(&url).await?;
-    } else {
-        open_url_normal_browser(&url, false, false)?;
-    }
+    open_or_navigate_debug_url(&url).await?;
 
     Ok(reply_with(
         "browser_youtube_search",

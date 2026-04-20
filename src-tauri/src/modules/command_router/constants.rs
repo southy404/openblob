@@ -36,8 +36,11 @@ pub const PLAY_WORDS: &[&str] = &["play", "spiele", "abspielen"];
 pub const RESULT_WORDS: &[&str] = &["result", "ergebnis", "suchergebnis", "video"];
 pub const BACK_WORDS: &[&str] = &["zurueck", "go back", "back", "eine seite zurueck"];
 pub const FORWARD_WORDS: &[&str] = &["forward", "weiter", "vor", "go forward"];
-pub const SCROLL_DOWN_WORDS: &[&str] = &["scroll runter", "runter scrollen", "scroll down"];
-pub const SCROLL_UP_WORDS: &[&str] = &["scroll hoch", "hoch scrollen", "scroll up"];
+
+pub const SCROLL_WORDS: &[&str] = &["scroll", "scrolle", "scrollen", "scrollen"];
+pub const SCROLL_DOWN_WORDS: &[&str] = &["runter", "down", "unten", "abwaerts", "nach unten"];
+pub const SCROLL_UP_WORDS: &[&str] = &["hoch", "up", "oben", "aufwaerts", "nach oben"];
+
 pub const TYPE_WORDS: &[&str] = &["tippe", "type", "schreibe", "enter text"];
 pub const SUBMIT_WORDS: &[&str] = &["submit", "abschicken", "absenden", "drueck enter"];
 pub const CONTEXT_WORDS: &[&str] = &["wo bin ich", "seitenkontext", "browser context", "was ist auf der seite"];
