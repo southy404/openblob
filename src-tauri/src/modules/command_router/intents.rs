@@ -303,6 +303,34 @@ pub fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
             score: score(toks, EXPLAIN_WORDS, 0.84, 1.8)
                 + score(toks, &["text", "this", "that", "das"], 0.84, 0.5),
         },
+                IntentScore {
+            kind: IntentKind::OpenDownloads,
+            score: score(toks, DOWNLOADS_WORDS, 0.88, 2.2),
+        },
+        IntentScore {
+            kind: IntentKind::OpenSettings,
+            score: score(toks, SETTINGS_WORDS, 0.88, 2.2),
+        },
+        IntentScore {
+            kind: IntentKind::OpenExplorer,
+            score: score(toks, EXPLORER_WORDS, 0.88, 2.2),
+        },
+        IntentScore {
+            kind: IntentKind::LockScreen,
+            score: score(toks, LOCK_WORDS, 0.88, 2.2),
+        },
+        IntentScore {
+            kind: IntentKind::Shutdown,
+            score: score(toks, SHUTDOWN_WORDS, 0.88, 2.2),
+        },
+        IntentScore {
+            kind: IntentKind::Restart,
+            score: score(toks, RESTART_WORDS, 0.88, 2.2),
+        },
+        IntentScore {
+            kind: IntentKind::ConfirmAction,
+            score: score(toks, CONFIRM_WORDS, 0.88, 1.6),
+        },
     ];
 
     scores.sort_by(|a, b| b.score.total_cmp(&a.score));

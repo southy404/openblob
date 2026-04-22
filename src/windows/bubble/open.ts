@@ -65,8 +65,7 @@ export async function ensureBubbleWindow() {
   win.once("tauri://created", async () => {
     await positionBubbleWindow(win);
 
-    // zweiter Pass für Windows/Tauri, weil die echte Fenstergeometrie
-    // oft erst kurz danach sauber sitzt
+    // second pass for Windows/Tauri
     window.setTimeout(() => {
       void positionBubbleWindow(win);
     }, 80);

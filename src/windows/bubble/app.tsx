@@ -40,6 +40,43 @@ type SpeechRecognitionEventLike = {
 };
 
 type BubbleMode = "command" | "chat";
+type UiLang = "en" | "de";
+type RouteState = "command" | "ollama" | "none";
+
+type BubbleTexts = {
+  ready: string;
+  processing: string;
+  pleaseEnterSomething: string;
+  justChatting: string;
+  knownSiteOpened: string;
+  knownSiteOpeningSpoken: (url: string) => string;
+  hideAndSeekStarted: string;
+  hideAndSeekStartedSpoken: string;
+  commandExecuted: string;
+  directCommandRecognizedButNoLocalMatch: string;
+  noLocalCommandMatched: string;
+  localCommandFailed: string;
+  listening: string;
+  speechRecognitionUnsupported: string;
+  voiceError: (msg: string) => string;
+  microphoneError: (msg: string) => string;
+  chattingWithModel: (model: string) => string;
+  answerFromModel: (model: string) => string;
+  errorPrefix: (msg: string) => string;
+  directCommandFailedMessage: (input: string) => string;
+  placeholderChat: string;
+  placeholderCommand: string;
+  ttsOnTitle: string;
+  ttsOffTitle: string;
+  speechRecognitionTitle: (shortcut: string) => string;
+  sendTitle: string;
+  devMode: string;
+  routeReady: string;
+  routeCommand: string;
+  routeOllama: string;
+  subtitlesLabel: string;
+  modeLabel: string;
+};
 
 declare global {
   interface Window {
@@ -54,6 +91,82 @@ const STORAGE_KEYS = {
   speakEnabled: "openblob-bubble-speak-enabled",
   subtitlesEnabled: "openblob-bubble-subtitles-enabled",
   bubbleMode: "openblob-bubble-mode",
+};
+
+const BUBBLE_TEXTS: Record<UiLang, BubbleTexts> = {
+  en: {
+    ready: "Ready.",
+    processing: "Processing...",
+    pleaseEnterSomething: "Please enter something.",
+    justChatting: "Just chatting...",
+    knownSiteOpened: "Opened known site directly.",
+    knownSiteOpeningSpoken: (url) => `Opening ${url}.`,
+    hideAndSeekStarted: "Hide and seek started.",
+    hideAndSeekStartedSpoken: "Okay, hide and seek started. Find me.",
+    commandExecuted: "Command executed.",
+    directCommandRecognizedButNoLocalMatch:
+      "Command recognized, but nothing matching was found locally.",
+    noLocalCommandMatched: "No local command matched. Asking Ollama...",
+    localCommandFailed: "Local command failed.",
+    listening: "Listening…",
+    speechRecognitionUnsupported: "Speech recognition is not supported here.",
+    voiceError: (msg) => `Voice error: ${msg}`,
+    microphoneError: (msg) => `Microphone error: ${msg}`,
+    chattingWithModel: (model) => `Chatting with ${model}`,
+    answerFromModel: (model) => `Answer from ${model}`,
+    errorPrefix: (msg) => `Error: ${msg}`,
+    directCommandFailedMessage: (input) =>
+      `Could not execute the local command: "${input}"`,
+    placeholderChat: "talk to me…",
+    placeholderCommand: "open youtube, mute, or ask me something…",
+    ttsOnTitle: "Speech output on",
+    ttsOffTitle: "Speech output off",
+    speechRecognitionTitle: (shortcut) => `Speech recognition (${shortcut})`,
+    sendTitle: "Send",
+    devMode: "dev mode",
+    routeReady: "ready",
+    routeCommand: "command executed",
+    routeOllama: "ollama response",
+    subtitlesLabel: "subtitles",
+    modeLabel: "mode",
+  },
+  de: {
+    ready: "Bereit.",
+    processing: "Verarbeite...",
+    pleaseEnterSomething: "Bitte gib etwas ein.",
+    justChatting: "Einfach chatten...",
+    knownSiteOpened: "Bekannte Seite direkt geöffnet.",
+    knownSiteOpeningSpoken: (url) => `Öffne ${url}.`,
+    hideAndSeekStarted: "Hide and seek gestartet.",
+    hideAndSeekStartedSpoken: "Okay, hide and seek gestartet. Finde mich.",
+    commandExecuted: "Befehl ausgeführt.",
+    directCommandRecognizedButNoLocalMatch:
+      "Befehl erkannt, aber lokal nichts Passendes gefunden.",
+    noLocalCommandMatched: "Kein lokaler Befehl erkannt. Frage Ollama...",
+    localCommandFailed: "Lokaler Befehl fehlgeschlagen.",
+    listening: "Ich höre zu …",
+    speechRecognitionUnsupported:
+      "Spracherkennung wird hier nicht unterstützt.",
+    voiceError: (msg) => `Sprachfehler: ${msg}`,
+    microphoneError: (msg) => `Mikrofonfehler: ${msg}`,
+    chattingWithModel: (model) => `Chatte mit ${model}`,
+    answerFromModel: (model) => `Antwort von ${model}`,
+    errorPrefix: (msg) => `Fehler: ${msg}`,
+    directCommandFailedMessage: (input) =>
+      `Konnte den lokalen Befehl nicht ausführen: "${input}"`,
+    placeholderChat: "rede mit mir …",
+    placeholderCommand: "open youtube, mute oder frag mich etwas …",
+    ttsOnTitle: "Sprachausgabe an",
+    ttsOffTitle: "Sprachausgabe aus",
+    speechRecognitionTitle: (shortcut) => `Spracherkennung (${shortcut})`,
+    sendTitle: "Senden",
+    devMode: "dev mode",
+    routeReady: "bereit",
+    routeCommand: "befehl ausgeführt",
+    routeOllama: "ollama antwort",
+    subtitlesLabel: "subtitles",
+    modeLabel: "mode",
+  },
 };
 
 function readLocalStorageString(key: string, fallback: string) {
@@ -201,8 +314,9 @@ function getDirectKnownUrl(input: string): string | null {
 }
 
 function BubbleApp() {
+  const [uiLang, setUiLang] = useState<UiLang>("en");
   const [question, setQuestion] = useState("");
-  const [hint, setHint] = useState("Bereit.");
+  const [hint, setHint] = useState(BUBBLE_TEXTS.en.ready);
   const [model, setModel] = useState(
     readLocalStorageString(STORAGE_KEYS.model, "llama3.1:8b")
   );
@@ -210,9 +324,7 @@ function BubbleApp() {
   const [visible, setVisible] = useState(false);
   const [listening, setListening] = useState(false);
   const [interimText, setInterimText] = useState("");
-  const [lastRoute, setLastRoute] = useState<"command" | "ollama" | "none">(
-    "none"
-  );
+  const [lastRoute, setLastRoute] = useState<RouteState>("none");
   const [voiceShortcut, setVoiceShortcut] = useState(
     readLocalStorageString(STORAGE_KEYS.voiceShortcut, "Alt + M")
   );
@@ -230,10 +342,23 @@ function BubbleApp() {
   const visibleRef = useRef(visible);
   const listeningRef = useRef(listening);
 
+  const t = BUBBLE_TEXTS[uiLang];
+
   const SpeechRecognitionCtor = useMemo(
     () => window.SpeechRecognition || window.webkitSpeechRecognition || null,
     []
   );
+
+  const loadIdentity = async () => {
+    try {
+      const result = (await invoke("get_identity")) as [string, string, string];
+      const [, , lang] = result;
+      setUiLang(lang === "de" ? "de" : "en");
+    } catch (error) {
+      console.error("failed to load identity for bubble ui", error);
+      setUiLang("en");
+    }
+  };
 
   useEffect(() => {
     const applyGlass = async () => {
@@ -247,6 +372,38 @@ function BubbleApp() {
 
     void applyGlass();
   }, []);
+
+  useEffect(() => {
+    void loadIdentity();
+  }, []);
+
+  useEffect(() => {
+    let unlisten: null | (() => void) = null;
+
+    const setup = async () => {
+      unlisten = await listen("identity-updated", async () => {
+        await loadIdentity();
+      });
+    };
+
+    void setup();
+
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    setHint((current) => {
+      if (
+        current === BUBBLE_TEXTS.en.ready ||
+        current === BUBBLE_TEXTS.de.ready
+      ) {
+        return t.ready;
+      }
+      return current;
+    });
+  }, [uiLang]);
 
   useEffect(() => {
     const prepareSubtitleWindow = async () => {
@@ -403,8 +560,8 @@ function BubbleApp() {
 
       setHint(
         bubbleMode === "chat"
-          ? `Chatting with ${result.model}`
-          : `Antwort von ${result.model}`
+          ? t.chattingWithModel(result.model)
+          : t.answerFromModel(result.model)
       );
       setLastRoute("ollama");
 
@@ -433,7 +590,7 @@ function BubbleApp() {
     const input = rawInput.trim();
 
     if (!input || busy) {
-      setHint("Bitte gib etwas ein.");
+      setHint(t.pleaseEnterSomething);
       return;
     }
 
@@ -441,7 +598,7 @@ function BubbleApp() {
 
     try {
       if (bubbleMode === "chat") {
-        setHint("Just chatting...");
+        setHint(t.justChatting);
         await runOllamaAsk(input);
         return;
       }
@@ -453,24 +610,25 @@ function BubbleApp() {
           input: `open ${directUrl}`,
         });
 
-        await showSubtitle(`Öffne ${directUrl}.`, 4200);
-        setHint("Bekannte Seite direkt geöffnet.");
+        const spoken = t.knownSiteOpeningSpoken(directUrl);
+        await showSubtitle(spoken, 4200);
+        setHint(t.knownSiteOpened);
         setLastRoute("command");
 
         if (speakEnabled) {
-          void speak(`Öffne ${directUrl}.`);
+          void speak(spoken);
         }
         return;
       }
 
       if (isHideAndSeekCommand(input)) {
         await emit("start-hide-and-seek");
-        await showSubtitle("Okay, hide and seek started. Find me.", 4200);
-        setHint("Hide and seek started.");
+        await showSubtitle(t.hideAndSeekStartedSpoken, 4200);
+        setHint(t.hideAndSeekStarted);
         setLastRoute("command");
 
         if (speakEnabled) {
-          void speak("Okay, hide and seek started. Find me.");
+          void speak(t.hideAndSeekStartedSpoken);
         }
         return;
       }
@@ -481,7 +639,7 @@ function BubbleApp() {
 
       if (actionResult !== "NO_ACTION") {
         await showSubtitle(actionResult, 4200);
-        setHint("Befehl ausgeführt.");
+        setHint(t.commandExecuted);
         setLastRoute("command");
 
         await emit("companion-speech", actionResult);
@@ -494,9 +652,9 @@ function BubbleApp() {
       }
 
       if (looksLikeDirectCommand(input)) {
-        const message = `Konnte den lokalen Befehl nicht ausführen: "${input}"`;
+        const message = t.directCommandFailedMessage(input);
         await showSubtitle(message, 4200);
-        setHint("Befehl erkannt, aber lokal nichts Passendes gefunden.");
+        setHint(t.directCommandRecognizedButNoLocalMatch);
         setLastRoute("command");
 
         if (speakEnabled) {
@@ -505,7 +663,7 @@ function BubbleApp() {
         return;
       }
 
-      setHint("Kein lokaler Befehl erkannt. Frage Ollama...");
+      setHint(t.noLocalCommandMatched);
       await runOllamaAsk(input);
     } catch (error) {
       const message = String(error);
@@ -513,10 +671,10 @@ function BubbleApp() {
       await showSubtitle(message, 4800);
 
       if (bubbleMode === "command" && looksLikeDirectCommand(input)) {
-        setHint("Lokaler Befehl fehlgeschlagen.");
+        setHint(t.localCommandFailed);
         setLastRoute("command");
       } else {
-        setHint(`Fehler: ${message}`);
+        setHint(t.errorPrefix(message));
       }
 
       if (speakEnabled) {
@@ -532,7 +690,7 @@ function BubbleApp() {
 
     const text = question.trim();
     if (!text) {
-      setHint("Bitte gib etwas ein.");
+      setHint(t.pleaseEnterSomething);
       return;
     }
 
@@ -542,7 +700,7 @@ function BubbleApp() {
 
   const startVoiceInput = async () => {
     if (!SpeechRecognitionCtor) {
-      setHint("SpeechRecognition wird hier nicht unterstützt.");
+      setHint(t.speechRecognitionUnsupported);
       return;
     }
 
@@ -550,7 +708,7 @@ function BubbleApp() {
 
     try {
       const recognition = new SpeechRecognitionCtor();
-      recognition.lang = "de-DE";
+      recognition.lang = uiLang === "de" ? "de-DE" : "en-US";
       recognition.interimResults = true;
       recognition.continuous = false;
       recognition.maxAlternatives = 1;
@@ -559,7 +717,7 @@ function BubbleApp() {
         finalVoiceTextRef.current = "";
         setListening(true);
         setInterimText("");
-        setHint("Ich höre zu …");
+        setHint(t.listening);
         await emitBlobState("listening", true);
       };
 
@@ -606,7 +764,7 @@ function BubbleApp() {
         recognitionRef.current = null;
         setInterimText("");
         finalVoiceTextRef.current = "";
-        setHint(`Voice error: ${event.error ?? "unbekannt"}`);
+        setHint(t.voiceError(event.error ?? "unknown"));
         await emitBlobState("listening", false);
       };
 
@@ -616,7 +774,7 @@ function BubbleApp() {
       setListening(false);
       setInterimText("");
       finalVoiceTextRef.current = "";
-      setHint(`Mikrofonfehler: ${String(error)}`);
+      setHint(t.microphoneError(String(error)));
       await emitBlobState("listening", false);
     }
   };
@@ -703,7 +861,7 @@ function BubbleApp() {
       unlistenHide?.();
       unlistenVoiceToggle?.();
     };
-  }, []);
+  }, [uiLang, t]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -746,17 +904,13 @@ function BubbleApp() {
   const toggleBubbleMode = () => {
     setBubbleMode((prev) => {
       const next: BubbleMode = prev === "command" ? "chat" : "command";
-      setHint(
-        next === "chat" ? "Just chatting mode aktiv." : "Command mode aktiv."
-      );
+      setHint(next === "chat" ? t.justChatting : t.ready);
       return next;
     });
   };
 
   const placeholder =
-    bubbleMode === "chat"
-      ? "rede mit mir …"
-      : "open youtube, mute, oder frag mich etwas …";
+    bubbleMode === "chat" ? t.placeholderChat : t.placeholderCommand;
 
   return (
     <>
@@ -895,7 +1049,7 @@ function BubbleApp() {
           background: rgba(255, 255, 255, 0.2);
           border-color: rgba(255, 255, 255, 0.28);
         }
-          
+
         .send-btn {
           position: relative;
           border: none;
@@ -998,6 +1152,7 @@ function BubbleApp() {
             opacity: 0.92;
           }
         }
+
         .tiny-links {
           width: 100%;
           display: flex;
@@ -1082,7 +1237,7 @@ function BubbleApp() {
                   }}
                 />
                 <div className="bubble-meta">
-                  <span>{busy ? "Verarbeite..." : hint}</span>
+                  <span>{busy ? t.processing : hint}</span>
                   {interimText && <span>| … {interimText}</span>}
                 </div>
               </div>
@@ -1098,7 +1253,7 @@ function BubbleApp() {
                     return next;
                   });
                 }}
-                title={speakEnabled ? "Sprachausgabe an" : "Sprachausgabe aus"}
+                title={speakEnabled ? t.ttsOnTitle : t.ttsOffTitle}
                 type="button"
               >
                 {speakEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
@@ -1110,7 +1265,7 @@ function BubbleApp() {
                   if (listening) stopVoiceInput();
                   else void startVoiceInput();
                 }}
-                title={`Spracherkennung (${voiceShortcut})`}
+                title={t.speechRecognitionTitle(voiceShortcut)}
                 disabled={busy}
                 type="button"
               >
@@ -1120,7 +1275,7 @@ function BubbleApp() {
               <button
                 className="icon-btn send-btn"
                 onClick={() => void handleTypedSubmit()}
-                title="Senden"
+                title={t.sendTitle}
                 disabled={busy}
                 type="button"
               >
@@ -1164,15 +1319,15 @@ function BubbleApp() {
               onClick={() => void openDevWindow()}
               type="button"
             >
-              dev mode
+              {t.devMode}
             </button>
 
             <span className="tiny-link tiny-link-static">
               {lastRoute === "command"
-                ? "befehl ausgeführt"
+                ? t.routeCommand
                 : lastRoute === "ollama"
-                ? "ollama antwort"
-                : "bereit"}
+                ? t.routeOllama
+                : t.routeReady}
             </span>
 
             <span className="tiny-link tiny-link-static">
@@ -1188,7 +1343,7 @@ function BubbleApp() {
               }}
               type="button"
             >
-              subtitles {subtitlesEnabled ? "on" : "off"}
+              {t.subtitlesLabel} {subtitlesEnabled ? "on" : "off"}
             </button>
 
             <button
@@ -1196,7 +1351,7 @@ function BubbleApp() {
               onClick={toggleBubbleMode}
               type="button"
             >
-              mode {bubbleMode}
+              {t.modeLabel} {bubbleMode}
             </button>
           </div>
         </div>

@@ -115,5 +115,13 @@
   "ollama_client_init_failed": "Could not create Ollama client: {error}",
   "ollama_call_failed": "Error while calling Ollama: {error}",
   "ollama_status_failed": "Ollama error {status}: {body}",
-  "ollama_response_read_failed": "Could not read the response: {error}"
+  "ollama_response_read_failed": "Could not read the response: {error}",
+  "system_confirm_shutdown": "Are you sure? Say \"yes\" to shut down the PC.",
+  "system_confirm_restart": "Are you sure? Say \"yes\" to restart the PC.",
+  "system_confirm_continue": "Are you sure? Say \"yes\" to continue.",
+  "system_pending_cancelled": "Cancelled the pending action.",
+  "system_no_pending_confirm": "There is no pending action to confirm.",
+  "system_no_pending_cancel": "There is no pending action to cancel.",
+  "system_shutdown_now": "Shutting down the PC.",
+  "system_restart_now": "Restarting the PC."
 }

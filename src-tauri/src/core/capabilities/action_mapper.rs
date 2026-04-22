@@ -3,8 +3,19 @@ use serde_json::json;
 use crate::modules::command_router::CompanionAction;
 
 use super::registry::{
-    CAP_BROWSER_SEARCH_GOOGLE, CAP_BROWSER_SEARCH_YOUTUBE, CAP_MEDIA_PLAY_PAUSE,
-    CAP_SYSTEM_OPEN_APP, CAP_VISION_CAPTURE_SCREEN,
+    CAP_BROWSER_SEARCH_GOOGLE,
+    CAP_BROWSER_SEARCH_YOUTUBE,
+    CAP_MEDIA_PLAY_PAUSE,
+    CAP_SYSTEM_CONFIRM_PENDING,
+    CAP_SYSTEM_LOCK_SCREEN,
+    CAP_SYSTEM_OPEN_APP,
+    CAP_SYSTEM_OPEN_DOWNLOADS,
+    CAP_SYSTEM_OPEN_EXPLORER,
+    CAP_SYSTEM_OPEN_SETTINGS,
+    CAP_SYSTEM_RESTART,
+    CAP_SYSTEM_SHUTDOWN,
+    CAP_VISION_CAPTURE_SCREEN,
+    CAP_SYSTEM_CANCEL_PENDING,
 };
 use super::types::CapabilityRequest;
 
@@ -42,6 +53,38 @@ pub fn action_to_capability(action: &CompanionAction) -> Option<CapabilityReques
 
         CompanionAction::MediaPlayPause => {
             Some(CapabilityRequest::empty(CAP_MEDIA_PLAY_PAUSE))
+        }
+
+        CompanionAction::OpenDownloads => {
+            Some(CapabilityRequest::empty(CAP_SYSTEM_OPEN_DOWNLOADS))
+        }
+
+        CompanionAction::OpenSettings => {
+            Some(CapabilityRequest::empty(CAP_SYSTEM_OPEN_SETTINGS))
+        }
+
+        CompanionAction::OpenExplorer => {
+            Some(CapabilityRequest::empty(CAP_SYSTEM_OPEN_EXPLORER))
+        }
+
+        CompanionAction::LockScreen => {
+            Some(CapabilityRequest::empty(CAP_SYSTEM_LOCK_SCREEN))
+        }
+
+        CompanionAction::Shutdown => {
+            Some(CapabilityRequest::empty(CAP_SYSTEM_SHUTDOWN))
+        }
+
+        CompanionAction::Restart => {
+            Some(CapabilityRequest::empty(CAP_SYSTEM_RESTART))
+        }
+
+        CompanionAction::ConfirmPendingAction => {
+            Some(CapabilityRequest::empty(CAP_SYSTEM_CONFIRM_PENDING))
+        }
+
+        CompanionAction::CancelPendingAction => {
+            Some(CapabilityRequest::empty(CAP_SYSTEM_CANCEL_PENDING))
         }
 
         _ => None,

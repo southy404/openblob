@@ -321,6 +321,67 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
         return CompanionAction::None;
     }
 
+    if matches!(
+        normalized.trim(),
+        "yes" | "ja" | "confirm" | "bestätigen" | "mach es" | "do it"
+    ) {
+        return CompanionAction::ConfirmPendingAction;
+    }
+
+    if matches!(
+        normalized.trim(),
+        "no" | "nein" | "cancel" | "abbrechen" | "stop" | "doch nicht"
+    ) {
+        return CompanionAction::CancelPendingAction;
+    }
+
+    if normalized.contains("lock screen")
+        || normalized.contains("screen lock")
+        || normalized.contains("bildschirm sperren")
+        || normalized.contains("pc sperren")
+    {
+        return CompanionAction::LockScreen;
+    }
+
+    if normalized.contains("downloads")
+        || normalized.contains("download folder")
+        || normalized.contains("download ordner")
+    {
+        return CompanionAction::OpenDownloads;
+    }
+
+    if normalized.contains("windows settings")
+        || normalized.contains("open settings")
+        || normalized.contains("settings")
+        || normalized.contains("einstellungen")
+    {
+        return CompanionAction::OpenSettings;
+    }
+
+    if normalized.contains("file explorer")
+        || normalized == "explorer"
+        || normalized.contains("open explorer")
+        || normalized.contains("öffne explorer")
+    {
+        return CompanionAction::OpenExplorer;
+    }
+
+    if normalized.contains("shutdown")
+        || normalized.contains("shut down")
+        || normalized.contains("herunterfahren")
+        || normalized.contains("pc ausschalten")
+    {
+        return CompanionAction::Shutdown;
+    }
+
+    if normalized.contains("restart")
+        || normalized.contains("reboot")
+        || normalized.contains("neu starten")
+        || normalized.contains("neustarten")
+    {
+        return CompanionAction::Restart;
+    }
+
     if let Some(action) = parse_explicit_search_command(&normalized) {
         return action;
     }
@@ -551,6 +612,14 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
         IntentKind::RollDice => CompanionAction::RollDice,
         IntentKind::CancelTimer => CompanionAction::CancelTimer,
         IntentKind::SetTimer { seconds } => CompanionAction::SetTimer { seconds },
+        IntentKind::OpenDownloads => CompanionAction::OpenDownloads,
+        IntentKind::OpenSettings => CompanionAction::OpenSettings,
+        IntentKind::OpenExplorer => CompanionAction::OpenExplorer,
+        IntentKind::LockScreen => CompanionAction::LockScreen,
+        IntentKind::Shutdown => CompanionAction::Shutdown,
+        IntentKind::Restart => CompanionAction::Restart,
+        IntentKind::ConfirmAction => CompanionAction::ConfirmPendingAction,
+        IntentKind::CancelAction => CompanionAction::CancelPendingAction,
         IntentKind::None => CompanionAction::None,
     }
 }

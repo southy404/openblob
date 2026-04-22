@@ -213,7 +213,10 @@ fn open_known_local_target(target: &str) -> Result<bool, String> {
     Ok(opened)
 }
 
-pub fn open_app_target(target: &str, prefer_browser: bool) -> Result<String, String> {
+pub fn open_app_target(
+    target: &str,
+    prefer_browser: bool,
+) -> Result<String, String> {
     let normalized = target.trim().to_lowercase();
 
     if prefer_browser {

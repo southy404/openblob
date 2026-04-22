@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import {
   X,
@@ -22,121 +22,537 @@ type DevPayload = {
   model?: string;
 };
 
-type CommandGroup = {
-  title: string;
-  icon: JSX.Element;
-  items: Array<{
-    command: string;
-    description: string;
-  }>;
+type UiLang = "en" | "de";
+
+type RouteState = "none" | "command" | "ollama";
+
+type LocalizedText = {
+  windowTitle: string;
+  windowSubtitle: string;
+  close: string;
+
+  lastRoute: string;
+  voiceShortcut: string;
+  model: string;
+  commands: string;
+
+  companionIdentity: string;
+  blobName: string;
+  ownerName: string;
+  language: string;
+  save: string;
+  saving: string;
+
+  searchPlaceholder: string;
+  noCommandsFound: string;
+  commandCount: (count: number) => string;
+
+  routeNone: string;
+
+  languageOptions: Array<{ value: UiLang; label: string }>;
 };
 
-const commandGroups: CommandGroup[] = [
-  {
-    title: "Voice / General",
-    icon: <Mic size={15} />,
-    items: [
-      { command: "what time is it", description: "Aktuelle Uhrzeit" },
-      { command: "what date is it", description: "Aktuelles Datum" },
-      { command: "weather in Berlin", description: "Wetter für Ort abrufen" },
-      { command: "take screenshot", description: "Snip-Modus öffnen" },
+type CommandItem = {
+  command: string;
+  description: string;
+};
+
+type CommandGroupKey =
+  | "voiceGeneral"
+  | "system"
+  | "browser"
+  | "media"
+  | "fun"
+  | "apps"
+  | "editing";
+
+type LocalizedCommandGroup = {
+  key: CommandGroupKey;
+  title: string;
+  icon: JSX.Element;
+  items: CommandItem[];
+};
+
+const TEXTS: Record<UiLang, LocalizedText> = {
+  en: {
+    windowTitle: "OpenBlob Dev Mode",
+    windowSubtitle: "Commands, routing, voice, identity, debug info",
+    close: "Close",
+
+    lastRoute: "Last Route",
+    voiceShortcut: "Voice Shortcut",
+    model: "Model",
+    commands: "Commands",
+
+    companionIdentity: "Companion Identity",
+    blobName: "Blob Name",
+    ownerName: "Owner Name",
+    language: "Language",
+    save: "Save",
+    saving: "Saving...",
+
+    searchPlaceholder:
+      "Filter commands, e.g. youtube, timer, browser, volume, shutdown ...",
+    noCommandsFound: "No commands found for this search.",
+    commandCount: (count) => `${count} command${count === 1 ? "" : "s"}`,
+
+    routeNone: "none",
+
+    languageOptions: [
+      { value: "en", label: "English" },
+      { value: "de", label: "Deutsch" },
     ],
   },
-  {
-    title: "Browser",
-    icon: <Globe size={15} />,
-    items: [
-      { command: "google cats", description: "Google-Suche starten" },
-      { command: "youtube lo fi", description: "YouTube-Suche" },
-      { command: "open github", description: "Website / App öffnen" },
-      { command: "new tab", description: "Neuen Tab öffnen" },
-      { command: "close tab", description: "Aktiven Tab schließen" },
-      { command: "go back", description: "Browser zurück" },
-      { command: "go forward", description: "Browser vor" },
-      { command: "scroll down", description: "Seite scrollen" },
-      { command: "scroll up", description: "Seite hoch" },
+  de: {
+    windowTitle: "OpenBlob Dev Mode",
+    windowSubtitle: "Befehle, Routing, Sprache, Identität, Debug-Infos",
+    close: "Schließen",
+
+    lastRoute: "Letzte Route",
+    voiceShortcut: "Voice Shortcut",
+    model: "Modell",
+    commands: "Befehle",
+
+    companionIdentity: "Companion-Identität",
+    blobName: "Blob-Name",
+    ownerName: "Besitzername",
+    language: "Sprache",
+    save: "Speichern",
+    saving: "Speichert...",
+
+    searchPlaceholder:
+      "Befehle filtern, z. B. youtube, timer, browser, volume, shutdown ...",
+    noCommandsFound: "Keine Befehle für diese Suche gefunden.",
+    commandCount: (count) => `${count} Befehl${count === 1 ? "" : "e"}`,
+
+    routeNone: "keine",
+
+    languageOptions: [
+      { value: "en", label: "English" },
+      { value: "de", label: "Deutsch" },
+    ],
+  },
+};
+
+function getCommandGroups(lang: UiLang): LocalizedCommandGroup[] {
+  if (lang === "de") {
+    return [
       {
-        command: "click first result",
-        description: "Erstes Suchergebnis klicken",
+        key: "voiceGeneral",
+        title: "Sprache / Allgemein",
+        icon: <Mic size={15} />,
+        items: [
+          {
+            command: "wie spät ist es",
+            description: "Aktuelle Uhrzeit abrufen",
+          },
+          {
+            command: "welches datum ist heute",
+            description: "Aktuelles Datum abrufen",
+          },
+          {
+            command: "wie ist das wetter in Berlin",
+            description: "Wetter für einen Ort abrufen",
+          },
+          {
+            command: "mach einen screenshot",
+            description: "Snip-Modus öffnen",
+          },
+        ],
       },
-      { command: "browser context", description: "Infos über aktuelle Seite" },
-    ],
-  },
-  {
-    title: "Media / Streaming",
-    icon: <Music2 size={15} />,
-    items: [
-      { command: "play youtube", description: "Play/Pause" },
-      { command: "pause youtube", description: "Play/Pause" },
-      { command: "skip ad", description: "YouTube Werbung überspringen" },
-      { command: "next video", description: "Nächstes YouTube-Video" },
-      { command: "seek forward", description: "10s vorspulen" },
-      { command: "seek backward", description: "10s zurückspulen" },
-      { command: "volume up", description: "Lauter" },
-      { command: "volume down", description: "Leiser" },
-      { command: "mute", description: "Ton aus" },
-      { command: "unmute", description: "Ton an" },
       {
-        command: "recommend a comedy on netflix",
-        description: "Streaming Empfehlung",
+        key: "system",
+        title: "System",
+        icon: <MonitorSmartphone size={15} />,
+        items: [
+          {
+            command: "öffne downloads",
+            description: "Downloads-Ordner öffnen",
+          },
+          {
+            command: "öffne einstellungen",
+            description: "Windows-Einstellungen öffnen",
+          },
+          {
+            command: "öffne explorer",
+            description: "Datei-Explorer öffnen",
+          },
+          {
+            command: "bildschirm sperren",
+            description: "Aktuelle Windows-Sitzung sperren",
+          },
+          {
+            command: "herunterfahren",
+            description: "Bestätigung anfordern und dann den PC herunterfahren",
+          },
+          {
+            command: "neu starten",
+            description: "Bestätigung anfordern und dann den PC neu starten",
+          },
+          {
+            command: "ja",
+            description: "Eine ausstehende geschützte Aktion bestätigen",
+          },
+          {
+            command: "nein",
+            description: "Eine ausstehende geschützte Aktion abbrechen",
+          },
+          {
+            command: "abbrechen",
+            description: "Eine ausstehende geschützte Aktion abbrechen",
+          },
+        ],
       },
-    ],
-  },
-  {
-    title: "Fun / Mini Commands",
-    icon: <Dice5 size={15} />,
-    items: [
-      { command: "flip a coin", description: "Münzwurf" },
-      { command: "roll dice", description: "Würfel 1–6" },
-      { command: "start a 5 minute timer", description: "Timer starten" },
-    ],
-  },
-  {
-    title: "Apps / System",
-    icon: <MonitorSmartphone size={15} />,
-    items: [
-      { command: "open discord", description: "App oder Web-App öffnen" },
-      { command: "open spotify", description: "Spotify öffnen" },
-      { command: "open chrome", description: "Chrome öffnen" },
-      { command: "open explorer", description: "Explorer öffnen" },
-      { command: "open notepad", description: "Notepad öffnen" },
-      { command: "open paint", description: "Paint öffnen" },
-      { command: "open calc", description: "Rechner öffnen" },
-      { command: "open settings", description: "Windows Einstellungen öffnen" },
-    ],
-  },
-  {
-    title: "Editing / Shortcuts",
-    icon: <TerminalSquare size={15} />,
-    items: [
-      { command: "save", description: "Ctrl+S" },
-      { command: "save as", description: "Ctrl+Shift+S" },
-      { command: "open file", description: "Ctrl+O" },
-      { command: "new file", description: "Ctrl+N" },
-      { command: "undo", description: "Ctrl+Z" },
-      { command: "redo", description: "Ctrl+Y" },
-      { command: "confirm", description: "Enter" },
-      { command: "clear", description: "Escape" },
-    ],
-  },
-];
+      {
+        key: "browser",
+        title: "Browser",
+        icon: <Globe size={15} />,
+        items: [
+          {
+            command: "google katzen",
+            description: "Google-Suche starten",
+          },
+          {
+            command: "youtube lo fi",
+            description: "YouTube-Suche starten",
+          },
+          {
+            command: "öffne github",
+            description: "Bekannte Website oder App öffnen",
+          },
+          {
+            command: "neuer tab",
+            description: "Neuen Tab öffnen",
+          },
+          {
+            command: "tab schließen",
+            description: "Aktiven Tab schließen",
+          },
+          {
+            command: "zurück",
+            description: "Im Browser zurückgehen",
+          },
+          {
+            command: "vor",
+            description: "Im Browser vorgehen",
+          },
+          {
+            command: "runterscrollen",
+            description: "Seite nach unten scrollen",
+          },
+          {
+            command: "hochscrollen",
+            description: "Seite nach oben scrollen",
+          },
+          {
+            command: "klicke auf das erste ergebnis",
+            description: "Erstes sichtbares Ergebnis anklicken",
+          },
+          {
+            command: "browser kontext",
+            description: "Infos über die aktuelle Seite abrufen",
+          },
+        ],
+      },
+      {
+        key: "media",
+        title: "Medien",
+        icon: <Music2 size={15} />,
+        items: [
+          {
+            command: "spiele youtube",
+            description: "YouTube abspielen oder pausieren",
+          },
+          {
+            command: "pausiere youtube",
+            description: "YouTube abspielen oder pausieren",
+          },
+          {
+            command: "werbung überspringen",
+            description: "YouTube-Werbung überspringen",
+          },
+          {
+            command: "nächstes video",
+            description: "Nächstes YouTube-Video abspielen",
+          },
+          {
+            command: "spule vor",
+            description: "10 Sekunden vorspulen",
+          },
+          {
+            command: "spule zurück",
+            description: "10 Sekunden zurückspulen",
+          },
+          {
+            command: "lauter",
+            description: "Lautstärke erhöhen",
+          },
+          {
+            command: "leiser",
+            description: "Lautstärke verringern",
+          },
+          {
+            command: "stumm",
+            description: "Audio stummschalten",
+          },
+          {
+            command: "laut",
+            description: "Stummschaltung aufheben",
+          },
+          {
+            command: "empfiehl mir eine komödie auf netflix",
+            description: "Streaming-Empfehlung abrufen",
+          },
+        ],
+      },
+      {
+        key: "fun",
+        title: "Spaß / Mini-Befehle",
+        icon: <Dice5 size={15} />,
+        items: [
+          {
+            command: "wirf eine münze",
+            description: "Münze werfen",
+          },
+          {
+            command: "würfeln",
+            description: "Sechsseitigen Würfel werfen",
+          },
+          {
+            command: "starte einen timer für 5 minuten",
+            description: "Timer starten",
+          },
+        ],
+      },
+      {
+        key: "apps",
+        title: "Apps",
+        icon: <MonitorSmartphone size={15} />,
+        items: [
+          {
+            command: "öffne discord",
+            description: "App oder Web-App öffnen",
+          },
+          {
+            command: "öffne spotify",
+            description: "Spotify öffnen",
+          },
+          {
+            command: "öffne chrome",
+            description: "Chrome öffnen",
+          },
+          {
+            command: "öffne notepad",
+            description: "Notepad öffnen",
+          },
+          {
+            command: "öffne paint",
+            description: "Paint öffnen",
+          },
+          {
+            command: "öffne rechner",
+            description: "Rechner öffnen",
+          },
+        ],
+      },
+      {
+        key: "editing",
+        title: "Bearbeiten / Shortcuts",
+        icon: <TerminalSquare size={15} />,
+        items: [
+          {
+            command: "speichern",
+            description: "Ctrl+S drücken",
+          },
+          {
+            command: "speichern unter",
+            description: "Ctrl+Shift+S drücken",
+          },
+          {
+            command: "datei öffnen",
+            description: "Ctrl+O drücken",
+          },
+          {
+            command: "neue datei",
+            description: "Ctrl+N drücken",
+          },
+          {
+            command: "rückgängig",
+            description: "Ctrl+Z drücken",
+          },
+          {
+            command: "wiederholen",
+            description: "Ctrl+Y drücken",
+          },
+          {
+            command: "bestätigen",
+            description: "Enter drücken",
+          },
+          {
+            command: "abbrechen",
+            description: "Escape drücken",
+          },
+        ],
+      },
+    ];
+  }
+
+  return [
+    {
+      key: "voiceGeneral",
+      title: "Voice / General",
+      icon: <Mic size={15} />,
+      items: [
+        { command: "what time is it", description: "Get current time" },
+        { command: "what date is it", description: "Get current date" },
+        {
+          command: "weather in Berlin",
+          description: "Get weather for a location",
+        },
+        { command: "take screenshot", description: "Open snip mode" },
+      ],
+    },
+    {
+      key: "system",
+      title: "System",
+      icon: <MonitorSmartphone size={15} />,
+      items: [
+        { command: "open downloads", description: "Open the Downloads folder" },
+        { command: "open settings", description: "Open Windows Settings" },
+        { command: "open explorer", description: "Open File Explorer" },
+        {
+          command: "lock screen",
+          description: "Lock the current Windows session",
+        },
+        {
+          command: "shutdown",
+          description: "Ask for confirmation, then shut down the PC",
+        },
+        {
+          command: "restart",
+          description: "Ask for confirmation, then restart the PC",
+        },
+        { command: "yes", description: "Confirm a pending protected action" },
+        { command: "no", description: "Cancel a pending protected action" },
+        { command: "cancel", description: "Cancel a pending protected action" },
+      ],
+    },
+    {
+      key: "browser",
+      title: "Browser",
+      icon: <Globe size={15} />,
+      items: [
+        { command: "google cats", description: "Start a Google search" },
+        { command: "youtube lo fi", description: "Start a YouTube search" },
+        {
+          command: "open github",
+          description: "Open a known website or app",
+        },
+        { command: "new tab", description: "Open a new tab" },
+        { command: "close tab", description: "Close the active tab" },
+        { command: "go back", description: "Go back in the browser" },
+        { command: "go forward", description: "Go forward in the browser" },
+        { command: "scroll down", description: "Scroll the page down" },
+        { command: "scroll up", description: "Scroll the page up" },
+        {
+          command: "click first result",
+          description: "Click the first visible result",
+        },
+        {
+          command: "browser context",
+          description: "Get info about the current page",
+        },
+      ],
+    },
+    {
+      key: "media",
+      title: "Media",
+      icon: <Music2 size={15} />,
+      items: [
+        { command: "play youtube", description: "Play or pause YouTube" },
+        { command: "pause youtube", description: "Play or pause YouTube" },
+        { command: "skip ad", description: "Skip a YouTube ad" },
+        { command: "next video", description: "Play the next YouTube video" },
+        { command: "seek forward", description: "Seek forward by 10 seconds" },
+        {
+          command: "seek backward",
+          description: "Seek backward by 10 seconds",
+        },
+        { command: "volume up", description: "Increase volume" },
+        { command: "volume down", description: "Decrease volume" },
+        { command: "mute", description: "Mute audio" },
+        { command: "unmute", description: "Unmute audio" },
+        {
+          command: "recommend a comedy on netflix",
+          description: "Get a streaming recommendation",
+        },
+      ],
+    },
+    {
+      key: "fun",
+      title: "Fun / Mini Commands",
+      icon: <Dice5 size={15} />,
+      items: [
+        { command: "flip a coin", description: "Flip a coin" },
+        { command: "roll dice", description: "Roll a six-sided die" },
+        { command: "start a 5 minute timer", description: "Start a timer" },
+      ],
+    },
+    {
+      key: "apps",
+      title: "Apps",
+      icon: <MonitorSmartphone size={15} />,
+      items: [
+        { command: "open discord", description: "Open an app or web app" },
+        { command: "open spotify", description: "Open Spotify" },
+        { command: "open chrome", description: "Open Chrome" },
+        { command: "open notepad", description: "Open Notepad" },
+        { command: "open paint", description: "Open Paint" },
+        { command: "open calc", description: "Open Calculator" },
+      ],
+    },
+    {
+      key: "editing",
+      title: "Editing / Shortcuts",
+      icon: <TerminalSquare size={15} />,
+      items: [
+        { command: "save", description: "Press Ctrl+S" },
+        { command: "save as", description: "Press Ctrl+Shift+S" },
+        { command: "open file", description: "Press Ctrl+O" },
+        { command: "new file", description: "Press Ctrl+N" },
+        { command: "undo", description: "Press Ctrl+Z" },
+        { command: "redo", description: "Press Ctrl+Y" },
+        { command: "confirm", description: "Press Enter" },
+        { command: "clear", description: "Press Escape" },
+      ],
+    },
+  ];
+}
 
 function DevWindow() {
-  const [lastRoute, setLastRoute] = useState("none");
+  const [uiLang, setUiLang] = useState<UiLang>("en");
+  const [lastRoute, setLastRoute] = useState<RouteState>("none");
   const [voiceShortcut, setVoiceShortcut] = useState("Alt + M");
   const [model, setModel] = useState("llama3.1:8b");
   const [search, setSearch] = useState("");
   const [blobName, setBlobName] = useState("");
   const [ownerName, setOwnerName] = useState("");
-  const [language, setLanguage] = useState("en");
+  const [language, setLanguage] = useState<UiLang>("en");
   const [saving, setSaving] = useState(false);
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
-    "Voice / General": true,
-    Browser: false,
-    "Media / Streaming": false,
-    "Fun / Mini Commands": false,
-    "Apps / System": false,
-    "Editing / Shortcuts": false,
+
+  const t = TEXTS[uiLang];
+  const commandGroups = useMemo(() => getCommandGroups(uiLang), [uiLang]);
+
+  const [openGroups, setOpenGroups] = useState<
+    Record<CommandGroupKey, boolean>
+  >({
+    voiceGeneral: true,
+    system: false,
+    browser: false,
+    media: false,
+    fun: false,
+    apps: false,
+    editing: false,
   });
 
   const appWindow = useMemo(() => getCurrentWindow(), []);
@@ -191,9 +607,12 @@ function DevWindow() {
           string
         ];
         const [blob, owner, lang] = result;
+        const normalizedLang: UiLang = lang === "de" ? "de" : "en";
+
         setBlobName(blob);
         setOwnerName(owner);
-        setLanguage(lang);
+        setLanguage(normalizedLang);
+        setUiLang(normalizedLang);
       } catch (err) {
         console.error("failed to load identity", err);
       }
@@ -228,12 +647,16 @@ function DevWindow() {
         language,
       });
 
+      await emit("identity-updated");
+
       const result = (await invoke("get_identity")) as [string, string, string];
       const [blob, owner, lang] = result;
+      const normalizedLang: UiLang = lang === "de" ? "de" : "en";
 
       setBlobName(blob);
       setOwnerName(owner);
-      setLanguage(lang);
+      setLanguage(normalizedLang);
+      setUiLang(normalizedLang);
     } catch (err) {
       console.error("failed to save identity", err);
     } finally {
@@ -257,7 +680,7 @@ function DevWindow() {
         ),
       }))
       .filter((group) => group.items.length > 0);
-  }, [search]);
+  }, [search, commandGroups]);
 
   useEffect(() => {
     const q = search.trim();
@@ -266,7 +689,7 @@ function DevWindow() {
     setOpenGroups((prev) => {
       const next = { ...prev };
       for (const group of filteredGroups) {
-        next[group.title] = true;
+        next[group.key] = true;
       }
       return next;
     });
@@ -282,10 +705,10 @@ function DevWindow() {
     0
   );
 
-  const toggleGroup = (title: string) => {
+  const toggleGroup = (key: CommandGroupKey) => {
     setOpenGroups((prev) => ({
       ...prev,
-      [title]: !prev[title],
+      [key]: !prev[key],
     }));
   };
 
@@ -303,7 +726,6 @@ function DevWindow() {
           --glass-stroke-soft: rgba(255,255,255,0.08);
           --glass-fill: rgba(255,255,255,0.06);
           --glass-fill-hover: rgba(255,255,255,0.10);
-          --blue: rgba(10, 132, 255, 0.92);
         }
 
         html,
@@ -439,19 +861,19 @@ function DevWindow() {
           border-color: rgba(255,255,255,0.18);
         }
 
-      .content {
-        position: relative;
-        z-index: 1;
-        height: calc(100% - 71px);
-        padding: 14px;
-        display: grid;
-        grid-template-columns: 1fr;
-        grid-auto-rows: max-content;
-        gap: 12px;
-        min-height: 0;
-        overflow: auto;
-        align-content: start;
-      }
+        .content {
+          position: relative;
+          z-index: 1;
+          height: calc(100% - 71px);
+          padding: 14px;
+          display: grid;
+          grid-template-columns: 1fr;
+          grid-auto-rows: max-content;
+          gap: 12px;
+          min-height: 0;
+          overflow: auto;
+          align-content: start;
+        }
 
         .stats {
           display: grid;
@@ -515,7 +937,8 @@ function DevWindow() {
           letter-spacing: 0.03em;
         }
 
-        .textInput {
+        .textInput,
+        .selectInput {
           width: 100%;
           height: 42px;
           border-radius: 14px;
@@ -532,26 +955,40 @@ function DevWindow() {
           color: rgba(255,255,255,0.38);
         }
 
-        .textInput:focus {
+        .textInput:focus,
+        .selectInput:focus {
           border-color: rgba(255,255,255,0.18);
           background: rgba(255,255,255,0.10);
+        }
+
+        .selectInput option {
+          background: #1f1f24;
+          color: white;
         }
 
         .saveBtn {
           height: 42px;
           border-radius: 14px;
-          border: 1px solid rgba(255,255,255,0.16);
-          background: var(--blue);
-          color: white;
+          border: 1px solid rgba(255,255,255,0.12);
+          background: rgba(255,255,255,0.09);
+          color: var(--text-main);
           font-weight: 700;
           padding: 0 16px;
           cursor: pointer;
-          transition: all 0.2s ease;
+          transition: background 0.18s ease, border-color 0.18s ease, opacity 0.18s ease;
           white-space: nowrap;
+          box-shadow:
+            inset 0 1px 1px rgba(255,255,255,0.18),
+            inset 0 -1px 1px rgba(0,0,0,0.14);
         }
 
         .saveBtn:hover {
-          filter: brightness(1.05);
+          background: rgba(255,255,255,0.12);
+          border-color: rgba(255,255,255,0.16);
+        }
+
+        .saveBtn:active {
+          background: rgba(255,255,255,0.14);
         }
 
         .saveBtn:disabled {
@@ -785,10 +1222,8 @@ function DevWindow() {
               </div>
 
               <div className="titleWrap">
-                <div className="title">OpenBlob Dev Mode</div>
-                <div className="subtitle">
-                  Commands, routing, voice, identity, debug info
-                </div>
+                <div className="title">{t.windowTitle}</div>
+                <div className="subtitle">{t.windowSubtitle}</div>
               </div>
             </div>
 
@@ -801,7 +1236,7 @@ function DevWindow() {
                 void closeWindow();
               }}
               type="button"
-              title="Schließen"
+              title={t.close}
             >
               <X size={16} />
             </button>
@@ -810,22 +1245,24 @@ function DevWindow() {
           <div className="content">
             <div className="stats">
               <div className="card">
-                <div className="label">Letzte Route</div>
-                <div className="value">{lastRoute}</div>
+                <div className="label">{t.lastRoute}</div>
+                <div className="value">
+                  {lastRoute === "none" ? t.routeNone : lastRoute}
+                </div>
               </div>
 
               <div className="card">
-                <div className="label">Voice Shortcut</div>
+                <div className="label">{t.voiceShortcut}</div>
                 <div className="value">{voiceShortcut}</div>
               </div>
 
               <div className="card">
-                <div className="label">Model</div>
+                <div className="label">{t.model}</div>
                 <div className="value">{model}</div>
               </div>
 
               <div className="card">
-                <div className="label">Commands</div>
+                <div className="label">{t.commands}</div>
                 <div className="value strong">
                   {search.trim()
                     ? `${visibleCommands} / ${totalCommands}`
@@ -835,37 +1272,48 @@ function DevWindow() {
             </div>
 
             <div className="card identityCard">
-              <div className="label">Companion Identity</div>
+              <div className="label">{t.companionIdentity}</div>
 
               <div className="identityGrid">
                 <div className="field">
-                  <div className="fieldLabel">Blob Name</div>
+                  <div className="fieldLabel">{t.blobName}</div>
                   <input
                     className="textInput"
                     value={blobName}
                     onChange={(e) => setBlobName(e.target.value)}
-                    placeholder="Blob Name"
+                    placeholder={t.blobName}
                   />
                 </div>
 
                 <div className="field">
-                  <div className="fieldLabel">Owner Name</div>
+                  <div className="fieldLabel">{t.ownerName}</div>
                   <input
                     className="textInput"
                     value={ownerName}
                     onChange={(e) => setOwnerName(e.target.value)}
-                    placeholder="Owner Name"
+                    placeholder={t.ownerName}
                   />
                 </div>
 
                 <div className="field">
-                  <div className="fieldLabel">Language</div>
-                  <input
-                    className="textInput"
+                  <div className="fieldLabel">{t.language}</div>
+                  <select
+                    className="selectInput"
                     value={language}
-                    onChange={(e) => setLanguage(e.target.value)}
-                    placeholder="Language (en/de)"
-                  />
+                    onChange={(e) => {
+                      const nextLang = (
+                        e.target.value === "de" ? "de" : "en"
+                      ) as UiLang;
+                      setLanguage(nextLang);
+                      setUiLang(nextLang);
+                    }}
+                  >
+                    {t.languageOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <button
@@ -874,7 +1322,7 @@ function DevWindow() {
                   disabled={saving}
                   type="button"
                 >
-                  {saving ? "Saving..." : "Save"}
+                  {saving ? t.saving : t.save}
                 </button>
               </div>
             </div>
@@ -887,33 +1335,30 @@ function DevWindow() {
                 className="searchInput"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Commands filtern, z. B. youtube, timer, browser, volume ..."
+                placeholder={t.searchPlaceholder}
               />
             </div>
 
             <div className="commandsArea">
               {filteredGroups.length === 0 ? (
-                <div className="empty">
-                  Keine Commands für diese Suche gefunden.
-                </div>
+                <div className="empty">{t.noCommandsFound}</div>
               ) : (
                 filteredGroups.map((group) => {
-                  const isOpen = !!openGroups[group.title];
+                  const isOpen = !!openGroups[group.key];
 
                   return (
-                    <div className="group" key={group.title}>
+                    <div className="group" key={group.key}>
                       <button
                         className="groupToggle"
                         type="button"
-                        onClick={() => toggleGroup(group.title)}
+                        onClick={() => toggleGroup(group.key)}
                       >
                         <div className="groupHeaderLeft">
                           {group.icon}
                           <div className="groupMeta">
                             <div className="groupTitle">{group.title}</div>
                             <div className="groupCount">
-                              {group.items.length} command
-                              {group.items.length === 1 ? "" : "s"}
+                              {t.commandCount(group.items.length)}
                             </div>
                           </div>
                         </div>
@@ -929,7 +1374,7 @@ function DevWindow() {
                           {group.items.map((item) => (
                             <div
                               className="cmdRow"
-                              key={`${group.title}-${item.command}-${item.description}`}
+                              key={`${group.key}-${item.command}-${item.description}`}
                             >
                               <div className="cmd">{item.command}</div>
                               <div className="desc">{item.description}</div>

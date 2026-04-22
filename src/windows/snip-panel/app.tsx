@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 
+type UiLang = "en" | "de";
 type SnipMode = "explain" | "translate" | "ocr" | "search";
 
 type SnipPayload = {
@@ -35,6 +36,96 @@ type SearchData = {
   altQuery1: string;
   altQuery2: string;
   answer: string;
+};
+
+type LocalizedText = {
+  title: string;
+  close: string;
+  noSnipLoaded: string;
+  loadingPreview: string;
+  previewFailed: string;
+  path: string;
+  domain: string;
+  commentPlaceholder: string;
+  explain: string;
+  translate: string;
+  extractText: string;
+  searchHelp: string;
+  analyzing: string;
+  detectedIntent: string;
+  detectedGameOrApp: string;
+  keyText: string;
+  bestQuery: string;
+  unknown: string;
+  openBestGuideSearch: string;
+  openBroaderSearch: string;
+  imageSearch: string;
+  youtubeSearch: string;
+  copyResult: string;
+  sendToBubble: string;
+  snipPanel: string;
+  contextualHelper: string;
+};
+
+const TEXTS: Record<UiLang, LocalizedText> = {
+  en: {
+    title: "Snip to Blob",
+    close: "Close",
+    noSnipLoaded: "No snip loaded yet.",
+    loadingPreview: "Loading preview…",
+    previewFailed: "Preview failed to load.",
+    path: "Path",
+    domain: "Domain",
+    commentPlaceholder:
+      "How do I solve this quest? / where is this item? / what does this error mean?",
+    explain: "Explain",
+    translate: "Translate",
+    extractText: "Extract Text",
+    searchHelp: "Search Help",
+    analyzing: "Analyzing…",
+    detectedIntent: "Detected intent",
+    detectedGameOrApp: "Detected game/app",
+    keyText: "Key text",
+    bestQuery: "Best query",
+    unknown: "unknown",
+    openBestGuideSearch: "Open Best Guide Search",
+    openBroaderSearch: "Open Broader Search",
+    imageSearch: "Image Search",
+    youtubeSearch: "YouTube Search",
+    copyResult: "Copy Result",
+    sendToBubble: "Send to Bubble",
+    snipPanel: "snip panel",
+    contextualHelper: "contextual helper",
+  },
+  de: {
+    title: "Snip zu Blob",
+    close: "Schließen",
+    noSnipLoaded: "Noch kein Snip geladen.",
+    loadingPreview: "Vorschau wird geladen…",
+    previewFailed: "Vorschau konnte nicht geladen werden.",
+    path: "Pfad",
+    domain: "Domäne",
+    commentPlaceholder:
+      "Wie löse ich diese Quest? / wo ist dieses Item? / was bedeutet dieser Fehler?",
+    explain: "Erklären",
+    translate: "Übersetzen",
+    extractText: "Text extrahieren",
+    searchHelp: "Suchhilfe",
+    analyzing: "Analysiere…",
+    detectedIntent: "Erkannte Absicht",
+    detectedGameOrApp: "Erkanntes Spiel/App",
+    keyText: "Schlüsseltext",
+    bestQuery: "Beste Suchanfrage",
+    unknown: "unbekannt",
+    openBestGuideSearch: "Beste Guide-Suche öffnen",
+    openBroaderSearch: "Breitere Suche öffnen",
+    imageSearch: "Bildersuche",
+    youtubeSearch: "YouTube-Suche",
+    copyResult: "Ergebnis kopieren",
+    sendToBubble: "An Bubble senden",
+    snipPanel: "snip panel",
+    contextualHelper: "kontexthelfer",
+  },
 };
 
 function normalizeWindowsPath(path: string) {
@@ -92,6 +183,7 @@ function buildYouTubeSearchUrl(query: string) {
 }
 
 function SnipPanel() {
+  const [uiLang, setUiLang] = useState<UiLang>("en");
   const [path, setPath] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
   const [comment, setComment] = useState("");
@@ -107,6 +199,7 @@ function SnipPanel() {
   const [searchData, setSearchData] = useState<SearchData | null>(null);
 
   const busyRef = useRef(false);
+  const t = TEXTS[uiLang];
 
   useEffect(() => {
     const applyGlass = async () => {
@@ -119,6 +212,49 @@ function SnipPanel() {
     };
 
     void applyGlass();
+  }, []);
+
+  useEffect(() => {
+    const loadIdentity = async () => {
+      try {
+        const result = (await invoke("get_identity")) as [
+          string,
+          string,
+          string
+        ];
+        const [, , lang] = result;
+        setUiLang(lang === "de" ? "de" : "en");
+      } catch (error) {
+        console.error("failed to load identity for snip panel ui", error);
+        setUiLang("en");
+      }
+    };
+
+    void loadIdentity();
+
+    let unlistenIdentityUpdated: null | (() => void) = null;
+
+    const setupIdentityListener = async () => {
+      unlistenIdentityUpdated = await listen("identity-updated", async () => {
+        try {
+          const result = (await invoke("get_identity")) as [
+            string,
+            string,
+            string
+          ];
+          const [, , lang] = result;
+          setUiLang(lang === "de" ? "de" : "en");
+        } catch (error) {
+          console.error("failed to refresh identity for snip panel ui", error);
+        }
+      });
+    };
+
+    void setupIdentityListener();
+
+    return () => {
+      unlistenIdentityUpdated?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -152,7 +288,7 @@ function SnipPanel() {
         resetPanelState();
 
         setPath(nextPath);
-        setAppName(event.payload.app || "unknown");
+        setAppName(event.payload.app || t.unknown);
         setWindowTitle(event.payload.windowTitle || "");
         setContextDomain(event.payload.contextDomain || "");
 
@@ -183,7 +319,7 @@ function SnipPanel() {
     return () => {
       unlisten?.();
     };
-  }, []);
+  }, [t.unknown]);
 
   const openWebSearch = async (query?: string) => {
     const finalQuery = query || searchData?.searchQuery;
@@ -624,7 +760,7 @@ function SnipPanel() {
               </div>
 
               <div style={{ minWidth: 0 }}>
-                <div className="snip-title">Snip to Blob</div>
+                <div className="snip-title">{t.title}</div>
                 <div className="snip-subtitle">{appName}</div>
                 {!!windowTitle && (
                   <div className="snip-window-title">{windowTitle}</div>
@@ -632,28 +768,22 @@ function SnipPanel() {
               </div>
             </div>
 
-            <button
-              className="snip-close"
-              onClick={closePanel}
-              title="Schließen"
-            >
+            <button className="snip-close" onClick={closePanel} title={t.close}>
               <X size={16} />
             </button>
           </div>
 
           <div className="snip-content">
             <div className="glass-card preview-card">
-              {!path && (
-                <div className="preview-empty">No snip loaded yet.</div>
-              )}
+              {!path && <div className="preview-empty">{t.noSnipLoaded}</div>}
 
               {!!path && previewState === "loading" && (
-                <div className="preview-empty">Loading preview…</div>
+                <div className="preview-empty">{t.loadingPreview}</div>
               )}
 
               {!!path && previewState === "error" && (
                 <div className="preview-error">
-                  {previewError || "Preview failed to load."}
+                  {previewError || t.previewFailed}
                 </div>
               )}
 
@@ -666,7 +796,7 @@ function SnipPanel() {
                   onError={() => {
                     setPreviewState("error");
                     setPreviewError(
-                      `Preview failed to load.\n\nPath:\n${path}\n\nURL:\n${previewUrl}`
+                      `${t.previewFailed}\n\nPath:\n${path}\n\nURL:\n${previewUrl}`
                     );
                   }}
                   className="preview-image"
@@ -677,11 +807,11 @@ function SnipPanel() {
 
             {!!path && (
               <div className="info-chip">
-                <strong>Path:</strong> {path}
+                <strong>{t.path}:</strong> {path}
                 {!!contextDomain && (
                   <>
                     <br />
-                    <strong>Domain:</strong> {contextDomain}
+                    <strong>{t.domain}:</strong> {contextDomain}
                   </>
                 )}
               </div>
@@ -690,7 +820,7 @@ function SnipPanel() {
             <textarea
               value={comment}
               onChange={(e) => setComment(e.target.value)}
-              placeholder="How do I solve this quest? / where is this item? / what does this error mean?"
+              placeholder={t.commentPlaceholder}
               className="comment-box"
             />
 
@@ -700,7 +830,7 @@ function SnipPanel() {
                 onClick={() => runAction("explain")}
               >
                 <Sparkles size={16} />
-                Explain
+                {t.explain}
               </button>
 
               <button
@@ -708,12 +838,12 @@ function SnipPanel() {
                 onClick={() => runAction("translate")}
               >
                 <Languages size={16} />
-                Translate
+                {t.translate}
               </button>
 
               <button className="action-btn" onClick={() => runAction("ocr")}>
                 <ScanText size={16} />
-                Extract Text
+                {t.extractText}
               </button>
 
               <button
@@ -721,11 +851,11 @@ function SnipPanel() {
                 onClick={() => runAction("search")}
               >
                 <Search size={16} />
-                Search Help
+                {t.searchHelp}
               </button>
             </div>
 
-            {busy && <div className="busy-line">Analyzing…</div>}
+            {busy && <div className="busy-line">{t.analyzing}</div>}
 
             {!!result && (
               <>
@@ -734,16 +864,16 @@ function SnipPanel() {
                 {!!searchData?.searchQuery && (
                   <div className="search-box">
                     <div className="search-summary">
-                      <strong>Detected intent:</strong>{" "}
-                      {searchData.intent || "unknown"}
+                      <strong>{t.detectedIntent}:</strong>{" "}
+                      {searchData.intent || t.unknown}
                       <br />
-                      <strong>Detected game/app:</strong>{" "}
-                      {searchData.gameOrApp || "unknown"}
+                      <strong>{t.detectedGameOrApp}:</strong>{" "}
+                      {searchData.gameOrApp || t.unknown}
                       <br />
-                      <strong>Key text:</strong>{" "}
-                      {searchData.keyText || "unknown"}
+                      <strong>{t.keyText}:</strong>{" "}
+                      {searchData.keyText || t.unknown}
                       <br />
-                      <strong>Best query:</strong> {searchData.searchQuery}
+                      <strong>{t.bestQuery}:</strong> {searchData.searchQuery}
                     </div>
 
                     <button
@@ -751,17 +881,18 @@ function SnipPanel() {
                       onClick={() => openWebSearch(searchData.searchQuery)}
                     >
                       <ExternalLink size={16} />
-                      Open Best Guide Search
+                      {t.openBestGuideSearch}
                     </button>
 
                     {!!searchData.altQuery1 &&
-                      searchData.altQuery1 !== "unknown" && (
+                      searchData.altQuery1 !== "unknown" &&
+                      searchData.altQuery1 !== "unbekannt" && (
                         <button
                           className="action-btn"
                           onClick={() => openWebSearch(searchData.altQuery1)}
                         >
                           <ExternalLink size={16} />
-                          Open Broader Search
+                          {t.openBroaderSearch}
                         </button>
                       )}
 
@@ -775,7 +906,7 @@ function SnipPanel() {
                         }
                       >
                         <ImageIcon size={16} />
-                        Image Search
+                        {t.imageSearch}
                       </button>
 
                       <button
@@ -787,7 +918,7 @@ function SnipPanel() {
                         }
                       >
                         <Youtube size={16} />
-                        YouTube Search
+                        {t.youtubeSearch}
                       </button>
                     </div>
                   </div>
@@ -801,7 +932,7 @@ function SnipPanel() {
                     }}
                   >
                     <Copy size={16} />
-                    Copy Result
+                    {t.copyResult}
                   </button>
 
                   <button
@@ -813,16 +944,16 @@ function SnipPanel() {
                     }}
                   >
                     <Send size={16} />
-                    Send to Bubble
+                    {t.sendToBubble}
                   </button>
                 </div>
               </>
             )}
 
             <div className="bottom-links">
-              <span className="tiny-link tiny-link-static">snip panel</span>
+              <span className="tiny-link tiny-link-static">{t.snipPanel}</span>
               <span className="tiny-link tiny-link-static">
-                contextual helper
+                {t.contextualHelper}
               </span>
             </div>
           </div>
