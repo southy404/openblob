@@ -115,5 +115,13 @@
   "ollama_client_init_failed": "Ollama-Client konnte nicht erstellt werden: {error}",
   "ollama_call_failed": "Fehler beim Aufruf von Ollama: {error}",
   "ollama_status_failed": "Ollama Fehler {status}: {body}",
-  "ollama_response_read_failed": "Antwort konnte nicht gelesen werden: {error}"
+  "ollama_response_read_failed": "Antwort konnte nicht gelesen werden: {error}",
+  "system_confirm_shutdown": "Bist du sicher? Sag „ja“, um den PC herunterzufahren.",
+  "system_confirm_restart": "Bist du sicher? Sag „ja“, um den PC neu zu starten.",
+  "system_confirm_continue": "Bist du sicher? Sag „ja“, um fortzufahren.",
+  "system_pending_cancelled": "Die ausstehende Aktion wurde abgebrochen.",
+  "system_no_pending_confirm": "Es gibt keine ausstehende Aktion zum Bestätigen.",
+  "system_no_pending_cancel": "Es gibt keine ausstehende Aktion zum Abbrechen.",
+  "system_shutdown_now": "Der PC wird heruntergefahren.",
+  "system_restart_now": "Der PC wird neu gestartet."
 }

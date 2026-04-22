@@ -19,8 +19,10 @@ import {
   X,
   Square,
   LoaderCircle,
+  Wrench,
 } from "lucide-react";
 import { showTranscriptWindow } from "../transcript/open";
+import { ensureDevWindow } from "../bubble-dev/open";
 
 type QuickMenuPayload = {
   hint?: string;
@@ -34,80 +36,183 @@ type TranscriptStatus = {
   segment_count: number;
 };
 
+type UiLang = "en" | "de";
+
 type QuickAction = {
   id: string;
-  label: string;
+  label: Record<UiLang, string>;
   icon: React.ReactNode;
   danger?: boolean;
+};
+
+type LocalizedText = {
+  ready: string;
+  unknown: string;
+  close: string;
+  quickMenuTitle: string;
+  startTranscript: string;
+  stopTranscript: string;
+  enableAlwaysOnTop: string;
+  disableAlwaysOnTop: string;
+  transcriptIdle: string;
+  transcriptRecording: string;
+  transcriptStopping: string;
+  transcriptWorking: string;
+  appChip: (app: string) => string;
+  pinChipPinned: string;
+  pinChipFloating: string;
+  segmentsChip: (count: number) => string;
+  transcriptErrorFallback: string;
+  devWindow: string;
+};
+
+const TEXTS: Record<UiLang, LocalizedText> = {
+  en: {
+    ready: "Ready.",
+    unknown: "unknown",
+    close: "Close",
+    quickMenuTitle: "Companion Quick Menu",
+    startTranscript: "Start Transcript",
+    stopTranscript: "Stop Transcript",
+    enableAlwaysOnTop: "Enable Always on Top",
+    disableAlwaysOnTop: "Disable Always on Top",
+    transcriptIdle: "transcript idle",
+    transcriptRecording: "transcript recording",
+    transcriptStopping: "transcript stopping",
+    transcriptWorking: "transcript working",
+    appChip: (app) => `app ${app}`,
+    pinChipPinned: "always on top",
+    pinChipFloating: "floating",
+    segmentsChip: (count) => `segments ${count}`,
+    transcriptErrorFallback: "Transcript error",
+    devWindow: "Open Dev Window",
+  },
+  de: {
+    ready: "Bereit.",
+    unknown: "unbekannt",
+    close: "Schließen",
+    quickMenuTitle: "Companion Quick Menu",
+    startTranscript: "Transkript starten",
+    stopTranscript: "Transkript stoppen",
+    enableAlwaysOnTop: "Immer im Vordergrund aktivieren",
+    disableAlwaysOnTop: "Immer im Vordergrund deaktivieren",
+    transcriptIdle: "transkript inaktiv",
+    transcriptRecording: "transkript aufnahme",
+    transcriptStopping: "transkript stoppt",
+    transcriptWorking: "transkript verarbeitet",
+    appChip: (app) => `app ${app}`,
+    pinChipPinned: "immer im vordergrund",
+    pinChipFloating: "frei schwebend",
+    segmentsChip: (count) => `segmente ${count}`,
+    transcriptErrorFallback: "Transkriptfehler",
+    devWindow: "Dev Window öffnen",
+  },
 };
 
 const actions: QuickAction[] = [
   {
     id: "open-bubble",
-    label: "Open Bubble",
+    label: {
+      en: "Open Bubble",
+      de: "Bubble öffnen",
+    },
     icon: <MessageCircle size={16} />,
   },
   {
     id: "open-transcript",
-    label: "Open Transcript",
+    label: {
+      en: "Open Transcript",
+      de: "Transkript öffnen",
+    },
     icon: <MessageCircle size={16} />,
   },
   {
     id: "capture-clipboard",
-    label: "Capture Clipboard",
+    label: {
+      en: "Capture Clipboard",
+      de: "Zwischenablage erfassen",
+    },
     icon: <Clipboard size={16} />,
   },
   {
     id: "snip-screen",
-    label: "Snip Screen",
+    label: {
+      en: "Snip Screen",
+      de: "Bildschirm snippen",
+    },
     icon: <Scissors size={16} />,
   },
   {
     id: "media-play-pause",
-    label: "Play / Pause",
+    label: {
+      en: "Play / Pause",
+      de: "Play / Pause",
+    },
     icon: <Play size={16} />,
   },
   {
     id: "media-prev",
-    label: "Previous Track",
+    label: {
+      en: "Previous Track",
+      de: "Vorheriger Track",
+    },
     icon: <SkipBack size={16} />,
   },
   {
     id: "media-next",
-    label: "Next Track",
+    label: {
+      en: "Next Track",
+      de: "Nächster Track",
+    },
     icon: <SkipForward size={16} />,
   },
   {
     id: "volume-down",
-    label: "Volume Down",
+    label: {
+      en: "Volume Down",
+      de: "Leiser",
+    },
     icon: <Volume1 size={16} />,
   },
   {
     id: "volume-up",
-    label: "Volume Up",
+    label: {
+      en: "Volume Up",
+      de: "Lauter",
+    },
     icon: <Volume2 size={16} />,
   },
   {
     id: "toggle-mute",
-    label: "Toggle Mute",
+    label: {
+      en: "Toggle Mute",
+      de: "Stumm umschalten",
+    },
     icon: <VolumeX size={16} />,
   },
   {
     id: "sleep-now",
-    label: "Sleep Now",
+    label: {
+      en: "Sleep Now",
+      de: "Jetzt schlafen",
+    },
     icon: <Moon size={16} />,
   },
   {
     id: "close-app",
-    label: "Close",
+    label: {
+      en: "Close",
+      de: "Schließen",
+    },
     icon: <Power size={16} />,
     danger: true,
   },
 ];
 
 function QuickMenuApp() {
-  const [hint, setHint] = useState("Ready.");
-  const [activeApp, setActiveApp] = useState("unknown");
+  const [uiLang, setUiLang] = useState<UiLang>("en");
+  const [hint, setHint] = useState(TEXTS.en.ready);
+  const [activeApp, setActiveApp] = useState(TEXTS.en.unknown);
   const [pinned, setPinned] = useState(true);
 
   const [transcriptRunning, setTranscriptRunning] = useState(false);
@@ -115,11 +220,13 @@ function QuickMenuApp() {
   const [transcriptSegments, setTranscriptSegments] = useState(0);
   const [errorText, setErrorText] = useState<string | null>(null);
 
+  const t = TEXTS[uiLang];
+
   const transcriptChip = useMemo(() => {
-    if (transcriptBusy && transcriptRunning) return "transcript stopping";
-    if (transcriptBusy) return "transcript working";
-    return transcriptRunning ? "transcript recording" : "transcript idle";
-  }, [transcriptBusy, transcriptRunning]);
+    if (transcriptBusy && transcriptRunning) return t.transcriptStopping;
+    if (transcriptBusy) return t.transcriptWorking;
+    return transcriptRunning ? t.transcriptRecording : t.transcriptIdle;
+  }, [t, transcriptBusy, transcriptRunning]);
 
   useEffect(() => {
     const applyGlass = async () => {
@@ -132,6 +239,49 @@ function QuickMenuApp() {
     };
 
     void applyGlass();
+  }, []);
+
+  useEffect(() => {
+    const loadIdentity = async () => {
+      try {
+        const result = (await invoke("get_identity")) as [
+          string,
+          string,
+          string
+        ];
+        const [, , lang] = result;
+        setUiLang(lang === "de" ? "de" : "en");
+      } catch (error) {
+        console.error("failed to load identity for quick menu ui", error);
+        setUiLang("en");
+      }
+    };
+
+    void loadIdentity();
+
+    let unlistenIdentityUpdated: null | (() => void) = null;
+
+    const setupIdentityListener = async () => {
+      unlistenIdentityUpdated = await listen("identity-updated", async () => {
+        try {
+          const result = (await invoke("get_identity")) as [
+            string,
+            string,
+            string
+          ];
+          const [, , lang] = result;
+          setUiLang(lang === "de" ? "de" : "en");
+        } catch (error) {
+          console.error("failed to refresh identity for quick menu ui", error);
+        }
+      });
+    };
+
+    void setupIdentityListener();
+
+    return () => {
+      unlistenIdentityUpdated?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -159,8 +309,8 @@ function QuickMenuApp() {
       unlistenData = await listen<QuickMenuPayload>(
         "quick-menu-data",
         async (event) => {
-          setHint(event.payload.hint || "Ready.");
-          setActiveApp(event.payload.activeApp || "unknown");
+          setHint(event.payload.hint || t.ready);
+          setActiveApp(event.payload.activeApp || t.unknown);
           setPinned(Boolean(event.payload.pinned));
           setErrorText(null);
 
@@ -187,7 +337,7 @@ function QuickMenuApp() {
       unlistenTranscriptError = await listen<string>(
         "transcript://error",
         (event) => {
-          const message = String(event.payload || "Transcript error");
+          const message = String(event.payload || t.transcriptErrorFallback);
           setErrorText(message);
           setTranscriptBusy(false);
         }
@@ -219,7 +369,7 @@ function QuickMenuApp() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("blur", onBlur);
     };
-  }, []);
+  }, [t]);
 
   const closeMenu = async () => {
     await emitTo("main", "quick-menu-action", {
@@ -236,6 +386,19 @@ function QuickMenuApp() {
       await getCurrentWindow()
         .hide()
         .catch(() => {});
+    }
+  };
+
+  const openDevWindow = async () => {
+    try {
+      const dev = await ensureDevWindow();
+      await dev.show();
+      await dev.setFocus().catch(() => {});
+      await getCurrentWindow()
+        .hide()
+        .catch(() => {});
+    } catch (error) {
+      console.error("failed to open dev window", error);
     }
   };
 
@@ -537,19 +700,28 @@ function QuickMenuApp() {
           background: rgba(255,159,10,0.12);
           color: rgba(255,255,255,0.92);
         }
+
+        .spin {
+          animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
       `}</style>
 
       <div className="quick-shell">
         <div className="quick-menu">
           <div className="quick-header">
             <div>
-              <div className="quick-title">Companion Quick Menu</div>
+              <div className="quick-title">{t.quickMenuTitle}</div>
               <div className="quick-subtitle" title={`${hint} • ${activeApp}`}>
                 {hint} • {activeApp}
               </div>
             </div>
 
-            <button className="quick-close" onClick={closeMenu} title="Close">
+            <button className="quick-close" onClick={closeMenu} title={t.close}>
               <X size={16} />
             </button>
           </div>
@@ -568,7 +740,7 @@ function QuickMenuApp() {
                 ) : (
                   <MessageCircle size={16} />
                 )}
-                Start Transcript
+                {t.startTranscript}
               </button>
             ) : (
               <button
@@ -581,9 +753,14 @@ function QuickMenuApp() {
                 ) : (
                   <Square size={16} />
                 )}
-                Stop Transcript
+                {t.stopTranscript}
               </button>
             )}
+
+            <button className="quick-btn" onClick={() => void openDevWindow()}>
+              <Wrench size={16} />
+              {t.devWindow}
+            </button>
 
             {actions.map((action) => (
               <button
@@ -594,7 +771,7 @@ function QuickMenuApp() {
                 onClick={() => sendAction(action.id)}
               >
                 {action.icon}
-                {action.label}
+                {action.label[uiLang]}
               </button>
             ))}
 
@@ -607,13 +784,15 @@ function QuickMenuApp() {
               }}
             >
               <Pin size={16} />
-              {pinned ? "Disable Always on Top" : "Enable Always on Top"}
+              {pinned ? t.disableAlwaysOnTop : t.enableAlwaysOnTop}
             </button>
           </div>
 
           <div className="quick-footer">
-            <div className="chip">app {activeApp}</div>
-            <div className="chip">{pinned ? "always on top" : "floating"}</div>
+            <div className="chip">{t.appChip(activeApp)}</div>
+            <div className="chip">
+              {pinned ? t.pinChipPinned : t.pinChipFloating}
+            </div>
             <div
               className={`chip ${
                 transcriptBusy
@@ -625,7 +804,7 @@ function QuickMenuApp() {
             >
               {transcriptChip}
             </div>
-            <div className="chip">segments {transcriptSegments}</div>
+            <div className="chip">{t.segmentsChip(transcriptSegments)}</div>
           </div>
         </div>
       </div>

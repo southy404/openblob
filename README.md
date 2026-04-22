@@ -36,6 +36,7 @@ OpenBlob aims to be different:
 
 - **open-source** — built in public, for everyone
 - **local-first** — runs on your machine, not someone else's server
+- **deterministic-first system control** — handles core Windows actions like opening Downloads, Settings, Explorer, screen locking, and protected power commands
 - **context-aware** — understands what app you're in, not just what you type
 - **vision-enabled** — analyzes your screen and selected regions
 - **privacy-conscious** — transparent about what touches the network
@@ -118,14 +119,24 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 
 ### 💻 System Control
 
-| Command                       | Description              |
-| ----------------------------- | ------------------------ |
-| `open <app>`                  | Launch application       |
-| `close app`                   | Close active application |
-| `volume up / down`            | Adjust system volume     |
-| `mute / unmute`               | Toggle audio             |
-| `play music`                  | Media control            |
-| `next track / previous track` | Media navigation         |
+| Command           | Description                                 |
+| ----------------- | ------------------------------------------- |
+| `open <app>`      | Launch a known application                  |
+| `open downloads`  | Open the Downloads folder                   |
+| `open settings`   | Open Windows Settings                       |
+| `open explorer`   | Open File Explorer                          |
+| `lock screen`     | Lock the current Windows session            |
+| `shutdown`        | Ask for confirmation, then shut down the PC |
+| `restart`         | Ask for confirmation, then restart the PC   |
+| `yes`             | Confirm a pending protected action          |
+| `no` / `cancel`   | Cancel a pending protected action           |
+| `volume up/down`  | Adjust system volume                        |
+| `mute` / `unmute` | Toggle audio                                |
+| `play music`      | Media control                               |
+| `next track`      | Skip to the next media track                |
+| `previous track`  | Go back to the previous media track         |
+
+> Protected power commands use a short confirmation window and expire automatically if they are not confirmed in time.
 
 ---
 
@@ -503,6 +514,7 @@ Recent work focused on:
 - separating larger UI elements into dedicated windows (like the quick menu)
 - introducing the first transcript module + transcript window
 - improving long-term maintainability
+- adding deterministic Windows system commands with protected confirmation flow for sensitive actions
 - adding Blob Connectors for Telegram, Discord, Slack, and Email
 - connecting external channels to the Rust command pipeline via local HTTP
 

@@ -17,6 +17,8 @@ import {
   X,
 } from "lucide-react";
 
+type UiLang = "en" | "de";
+
 type TranscriptSegment = {
   start_ms: number;
   end_ms: number;
@@ -55,6 +57,137 @@ type ProcessedTranscriptResult = {
   action_items: string[];
 };
 
+type LocalizedText = {
+  title: string;
+  close: string;
+
+  startTranscript: string;
+  stopTranscript: string;
+  save: string;
+  process: string;
+
+  session: string;
+  segments: string;
+  app: string;
+
+  processing: string;
+  working: string;
+  recording: string;
+  idle: string;
+
+  rawCleanTranscript: string;
+  rawCleanTranscriptSubtitle: string;
+  noTranscriptTextYet: string;
+
+  processedOutput: string;
+  processedOutputSubtitle: string;
+  noProcessedOutputYet: string;
+  processStrong: string;
+
+  faithfulTranscript: string;
+  speakerBlocks: string;
+  noSpeakerBlocksReturned: string;
+  summary: string;
+  noSummaryReturned: string;
+  actionItems: string;
+  noActionItemsFound: string;
+
+  liveSegments: string;
+  liveSegmentsSubtitle: string;
+  noTranscriptSegmentsYet: string;
+
+  unknownApp: string;
+};
+
+const TEXTS: Record<UiLang, LocalizedText> = {
+  en: {
+    title: "Transcript Studio",
+    close: "Close",
+
+    startTranscript: "Start Transcript",
+    stopTranscript: "Stop Transcript",
+    save: "Save",
+    process: "Process",
+
+    session: "session",
+    segments: "segments",
+    app: "app",
+
+    processing: "processing",
+    working: "working",
+    recording: "recording",
+    idle: "idle",
+
+    rawCleanTranscript: "Raw Clean Transcript",
+    rawCleanTranscriptSubtitle:
+      "direct cleaned stream from the current session",
+    noTranscriptTextYet: "No transcript text yet.",
+
+    processedOutput: "Processed Output",
+    processedOutputSubtitle:
+      "faithful transcript, speaker grouping and summary",
+    noProcessedOutputYet: "No processed output yet. Click",
+    processStrong: "Process",
+
+    faithfulTranscript: "Faithful Transcript",
+    speakerBlocks: "Speaker Blocks",
+    noSpeakerBlocksReturned: "No speaker blocks returned.",
+    summary: "Summary",
+    noSummaryReturned: "No summary returned.",
+    actionItems: "Action Items",
+    noActionItemsFound: "No action items found.",
+
+    liveSegments: "Live Segments",
+    liveSegmentsSubtitle: "latest unique timestamped chunks",
+    noTranscriptSegmentsYet: "No transcript segments yet.",
+
+    unknownApp: "-",
+  },
+  de: {
+    title: "Transcript Studio",
+    close: "Schließen",
+
+    startTranscript: "Transkript starten",
+    stopTranscript: "Transkript stoppen",
+    save: "Speichern",
+    process: "Verarbeiten",
+
+    session: "Sitzung",
+    segments: "Segmente",
+    app: "App",
+
+    processing: "verarbeite",
+    working: "arbeite",
+    recording: "nimmt auf",
+    idle: "inaktiv",
+
+    rawCleanTranscript: "Rohes bereinigtes Transkript",
+    rawCleanTranscriptSubtitle:
+      "direkter bereinigter Stream der aktuellen Sitzung",
+    noTranscriptTextYet: "Noch kein Transkripttext vorhanden.",
+
+    processedOutput: "Verarbeitetes Ergebnis",
+    processedOutputSubtitle:
+      "treues Transkript, Sprechergruppierung und Zusammenfassung",
+    noProcessedOutputYet: "Noch kein verarbeitetes Ergebnis. Klicke auf",
+    processStrong: "Verarbeiten",
+
+    faithfulTranscript: "Treues Transkript",
+    speakerBlocks: "Sprecherblöcke",
+    noSpeakerBlocksReturned: "Keine Sprecherblöcke zurückgegeben.",
+    summary: "Zusammenfassung",
+    noSummaryReturned: "Keine Zusammenfassung zurückgegeben.",
+    actionItems: "Aufgaben",
+    noActionItemsFound: "Keine Aufgaben gefunden.",
+
+    liveSegments: "Live-Segmente",
+    liveSegmentsSubtitle: "letzte eindeutige Zeitblöcke",
+    noTranscriptSegmentsYet: "Noch keine Transkriptsegmente vorhanden.",
+
+    unknownApp: "-",
+  },
+};
+
 function formatMs(ms: number) {
   const total = Math.floor(ms / 1000);
   const min = Math.floor(total / 60);
@@ -67,6 +200,7 @@ function segmentKey(seg: TranscriptSegment) {
 }
 
 function TranscriptApp() {
+  const [uiLang, setUiLang] = useState<UiLang>("en");
   const [status, setStatus] = useState<TranscriptStatus | null>(null);
   const [session, setSession] = useState<TranscriptSession | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +210,8 @@ function TranscriptApp() {
   const [speakerBlocks, setSpeakerBlocks] = useState<SpeakerBlock[]>([]);
   const [summary, setSummary] = useState("");
   const [actionItems, setActionItems] = useState<string[]>([]);
+
+  const t = TEXTS[uiLang];
 
   const refresh = async () => {
     try {
@@ -106,6 +242,49 @@ function TranscriptApp() {
     };
 
     void applyGlass();
+  }, []);
+
+  useEffect(() => {
+    const loadIdentity = async () => {
+      try {
+        const result = (await invoke("get_identity")) as [
+          string,
+          string,
+          string
+        ];
+        const [, , lang] = result;
+        setUiLang(lang === "de" ? "de" : "en");
+      } catch (error) {
+        console.error("failed to load identity for transcript ui", error);
+        setUiLang("en");
+      }
+    };
+
+    void loadIdentity();
+
+    let unlistenIdentityUpdated: null | (() => void) = null;
+
+    const setupIdentityListener = async () => {
+      unlistenIdentityUpdated = await listen("identity-updated", async () => {
+        try {
+          const result = (await invoke("get_identity")) as [
+            string,
+            string,
+            string
+          ];
+          const [, , lang] = result;
+          setUiLang(lang === "de" ? "de" : "en");
+        } catch (error) {
+          console.error("failed to refresh identity for transcript ui", error);
+        }
+      });
+    };
+
+    void setupIdentityListener();
+
+    return () => {
+      unlistenIdentityUpdated?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -273,11 +452,11 @@ function TranscriptApp() {
   };
 
   const transcriptStatusLabel = useMemo(() => {
-    if (busy && isRecording) return "processing";
-    if (busy) return "working";
-    if (isRecording) return "recording";
-    return "idle";
-  }, [busy, isRecording]);
+    if (busy && isRecording) return t.processing;
+    if (busy) return t.working;
+    if (isRecording) return t.recording;
+    return t.idle;
+  }, [busy, isRecording, t]);
 
   return (
     <>
@@ -713,20 +892,24 @@ function TranscriptApp() {
         <div className="window">
           <div className="topbar" data-tauri-drag-region>
             <div className="title-wrap">
-              <div className="title">Transcript Studio</div>
+              <div className="title">{t.title}</div>
               <div
                 className="subtitle"
-                title={`${session?.context?.app_name ?? "-"} • ${
-                  session?.context?.window_title ?? "-"
+                title={`${session?.context?.app_name ?? t.unknownApp} • ${
+                  session?.context?.window_title ?? t.unknownApp
                 }`}
               >
-                {session?.context?.app_name ?? "-"} •{" "}
-                {session?.context?.window_title ?? "-"}
+                {session?.context?.app_name ?? t.unknownApp} •{" "}
+                {session?.context?.window_title ?? t.unknownApp}
               </div>
             </div>
 
             <div className="window-actions">
-              <button className="icon-btn" onClick={closeWindow} title="Close">
+              <button
+                className="icon-btn"
+                onClick={closeWindow}
+                title={t.close}
+              >
                 <X size={16} />
               </button>
             </div>
@@ -745,7 +928,7 @@ function TranscriptApp() {
                   ) : (
                     <Play size={16} />
                   )}
-                  Start Transcript
+                  {t.startTranscript}
                 </button>
               ) : (
                 <button
@@ -758,7 +941,7 @@ function TranscriptApp() {
                   ) : (
                     <Square size={16} />
                   )}
-                  Stop Transcript
+                  {t.stopTranscript}
                 </button>
               )}
 
@@ -768,7 +951,7 @@ function TranscriptApp() {
                 disabled={!canSave}
               >
                 <Save size={16} />
-                Save
+                {t.save}
               </button>
 
               <button
@@ -781,15 +964,19 @@ function TranscriptApp() {
                 ) : (
                   <Bot size={16} />
                 )}
-                Process
+                {t.process}
               </button>
             </div>
 
             <div className="meta">
-              <div className="chip">session {session?.id ?? "-"}</div>
-              <div className="chip">segments {derivedSegmentCount}</div>
               <div className="chip">
-                app {session?.context?.app_name ?? "-"}
+                {t.session} {session?.id ?? "-"}
+              </div>
+              <div className="chip">
+                {t.segments} {derivedSegmentCount}
+              </div>
+              <div className="chip">
+                {t.app} {session?.context?.app_name ?? t.unknownApp}
               </div>
               <div
                 className={`chip ${
@@ -808,10 +995,10 @@ function TranscriptApp() {
                   <div>
                     <div className="panel-title">
                       <Waves size={15} />
-                      Raw Clean Transcript
+                      {t.rawCleanTranscript}
                     </div>
                     <div className="panel-subtitle">
-                      direct cleaned stream from the current session
+                      {t.rawCleanTranscriptSubtitle}
                     </div>
                   </div>
                 </div>
@@ -820,7 +1007,7 @@ function TranscriptApp() {
                   {cleanTranscript ? (
                     <div className="raw-text">{cleanTranscript}</div>
                   ) : (
-                    <div className="empty">No transcript text yet.</div>
+                    <div className="empty">{t.noTranscriptTextYet}</div>
                   )}
                 </div>
               </div>
@@ -830,10 +1017,10 @@ function TranscriptApp() {
                   <div>
                     <div className="panel-title">
                       <AudioLines size={15} />
-                      Processed Output
+                      {t.processedOutput}
                     </div>
                     <div className="panel-subtitle">
-                      faithful transcript, speaker grouping and summary
+                      {t.processedOutputSubtitle}
                     </div>
                   </div>
                 </div>
@@ -844,7 +1031,7 @@ function TranscriptApp() {
                       <div className="section">
                         <div className="section-label">
                           <Mic size={14} />
-                          Faithful Transcript
+                          {t.faithfulTranscript}
                         </div>
                         <div className="section-text">{faithfulTranscript}</div>
                       </div>
@@ -852,7 +1039,7 @@ function TranscriptApp() {
                       <div className="section">
                         <div className="section-label">
                           <UserRound size={14} />
-                          Speaker Blocks
+                          {t.speakerBlocks}
                         </div>
 
                         {speakerBlocks.length ? (
@@ -870,7 +1057,7 @@ function TranscriptApp() {
                           ))
                         ) : (
                           <div className="empty">
-                            No speaker blocks returned.
+                            {t.noSpeakerBlocksReturned}
                           </div>
                         )}
                       </div>
@@ -878,17 +1065,17 @@ function TranscriptApp() {
                       <div className="section">
                         <div className="section-label">
                           <Bot size={14} />
-                          Summary
+                          {t.summary}
                         </div>
                         <div className="section-text">
-                          {summary || "No summary returned."}
+                          {summary || t.noSummaryReturned}
                         </div>
                       </div>
 
                       <div className="section" style={{ marginBottom: 0 }}>
                         <div className="section-label">
                           <CheckSquare size={14} />
-                          Action Items
+                          {t.actionItems}
                         </div>
 
                         {actionItems.length ? (
@@ -898,13 +1085,14 @@ function TranscriptApp() {
                             ))}
                           </ul>
                         ) : (
-                          <div className="empty">No action items found.</div>
+                          <div className="empty">{t.noActionItemsFound}</div>
                         )}
                       </div>
                     </>
                   ) : (
                     <div className="empty">
-                      No processed output yet. Click <strong>Process</strong>.
+                      {t.noProcessedOutputYet}{" "}
+                      <strong>{t.processStrong}</strong>.
                     </div>
                   )}
                 </div>
@@ -923,10 +1111,10 @@ function TranscriptApp() {
                   <div>
                     <div className="panel-title">
                       <Waves size={15} />
-                      Live Segments
+                      {t.liveSegments}
                     </div>
                     <div className="panel-subtitle">
-                      latest unique timestamped chunks
+                      {t.liveSegmentsSubtitle}
                     </div>
                   </div>
                 </div>
@@ -947,7 +1135,7 @@ function TranscriptApp() {
                       ))}
                     </div>
                   ) : (
-                    <div className="empty">No transcript segments yet.</div>
+                    <div className="empty">{t.noTranscriptSegmentsYet}</div>
                   )}
                 </div>
               </div>

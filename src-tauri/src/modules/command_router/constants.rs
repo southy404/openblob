@@ -121,3 +121,62 @@ pub const STREAMING_MORE_WORDS: &[&str] = &[
     "noch was",
     "gib mir was anderes",
 ];
+
+pub const DOWNLOADS_WORDS: &[&str] = &[
+    "downloads",
+    "download",
+    "download folder",
+    "download ordner",
+];
+
+pub const SETTINGS_WORDS: &[&str] = &[
+    "settings",
+    "einstellungen",
+    "windows settings",
+];
+
+pub const EXPLORER_WORDS: &[&str] = &[
+    "explorer",
+    "file explorer",
+    "datei explorer",
+];
+
+pub const LOCK_WORDS: &[&str] = &[
+    "lock screen",
+    "screen lock",
+    "bildschirm sperren",
+    "pc sperren",
+];
+
+pub const SHUTDOWN_WORDS: &[&str] = &[
+    "shutdown",
+    "shut down",
+    "turn off pc",
+    "herunterfahren",
+    "pc ausschalten",
+];
+
+pub const RESTART_WORDS: &[&str] = &[
+    "restart",
+    "reboot",
+    "neu starten",
+    "pc neustarten",
+];
+
+pub const CONFIRM_WORDS: &[&str] = &[
+    "yes",
+    "ja",
+    "confirm",
+    "bestätigen",
+    "mach es",
+    "do it",
+];
+
+pub const CANCEL_WORDS: &[&str] = &[
+    "no",
+    "nein",
+    "cancel",
+    "abbrechen",
+    "stop",
+    "doch nicht",
+];

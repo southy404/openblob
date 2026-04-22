@@ -100,6 +100,15 @@ pub enum CompanionAction {
     SetTimer { seconds: u64 },
     CancelTimer,
     None,
+
+    OpenDownloads,
+    OpenSettings,
+    OpenExplorer,
+    LockScreen,
+    Shutdown,
+    Restart,
+    ConfirmPendingAction,
+    CancelPendingAction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,6 +169,15 @@ pub enum IntentKind {
     SetTimer { seconds: u64 },
     CancelTimer,
     None,
+
+    OpenDownloads,
+    OpenSettings,
+    OpenExplorer,
+    LockScreen,
+    Shutdown,
+    Restart,
+    ConfirmAction,
+    CancelAction,
 }
 
 #[derive(Debug)]

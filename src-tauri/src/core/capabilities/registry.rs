@@ -6,6 +6,15 @@ pub const CAP_SYSTEM_OPEN_APP: CapabilityId = "system.open_app";
 pub const CAP_VISION_CAPTURE_SCREEN: CapabilityId = "vision.capture_screen";
 pub const CAP_MEDIA_PLAY_PAUSE: CapabilityId = "media.play_pause";
 
+pub const CAP_SYSTEM_OPEN_DOWNLOADS: CapabilityId = "system.open_downloads";
+pub const CAP_SYSTEM_OPEN_SETTINGS: CapabilityId = "system.open_settings";
+pub const CAP_SYSTEM_OPEN_EXPLORER: CapabilityId = "system.open_explorer";
+pub const CAP_SYSTEM_LOCK_SCREEN: CapabilityId = "system.lock_screen";
+pub const CAP_SYSTEM_SHUTDOWN: CapabilityId = "system.shutdown";
+pub const CAP_SYSTEM_RESTART: CapabilityId = "system.restart";
+pub const CAP_SYSTEM_CONFIRM_PENDING: CapabilityId = "system.confirm_pending";
+pub const CAP_SYSTEM_CANCEL_PENDING: CapabilityId = "system.cancel_pending";
+
 const ANY: &[CapabilityContext] = &[CapabilityContext::Any];
 const BROWSER_OR_ANY: &[CapabilityContext] = &[CapabilityContext::Browser, CapabilityContext::Any];
 const DESKTOP_OR_ANY: &[CapabilityContext] = &[CapabilityContext::Desktop, CapabilityContext::Any];
@@ -50,6 +59,70 @@ pub static CAPABILITIES: &[CapabilityDescriptor] = &[
         description: "Send media play/pause key event to the system.",
         permission: PermissionLevel::Safe,
         contexts: MEDIA_OR_ANY,
+        unstable: false,
+    },
+    CapabilityDescriptor {
+        id: CAP_SYSTEM_OPEN_DOWNLOADS,
+        title: "Open Downloads",
+        description: "Open the Downloads folder in Explorer.",
+        permission: PermissionLevel::Safe,
+        contexts: DESKTOP_OR_ANY,
+        unstable: false,
+    },
+    CapabilityDescriptor {
+        id: CAP_SYSTEM_OPEN_SETTINGS,
+        title: "Open Settings",
+        description: "Open Windows Settings.",
+        permission: PermissionLevel::Safe,
+        contexts: DESKTOP_OR_ANY,
+        unstable: false,
+    },
+    CapabilityDescriptor {
+        id: CAP_SYSTEM_OPEN_EXPLORER,
+        title: "Open Explorer",
+        description: "Open File Explorer.",
+        permission: PermissionLevel::Safe,
+        contexts: DESKTOP_OR_ANY,
+        unstable: false,
+    },
+    CapabilityDescriptor {
+        id: CAP_SYSTEM_LOCK_SCREEN,
+        title: "Lock Screen",
+        description: "Lock the current Windows session.",
+        permission: PermissionLevel::Safe,
+        contexts: DESKTOP_OR_ANY,
+        unstable: false,
+    },
+    CapabilityDescriptor {
+        id: CAP_SYSTEM_SHUTDOWN,
+        title: "Shut Down PC",
+        description: "Shut down the computer.",
+        permission: PermissionLevel::Confirm,
+        contexts: DESKTOP_OR_ANY,
+        unstable: false,
+    },
+    CapabilityDescriptor {
+        id: CAP_SYSTEM_RESTART,
+        title: "Restart PC",
+        description: "Restart the computer.",
+        permission: PermissionLevel::Confirm,
+        contexts: DESKTOP_OR_ANY,
+        unstable: false,
+    },
+    CapabilityDescriptor {
+        id: CAP_SYSTEM_CONFIRM_PENDING,
+        title: "Confirm Pending Action",
+        description: "Confirm a pending destructive system action.",
+        permission: PermissionLevel::Safe,
+        contexts: ANY,
+        unstable: false,
+    },
+    CapabilityDescriptor {
+        id: CAP_SYSTEM_CANCEL_PENDING,
+        title: "Cancel Pending Action",
+        description: "Cancel a pending destructive system action.",
+        permission: PermissionLevel::Safe,
+        contexts: ANY,
         unstable: false,
     },
 ];

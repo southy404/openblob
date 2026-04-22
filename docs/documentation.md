@@ -19,8 +19,8 @@
    - [Memory System](#memory-system)
    - [Companion Identity](#companion-identity)
    - [Text-to-Speech](#text-to-speech)
-6. [Frontend Windows](#frontend-windows)
-7. [Command Reference](#command-reference)
+6. [Command Reference](#command-reference)
+7. [Frontend Windows](#frontend-windows)
 8. [Tauri Bridge Layer](#tauri-bridge-layer)
 9. [AI & Model Integration](#ai--model-integration)
 10. [Configuration & Profiles](#configuration--profiles)
@@ -40,6 +40,7 @@ OpenBlob is an **open-source, local-first desktop companion** for Windows 10/11.
 It goes beyond a simple chatbot — it acts as an **operating-layer assistant** that can:
 
 - execute desktop commands directly
+- execute deterministic system commands such as opening Downloads, Settings, Explorer, locking the screen, and handling protected power actions
 - control your browser via remote debugging
 - understand your screen through vision models
 - remember context across sessions
@@ -52,6 +53,8 @@ It goes beyond a simple chatbot — it acts as an **operating-layer assistant** 
 > Deterministic first. AI second.
 
 Whenever a command can be executed locally without a model, it is. AI is used as a capability layer — not the whole product.
+
+Protected system actions such as shutdown and restart use an explicit confirmation flow with timeout and cancellation support.
 
 ---
 
@@ -92,14 +95,23 @@ User Input (text / voice / external channel)
        │
        ▼
 Command Router
+(normalize → explicit command checks → intent scoring)
        │
-  ┌────┴──────────┐
-  │               │
-Direct Action   Ollama Fallback
-(local/browser/ (ask / explain /
- system/media)   translate / vision)
-  │               │
-  └────┬──────────┘
+       ▼
+CompanionAction
+       │
+       ▼
+Capability Mapper
+       │
+       ▼
+Capability Executor
+       │
+  ┌────┴───────────────┐
+  │                    │
+Deterministic Action   Ollama Fallback
+(system/browser/media) (ask / explain / translate / vision)
+  │                    │
+  └────┬───────────────┘
        │
 Subtitle Output + TTS + Channel Response
 ```
@@ -244,11 +256,40 @@ The command router is the brain of OpenBlob. It processes every user input and d
 1. Identity queries        → deterministic (name, owner)
 2. Utility commands        → time, date, weather, timer
 3. Browser commands        → open, search, navigate, click
-4. System / app commands   → launch, volume, media
+4. System / app commands   → launch, volume, media, deterministic OS actions
 5. Snip / vision commands  → screenshot, explain, translate
 6. Streaming commands      → Netflix, YouTube playback
 7. Ollama fallback         → ask, explain, translate (model)
 ```
+
+#### Deterministic system command path
+
+High-priority operating-system commands are handled deterministically before fuzzy fallback logic when possible.
+
+Examples include:
+
+- opening Downloads
+- opening Windows Settings
+- opening File Explorer
+- locking the screen
+- protected power commands such as shutdown and restart
+
+This prevents critical commands from being misclassified as generic app-launch, screenshot, or suggestion-followup actions.
+
+#### Protected actions
+
+Destructive or disruptive actions such as shutdown and restart are never executed immediately from natural language alone.
+
+Instead, OpenBlob uses a guarded pending-action flow:
+
+1. user requests a protected action
+2. blob stores a short-lived pending action
+3. blob asks for confirmation
+4. user must explicitly confirm with a short follow-up such as `yes`
+5. the pending action expires automatically after a short timeout
+6. the action can also be cancelled explicitly with `no` / `cancel`
+
+This keeps the system deterministic while reducing the risk of accidental execution.
 
 #### Key modules
 
@@ -436,6 +477,31 @@ Identity is editable in the **Dev Window**. Both the desktop UI and Blob Connect
 | ------ | -------------------------------------- |
 | Piper  | Fast, local ONNX-based voice synthesis |
 | Kokoro | Alternative engine (experimental)      |
+
+---
+
+## Command Reference
+
+### 💻 System Control
+
+| Command           | Description                                 |
+| ----------------- | ------------------------------------------- |
+| `open <app>`      | Launch a known application                  |
+| `open downloads`  | Open the Downloads folder                   |
+| `open settings`   | Open Windows Settings                       |
+| `open explorer`   | Open File Explorer                          |
+| `lock screen`     | Lock the current Windows session            |
+| `shutdown`        | Ask for confirmation, then shut down the PC |
+| `restart`         | Ask for confirmation, then restart the PC   |
+| `yes`             | Confirm a pending protected action          |
+| `no` / `cancel`   | Cancel a pending protected action           |
+| `volume up/down`  | Adjust system volume                        |
+| `mute` / `unmute` | Toggle audio                                |
+| `play music`      | Media control                               |
+| `next track`      | Skip to the next media track                |
+| `previous track`  | Go back to the previous media track         |
+
+> Protected power commands use a short confirmation window and expire automatically if they are not confirmed in time.
 
 ---
 
@@ -694,20 +760,22 @@ All contributions are welcome — code, design, documentation, ideas, and testin
 
 ## Known Issues
 
-| Area                           | Status                                                |
-| ------------------------------ | ----------------------------------------------------- |
-| Snip capture region            | ⚠️ May only trigger reliably on second attempt        |
-| Quick menu window              | ⚠️ Event/capability flow being refined after refactor |
-| Browser automation reliability | ⚠️ Some commands less reliable after recent refactors |
-| Multi-model routing fallback   | ⚠️ Logic still rough                                  |
-| Voice recognition pipeline     | ⚠️ Occasional recognition failures                    |
-| Context detection edge cases   | ⚠️ Fallback to last known app not always correct      |
-| Error handling consistency     | ⚠️ Inconsistent across modules                        |
-| Settings UI                    | ❌ Not yet implemented                                |
-| Identity propagation           | ⚠️ Not all answer paths are identity-aware yet        |
-| Transcript language quality    | ⚠️ English currently performs better than German      |
-| Speaker separation             | ⚠️ AI-grouped, not true acoustic diarization yet      |
-| Connector session persistence  | ⚠️ Session history lost on connector restart          |
+| Area                           | Status                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------ |
+| Snip capture region            | ⚠️ May only trigger reliably on the second attempt                       |
+| Quick menu window              | ⚠️ Event/capability flow is still being refined after the refactor       |
+| Browser automation reliability | ⚠️ Some commands remain less reliable after recent refactors             |
+| Deterministic system commands  | ⚠️ Initial Windows system command set is stable, but coverage is limited |
+| Protected action UX            | ⚠️ Confirm/cancel/timeout flow works, but richer UI feedback is planned  |
+| Multi-model routing fallback   | ⚠️ Fallback logic is still rough in some cases                           |
+| Voice recognition pipeline     | ⚠️ Occasional recognition failures still occur                           |
+| Context detection edge cases   | ⚠️ Fallback to the last known app is not always correct                  |
+| Error handling consistency     | ⚠️ Error handling is still inconsistent across modules                   |
+| Settings UI                    | ❌ Not yet implemented                                                   |
+| Identity propagation           | ⚠️ Not all response paths are identity-aware yet                         |
+| Transcript language quality    | ⚠️ English currently performs better than German                         |
+| Speaker separation             | ⚠️ AI-grouped, not true acoustic diarization yet                         |
+| Connector session persistence  | ⚠️ Session history is lost when a connector restarts                     |
 
 ---
 
@@ -721,6 +789,9 @@ All contributions are welcome — code, design, documentation, ideas, and testin
 - [ ] Settings UI
 - [ ] Improved error handling
 - [ ] Identity propagated to all answer paths
+- [ ] Expand deterministic Windows system command coverage
+- [ ] Improve protected-action UX (confirm / cancel / timeout feedback)
+- [ ] Add command debug visibility in the Dev Window
 
 ### Phase 2 — Product Polish
 
