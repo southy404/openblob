@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -292,8 +292,31 @@ function TranscriptApp() {
 
     let unlistenSegment: null | (() => void) = null;
     let unlistenError: null | (() => void) = null;
+    let unlistenStatus: null | (() => void) = null;
 
     const setup = async () => {
+      unlistenStatus = await listen<TranscriptStatus>(
+        "transcript://status",
+        async (event) => {
+          const nextStatus = event.payload;
+
+          setStatus(nextStatus);
+
+          if (nextStatus.state === "Recording") {
+            await emit("blob-state", { state: "transcript", active: true });
+          } else {
+            await emit("blob-state", { state: "transcript", active: false });
+          }
+
+          const nextSession = await invoke<TranscriptSession | null>(
+            "get_current_transcript"
+          );
+
+          if (nextSession) {
+            setSession(nextSession);
+          }
+        }
+      );
       unlistenSegment = await listen<TranscriptSegment>(
         "transcript://segment",
         (event) => {
@@ -334,6 +357,7 @@ function TranscriptApp() {
     void setup();
 
     return () => {
+      unlistenStatus?.();
       unlistenSegment?.();
       unlistenError?.();
     };
@@ -380,6 +404,9 @@ function TranscriptApp() {
         windowTitle: session?.context?.window_title ?? "Transcript Window",
       });
 
+      await emit("transcript://status", await invoke("get_transcript_status"));
+      await emit("blob-state", { state: "transcript", active: true });
+
       await refresh();
     } catch (err) {
       setError(String(err));
@@ -394,6 +421,9 @@ function TranscriptApp() {
       setError(null);
 
       await invoke("stop_transcript");
+
+      await emit("transcript://status", await invoke("get_transcript_status"));
+      await emit("blob-state", { state: "transcript", active: false });
 
       setStatus((prev) =>
         prev

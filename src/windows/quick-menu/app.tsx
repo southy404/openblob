@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { emitTo, listen } from "@tauri-apps/api/event";
+import { listen, emit, emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -209,6 +209,24 @@ const actions: QuickAction[] = [
   },
 ];
 
+async function broadcastTranscriptStatus() {
+  try {
+    const status = await invoke<TranscriptStatus>("get_transcript_status");
+
+    await emit("transcript://status", status);
+
+    await emit("blob-state", {
+      state: "transcript",
+      active: status.state === "Recording",
+    });
+
+    return status;
+  } catch (error) {
+    console.error("failed to broadcast transcript status", error);
+    return null;
+  }
+}
+
 function QuickMenuApp() {
   const [uiLang, setUiLang] = useState<UiLang>("en");
   const [hint, setHint] = useState(TEXTS.en.ready);
@@ -289,6 +307,7 @@ function QuickMenuApp() {
     let unlistenHide: null | (() => void) = null;
     let unlistenTranscriptSegment: null | (() => void) = null;
     let unlistenTranscriptError: null | (() => void) = null;
+    let unlistenTranscriptStatus: null | (() => void) = null;
 
     const refreshTranscriptStatus = async () => {
       try {
@@ -342,6 +361,19 @@ function QuickMenuApp() {
           setTranscriptBusy(false);
         }
       );
+
+      unlistenTranscriptStatus = await listen<TranscriptStatus>(
+        "transcript://status",
+        (event) => {
+          const status = event.payload;
+
+          setTranscriptRunning(status.state === "Recording");
+          setTranscriptBusy(
+            status.state === "Stopping" || status.state === "Summarizing"
+          );
+          setTranscriptSegments(status.segment_count ?? 0);
+        }
+      );
     };
 
     void setup();
@@ -366,6 +398,7 @@ function QuickMenuApp() {
       unlistenHide?.();
       unlistenTranscriptSegment?.();
       unlistenTranscriptError?.();
+      unlistenTranscriptStatus?.();
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("blur", onBlur);
     };
@@ -423,9 +456,11 @@ function QuickMenuApp() {
           windowTitle: `${activeApp} Transcript`,
         });
 
-        setTranscriptRunning(true);
+        const status = await broadcastTranscriptStatus();
+
+        setTranscriptRunning(status?.state === "Recording");
         setTranscriptBusy(false);
-        setTranscriptSegments(0);
+        setTranscriptSegments(status?.segment_count ?? 0);
 
         await showTranscriptWindow();
         await hideMenuUnlessPinnedAction(action);
@@ -436,9 +471,24 @@ function QuickMenuApp() {
         if (!transcriptRunning || transcriptBusy) return;
 
         setTranscriptBusy(true);
+        await emit("transcript://status", {
+          state: "Stopping",
+          active_session_id: null,
+          segment_count: transcriptSegments,
+        });
+
+        await emit("blob-state", {
+          state: "transcript",
+          active: false,
+        });
+
         await invoke("stop_transcript");
-        setTranscriptRunning(false);
+
+        const status = await broadcastTranscriptStatus();
+
+        setTranscriptRunning(status?.state === "Recording");
         setTranscriptBusy(false);
+        setTranscriptSegments(status?.segment_count ?? 0);
 
         await hideMenuUnlessPinnedAction(action);
         return;

@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { getCurrentWindow, LogicalPosition } from "@tauri-apps/api/window";
+import {
+  getCurrentWindow,
+  LogicalPosition,
+  LogicalSize,
+} from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -29,7 +33,17 @@ type SnipCreatedPayload = {
   rect?: { x: number; y: number; width: number; height: number };
 };
 
-type BlobMood = "idle" | "happy" | "thinking" | "sleepy" | "music" | "love";
+type BlobMood =
+  | "idle"
+  | "happy"
+  | "thinking"
+  | "listening"
+  | "transcript"
+  | "executing"
+  | "sleepy"
+  | "music"
+  | "love"
+  | "alert";
 
 type PresenceState =
   | "visible"
@@ -129,6 +143,61 @@ const BLOB_MOODS: Record<BlobMood, BlobConfig> = {
     wobble: 0.62,
     speed: 0.92,
     heart: 1,
+    bulb: 0,
+    think: 0,
+    dance: 0,
+    sleepy: 0,
+  },
+  listening: {
+    cols: ["#80d4ff", "#b8f0ff", "#d0e8ff"],
+    eyeShape: "open",
+    brow: -3,
+    mouth: 10,
+    wobble: 1.1,
+    speed: 0.85,
+    heart: 0,
+    bulb: 0,
+    think: 0,
+    dance: 0,
+    sleepy: 0,
+  },
+
+  transcript: {
+    cols: ["#ffe0a0", "#fff4cc", "#ffeedd"],
+    eyeShape: "open",
+    brow: -1,
+    mouth: 6,
+    wobble: 0.5,
+    speed: 0.6,
+    heart: 0,
+    bulb: 0,
+    think: 0,
+    dance: 0,
+    sleepy: 0,
+  },
+
+  executing: {
+    cols: ["#6ee7b7", "#a7f3d0", "#d1fae5"],
+    eyeShape: "open",
+    brow: -2,
+    mouth: 12,
+    wobble: 0.82,
+    speed: 1.2,
+    heart: 0,
+    bulb: 0,
+    think: 0,
+    dance: 0,
+    sleepy: 0,
+  },
+
+  alert: {
+    cols: ["#ffb347", "#ffd580", "#ffe8aa"],
+    eyeShape: "wide",
+    brow: -6,
+    mouth: 0,
+    wobble: 0.88,
+    speed: 1.1,
+    heart: 0,
     bulb: 0,
     think: 0,
     dance: 0,
@@ -257,6 +326,114 @@ function getBlobPoints(t: number, cfg: BlobConfig, radius = 88, stiffness = 0) {
   }
 
   return pts;
+}
+
+function drawListeningRings(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  t: number
+) {
+  const ringCount = 4;
+
+  for (let i = 0; i < ringCount; i++) {
+    const phase = (t * 0.9 + i / ringCount) % 1;
+    const r = 72 + phase * 52;
+    const alpha = (1 - phase) * 0.28;
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(100,210,255,${alpha})`;
+    ctx.lineWidth = 2.2 * (1 - phase * 0.6);
+    ctx.stroke();
+  }
+}
+
+function drawTranscriptEffect(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  t: number
+) {
+  const pulse = 0.82 + Math.sin(t * 4) * 0.22;
+
+  ctx.save();
+  ctx.translate(cx + 62, cy - 74);
+  ctx.scale(pulse, pulse);
+  ctx.beginPath();
+  ctx.arc(0, 0, 7, 0, Math.PI * 2);
+  ctx.fillStyle = "#ff3333";
+  ctx.shadowColor = "rgba(255,60,60,0.9)";
+  ctx.shadowBlur = 12;
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawExecutingEffect(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  t: number
+) {
+  const segments = 8;
+  const radius = 100;
+  const speed = t * 2.4;
+
+  for (let i = 0; i < segments; i++) {
+    const startA = speed + (i / segments) * Math.PI * 2;
+    const endA = startA + ((Math.PI * 2) / segments) * 0.55;
+    const alpha = 0.15 + (i / segments) * 0.35;
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, startA, endA);
+    ctx.strokeStyle = `rgba(80,230,160,${alpha})`;
+    ctx.lineWidth = 3;
+    ctx.lineCap = "round";
+    ctx.stroke();
+  }
+
+  const dotAngle = t * 2.4;
+
+  ctx.save();
+  ctx.translate(
+    cx + Math.cos(dotAngle) * radius,
+    cy + Math.sin(dotAngle) * radius
+  );
+  ctx.beginPath();
+  ctx.arc(0, 0, 4.5, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(80,230,160,0.95)";
+  ctx.shadowColor = "rgba(80,230,160,0.8)";
+  ctx.shadowBlur = 8;
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawAlertEffect(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  t: number
+) {
+  const bx = cx + 60;
+  const by = cy - 80;
+  const pulse = 1 + Math.sin(t * 5) * 0.08;
+
+  ctx.save();
+  ctx.translate(bx, by);
+  ctx.scale(pulse, pulse);
+  ctx.beginPath();
+  ctx.arc(0, 0, 18, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255,160,40,0.9)";
+  ctx.shadowColor = "rgba(255,160,40,0.6)";
+  ctx.shadowBlur = 12;
+  ctx.fill();
+
+  ctx.fillStyle = "#1a1a1a";
+  ctx.font = "bold 18px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("!", 0, 1);
+  ctx.restore();
 }
 
 function drawHeartEye(
@@ -695,6 +872,24 @@ function BlobAvatar({
       ctx.restore();
     }
     ctx.restore();
+
+    const effectCy = CY + floatY;
+
+    if (state === "listening") {
+      drawListeningRings(ctx, CX, effectCy, time);
+    }
+
+    if (state === "transcript") {
+      drawTranscriptEffect(ctx, CX, effectCy, time);
+    }
+
+    if (state === "executing") {
+      drawExecutingEffect(ctx, CX, effectCy, time);
+    }
+
+    if (state === "alert") {
+      drawAlertEffect(ctx, CX, effectCy, time);
+    }
   }, [
     time,
     blinkTimer,
@@ -927,11 +1122,7 @@ export default function App() {
     const randomX = Math.floor(margin + Math.random() * (maxX - margin));
     const randomY = Math.floor(margin + Math.random() * (maxY - margin));
 
-    await win.setSize({
-      type: "Logical",
-      width: hideWindowWidth,
-      height: hideWindowHeight,
-    });
+    await win.setSize(new LogicalSize(hideWindowWidth, hideWindowHeight));
 
     await win.setPosition(new LogicalPosition(randomX, randomY));
   };
@@ -942,11 +1133,9 @@ export default function App() {
     const previousSize = lastWindowSizeRef.current;
     const previousPos = lastWindowPosRef.current;
 
-    await win.setSize({
-      type: "Logical",
-      width: previousSize?.width ?? 260,
-      height: previousSize?.height ?? 260,
-    });
+    await win.setSize(
+      new LogicalSize(previousSize?.width ?? 260, previousSize?.height ?? 260)
+    );
 
     await win.setPosition(
       previousPos ??
@@ -971,11 +1160,7 @@ export default function App() {
     const nextX = Math.round(centerX - targetWidth / 2);
     const nextY = Math.round(centerY - targetHeight / 2);
 
-    await win.setSize({
-      type: "Logical",
-      width: targetWidth,
-      height: targetHeight,
-    });
+    await win.setSize(new LogicalSize(targetWidth, targetHeight));
 
     await win.setPosition(new LogicalPosition(nextX, nextY));
   };
@@ -1156,6 +1341,33 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let unlistenBlobState: null | (() => void) = null;
+
+    const setup = async () => {
+      unlistenBlobState = await listen<{
+        state: BlobMood;
+        active: boolean;
+      }>("blob-state", async (event) => {
+        const { state, active } = event.payload;
+
+        setBlobMood((current) => {
+          if (active) return state;
+
+          if (current === state) return "idle";
+
+          return current;
+        });
+      });
+    };
+
+    void setup();
+
+    return () => {
+      unlistenBlobState?.();
+    };
+  }, []);
+
+  useEffect(() => {
     const onUserActivity = () => markActivity();
 
     window.addEventListener("mousemove", onUserActivity);
@@ -1192,7 +1404,13 @@ export default function App() {
         if (!text.trim()) return;
 
         markActivity();
-        pulseBlob("thinking", 900, "happy");
+        setBlobMood((current) =>
+          current === "executing" ||
+          current === "thinking" ||
+          current === "alert"
+            ? current
+            : "happy"
+        );
         setHint(text);
 
         await showSpeechWindow(text);

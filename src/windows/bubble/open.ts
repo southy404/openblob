@@ -3,9 +3,6 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 const BUBBLE_WIDTH = 1040;
 const BUBBLE_HEIGHT = 135;
-
-// 0 = direkt auf Workarea-Unterkante
-// Falls du 2-4 px Luft willst, hier leicht erhöhen
 const BOTTOM_MARGIN = 0;
 
 function getWorkArea() {
@@ -65,7 +62,6 @@ export async function ensureBubbleWindow() {
   win.once("tauri://created", async () => {
     await positionBubbleWindow(win);
 
-    // second pass for Windows/Tauri
     window.setTimeout(() => {
       void positionBubbleWindow(win);
     }, 80);
