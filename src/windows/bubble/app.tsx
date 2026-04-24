@@ -43,6 +43,16 @@ type BubbleMode = "command" | "chat";
 type UiLang = "en" | "de";
 type RouteState = "command" | "ollama" | "none";
 
+type BlobPhase =
+  | "idle"
+  | "listening"
+  | "transcript"
+  | "thinking"
+  | "executing"
+  | "alert";
+
+type BlobSignal = Exclude<BlobPhase, "idle">;
+
 type BubbleTexts = {
   ready: string;
   processing: string;
@@ -92,6 +102,14 @@ const STORAGE_KEYS = {
   subtitlesEnabled: "openblob-bubble-subtitles-enabled",
   bubbleMode: "openblob-bubble-mode",
 };
+
+const BLOB_SIGNALS: BlobSignal[] = [
+  "listening",
+  "transcript",
+  "thinking",
+  "executing",
+  "alert",
+];
 
 const BUBBLE_TEXTS: Record<UiLang, BubbleTexts> = {
   en: {
@@ -341,6 +359,10 @@ function BubbleApp() {
   const finalVoiceTextRef = useRef("");
   const visibleRef = useRef(visible);
   const listeningRef = useRef(listening);
+  const busyRef = useRef(false);
+  const phaseRef = useRef<BlobPhase>("idle");
+
+  const t = BUBBLE_TEXTS[uiLang];
 
   const t = BUBBLE_TEXTS[uiLang];
 
@@ -348,6 +370,39 @@ function BubbleApp() {
     () => window.SpeechRecognition || window.webkitSpeechRecognition || null,
     []
   );
+
+  const emitBlobState = async (state: BlobSignal, active: boolean) => {
+    try {
+      await emit("blob-state", { state, active });
+    } catch {}
+  };
+
+  const sleep = (ms: number) =>
+    new Promise((resolve) => window.setTimeout(resolve, ms));
+
+  const setBlobPhase = async (phase: BlobPhase) => {
+    phaseRef.current = phase;
+
+    for (const state of BLOB_SIGNALS) {
+      await emitBlobState(state, phase !== "idle" && state === phase);
+    }
+  };
+
+  const showThinkingBeforeExecuting = async () => {
+    setHint(t.processing);
+    await setBlobPhase("thinking");
+    await sleep(260);
+  };
+
+  const flashBlobAlert = async () => {
+    await setBlobPhase("alert");
+
+    window.setTimeout(() => {
+      if (phaseRef.current === "alert") {
+        void setBlobPhase("idle");
+      }
+    }, 1600);
+  };
 
   const loadIdentity = async () => {
     try {
@@ -401,9 +456,10 @@ function BubbleApp() {
       ) {
         return t.ready;
       }
+
       return current;
     });
-  }, [uiLang]);
+  }, [uiLang, t.ready]);
 
   useEffect(() => {
     const prepareSubtitleWindow = async () => {
@@ -427,6 +483,10 @@ function BubbleApp() {
   useEffect(() => {
     listeningRef.current = listening;
   }, [listening]);
+
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
 
   useEffect(() => {
     try {
@@ -513,6 +573,7 @@ function BubbleApp() {
 
   const fadeOutAndHide = async () => {
     setVisible(false);
+
     window.setTimeout(async () => {
       await getCurrentWindow()
         .hide()
@@ -523,15 +584,6 @@ function BubbleApp() {
   const closeBubble = async () => {
     stopVoiceInput();
     await fadeOutAndHide();
-  };
-
-  const emitBlobState = async (
-    state: "thinking" | "listening",
-    active: boolean
-  ) => {
-    try {
-      await emit("blob-state", { state, active });
-    } catch {}
   };
 
   const openDevWindow = async () => {
@@ -546,7 +598,7 @@ function BubbleApp() {
   };
 
   const runOllamaAsk = async (prompt: string) => {
-    await emitBlobState("thinking", true);
+    await setBlobPhase("thinking");
 
     try {
       const result = await invoke<OllamaResult>("ask_ollama", {
@@ -571,7 +623,7 @@ function BubbleApp() {
         await speak(result.content.slice(0, 260), setHint);
       }
     } finally {
-      await emitBlobState("thinking", false);
+      await setBlobPhase("idle");
     }
   };
 
@@ -589,12 +641,16 @@ function BubbleApp() {
   const executeCommandOrAsk = async (rawInput: string) => {
     const input = rawInput.trim();
 
-    if (!input || busy) {
+    if (!input) {
       setHint(t.pleaseEnterSomething);
       return;
     }
 
+    if (busyRef.current) return;
+
+    busyRef.current = true;
     setBusy(true);
+    await setBlobPhase("thinking");
 
     try {
       if (bubbleMode === "chat") {
@@ -606,6 +662,9 @@ function BubbleApp() {
       const directUrl = getDirectKnownUrl(input);
 
       if (directUrl) {
+        await showThinkingBeforeExecuting();
+        await setBlobPhase("executing");
+
         await invoke<string>("handle_voice_command", {
           input: `open ${directUrl}`,
         });
@@ -618,10 +677,15 @@ function BubbleApp() {
         if (speakEnabled) {
           void speak(spoken);
         }
+
+        await setBlobPhase("idle");
         return;
       }
 
       if (isHideAndSeekCommand(input)) {
+        await showThinkingBeforeExecuting();
+        await setBlobPhase("executing");
+
         await emit("start-hide-and-seek");
         await showSubtitle(t.hideAndSeekStartedSpoken, 4200);
         setHint(t.hideAndSeekStarted);
@@ -630,14 +694,21 @@ function BubbleApp() {
         if (speakEnabled) {
           void speak(t.hideAndSeekStartedSpoken);
         }
+
+        await setBlobPhase("idle");
         return;
       }
+
+      await setBlobPhase("thinking");
 
       const actionResult = await invoke<string>("handle_voice_command", {
         input,
       });
 
       if (actionResult !== "NO_ACTION") {
+        await setBlobPhase("executing");
+        await sleep(450);
+
         await showSubtitle(actionResult, 4200);
         setHint(t.commandExecuted);
         setLastRoute("command");
@@ -651,8 +722,11 @@ function BubbleApp() {
         return;
       }
 
+      await setBlobPhase("thinking");
+
       if (looksLikeDirectCommand(input)) {
         const message = t.directCommandFailedMessage(input);
+
         await showSubtitle(message, 4200);
         setHint(t.directCommandRecognizedButNoLocalMatch);
         setLastRoute("command");
@@ -660,6 +734,8 @@ function BubbleApp() {
         if (speakEnabled) {
           await speak(message);
         }
+
+        await flashBlobAlert();
         return;
       }
 
@@ -680,15 +756,23 @@ function BubbleApp() {
       if (speakEnabled) {
         await speak(message.slice(0, 220));
       }
+
+      await flashBlobAlert();
     } finally {
+      busyRef.current = false;
       setBusy(false);
+
+      if (phaseRef.current !== "alert") {
+        await setBlobPhase("idle");
+      }
     }
   };
 
   const handleTypedSubmit = async () => {
-    if (busy) return;
+    if (busyRef.current) return;
 
     const text = question.trim();
+
     if (!text) {
       setHint(t.pleaseEnterSomething);
       return;
@@ -701,10 +785,11 @@ function BubbleApp() {
   const startVoiceInput = async () => {
     if (!SpeechRecognitionCtor) {
       setHint(t.speechRecognitionUnsupported);
+      await flashBlobAlert();
       return;
     }
 
-    if (listening || busy) return;
+    if (listeningRef.current || busyRef.current) return;
 
     try {
       const recognition = new SpeechRecognitionCtor();
@@ -718,7 +803,7 @@ function BubbleApp() {
         setListening(true);
         setInterimText("");
         setHint(t.listening);
-        await emitBlobState("listening", true);
+        await setBlobPhase("listening");
       };
 
       recognition.onresult = (event) => {
@@ -727,6 +812,7 @@ function BubbleApp() {
 
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const chunk = event.results[i][0]?.transcript ?? "";
+
           if (event.results[i].isFinal) {
             finalTranscript += chunk;
           } else {
@@ -735,6 +821,10 @@ function BubbleApp() {
         }
 
         setInterimText(liveTranscript);
+
+        if (liveTranscript.trim() || finalTranscript.trim()) {
+          void setBlobPhase("transcript");
+        }
 
         if (finalTranscript.trim()) {
           const text = finalTranscript.trim();
@@ -745,9 +835,8 @@ function BubbleApp() {
 
       recognition.onend = async () => {
         setListening(false);
+        listeningRef.current = false;
         recognitionRef.current = null;
-
-        await emitBlobState("listening", false);
 
         const finalText = finalVoiceTextRef.current.trim();
         finalVoiceTextRef.current = "";
@@ -755,27 +844,32 @@ function BubbleApp() {
         clearComposer();
 
         if (finalText) {
+          await setBlobPhase("thinking");
           await executeCommandOrAsk(finalText);
+        } else {
+          await setBlobPhase("idle");
         }
       };
 
       recognition.onerror = async (event) => {
         setListening(false);
+        listeningRef.current = false;
         recognitionRef.current = null;
         setInterimText("");
         finalVoiceTextRef.current = "";
         setHint(t.voiceError(event.error ?? "unknown"));
-        await emitBlobState("listening", false);
+        await flashBlobAlert();
       };
 
       recognitionRef.current = recognition;
       recognition.start();
     } catch (error) {
       setListening(false);
+      listeningRef.current = false;
       setInterimText("");
       finalVoiceTextRef.current = "";
       setHint(t.microphoneError(String(error)));
-      await emitBlobState("listening", false);
+      await flashBlobAlert();
     }
   };
 
@@ -783,10 +877,13 @@ function BubbleApp() {
     try {
       recognitionRef.current?.stop();
     } catch {}
+
     recognitionRef.current = null;
     setListening(false);
+    listeningRef.current = false;
     setInterimText("");
-    void emitBlobState("listening", false);
+
+    void setBlobPhase("idle");
   };
 
   useEffect(() => {
@@ -888,12 +985,13 @@ function BubbleApp() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [voiceShortcut]);
+  }, [voiceShortcut, uiLang, t]);
 
   useEffect(() => {
     return () => {
       void stopSpeaking();
       void emitTo("bubble-subtitle", "bubble-subtitle-clear").catch(() => {});
+      void setBlobPhase("idle");
 
       try {
         recognitionRef.current?.stop();
@@ -1130,27 +1228,15 @@ function BubbleApp() {
         }
 
         @keyframes sendGlowOrbit {
-          from {
-            stroke-dashoffset: 0;
-          }
-          to {
-            stroke-dashoffset: -100;
-          }
+          from { stroke-dashoffset: 0; }
+          to { stroke-dashoffset: -100; }
         }
 
         @keyframes sendGlowVisibility {
-          0%, 100% {
-            opacity: 0.08;
-          }
-          18% {
-            opacity: 0.95;
-          }
-          50% {
-            opacity: 1;
-          }
-          82% {
-            opacity: 0.92;
-          }
+          0%, 100% { opacity: 0.08; }
+          18% { opacity: 0.95; }
+          50% { opacity: 1; }
+          82% { opacity: 0.92; }
         }
 
         .tiny-links {
@@ -1230,12 +1316,14 @@ function BubbleApp() {
                       e.preventDefault();
                       void handleTypedSubmit();
                     }
+
                     if (e.key === "Escape") {
                       e.preventDefault();
                       void closeBubble();
                     }
                   }}
                 />
+
                 <div className="bubble-meta">
                   <span>{busy ? t.processing : hint}</span>
                   {interimText && <span>| … {interimText}</span>}
@@ -1262,7 +1350,7 @@ function BubbleApp() {
               <button
                 className={`icon-btn ${listening ? "icon-btn-active" : ""}`}
                 onClick={() => {
-                  if (listening) stopVoiceInput();
+                  if (listeningRef.current) stopVoiceInput();
                   else void startVoiceInput();
                 }}
                 title={t.speechRecognitionTitle(voiceShortcut)}
