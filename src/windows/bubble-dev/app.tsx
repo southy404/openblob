@@ -539,6 +539,9 @@ function DevWindow() {
   const [ownerName, setOwnerName] = useState("");
   const [language, setLanguage] = useState<UiLang>("en");
   const [saving, setSaving] = useState(false);
+  const [isMacOS] = useState(() =>
+    /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  );
 
   const t = TEXTS[uiLang];
   const commandGroups = useMemo(() => getCommandGroups(uiLang), [uiLang]);
@@ -556,6 +559,10 @@ function DevWindow() {
   });
 
   const appWindow = useMemo(() => getCurrentWindow(), []);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("macos-lite", isMacOS);
+  }, [isMacOS]);
 
   useEffect(() => {
     const applyGlass = async () => {
@@ -766,6 +773,12 @@ function DevWindow() {
             inset 0 -1px 1px rgba(0,0,0,0.18);
         }
 
+        .macos-lite .panel {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+          background: rgba(18, 20, 26, 0.74);
+        }
+
         .panel::before {
           content: "";
           position: absolute;
@@ -889,6 +902,11 @@ function DevWindow() {
           backdrop-filter: blur(18px) saturate(155%);
           -webkit-backdrop-filter: blur(18px) saturate(155%);
           min-width: 0;
+        }
+
+        .macos-lite .card {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
         }
 
         .label {
@@ -1051,6 +1069,11 @@ function DevWindow() {
           backdrop-filter: blur(12px) saturate(130%);
           -webkit-backdrop-filter: blur(12px) saturate(130%);
           min-height: 52px;
+        }
+
+        .macos-lite .group {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
         }
 
         .groupToggle {

@@ -333,12 +333,17 @@ function getDirectKnownUrl(input: string): string | null {
 
 function BubbleApp() {
   const [uiLang, setUiLang] = useState<UiLang>("en");
-  const [question, setQuestion] = useState("");
+  const questionRef = useRef("");
   const [hint, setHint] = useState(BUBBLE_TEXTS.en.ready);
   const [model, setModel] = useState(
     readLocalStorageString(STORAGE_KEYS.model, "llama3.1:8b")
   );
   const [busy, setBusy] = useState(false);
+  const [ollamaElapsedMs, setOllamaElapsedMs] = useState<number | null>(null);
+  const [lastShortcut, setLastShortcut] = useState<string | null>(null);
+  const [isMacOS] = useState(() =>
+    /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  );
   const [visible, setVisible] = useState(false);
   const [listening, setListening] = useState(false);
   const [interimText, setInterimText] = useState("");
@@ -361,8 +366,6 @@ function BubbleApp() {
   const listeningRef = useRef(listening);
   const busyRef = useRef(false);
   const phaseRef = useRef<BlobPhase>("idle");
-
-  const t = BUBBLE_TEXTS[uiLang];
 
   const t = BUBBLE_TEXTS[uiLang];
 
@@ -416,6 +419,13 @@ function BubbleApp() {
   };
 
   useEffect(() => {
+    if (isMacOS) {
+      void invoke("clear_glass_effect", { window: getCurrentWindow() }).catch(
+        () => {}
+      );
+      return;
+    }
+
     const applyGlass = async () => {
       try {
         const win = getCurrentWindow();
@@ -426,7 +436,7 @@ function BubbleApp() {
     };
 
     void applyGlass();
-  }, []);
+  }, [isMacOS]);
 
   useEffect(() => {
     void loadIdentity();
@@ -479,6 +489,17 @@ function BubbleApp() {
   useEffect(() => {
     visibleRef.current = visible;
   }, [visible]);
+
+  useEffect(() => {
+    const onBlur = () => {
+      if (!visibleRef.current) return;
+      inputRef.current?.blur();
+      void fadeOutAndHide();
+    };
+
+    window.addEventListener("blur", onBlur);
+    return () => window.removeEventListener("blur", onBlur);
+  }, []);
 
   useEffect(() => {
     listeningRef.current = listening;
@@ -567,8 +588,8 @@ function BubbleApp() {
     const win = getCurrentWindow();
     await win.show();
     requestAnimationFrame(() => setVisible(true));
-    await win.setFocus().catch(() => {});
-    focusInputSoon();
+    const focused = await win.isFocused().catch(() => false);
+    if (focused) focusInputSoon();
   };
 
   const fadeOutAndHide = async () => {
@@ -600,6 +621,12 @@ function BubbleApp() {
   const runOllamaAsk = async (prompt: string) => {
     await setBlobPhase("thinking");
 
+    const started = Date.now();
+    setOllamaElapsedMs(0);
+    const tick = window.setInterval(() => {
+      setOllamaElapsedMs(Date.now() - started);
+    }, 250);
+
     try {
       const result = await invoke<OllamaResult>("ask_ollama", {
         mode: bubbleMode === "chat" ? "chat" : "ask",
@@ -623,12 +650,14 @@ function BubbleApp() {
         await speak(result.content.slice(0, 260), setHint);
       }
     } finally {
+      window.clearInterval(tick);
+      setOllamaElapsedMs(null);
       await setBlobPhase("idle");
     }
   };
 
   const clearComposer = () => {
-    setQuestion("");
+    questionRef.current = "";
     setInterimText("");
 
     window.setTimeout(() => {
@@ -771,7 +800,7 @@ function BubbleApp() {
   const handleTypedSubmit = async () => {
     if (busyRef.current) return;
 
-    const text = question.trim();
+    const text = (questionRef.current || "").trim();
 
     if (!text) {
       setHint(t.pleaseEnterSomething);
@@ -829,7 +858,8 @@ function BubbleApp() {
         if (finalTranscript.trim()) {
           const text = finalTranscript.trim();
           finalVoiceTextRef.current = text;
-          setQuestion(text);
+          questionRef.current = text;
+          if (inputRef.current) inputRef.current.value = text;
         }
       };
 
@@ -892,6 +922,7 @@ function BubbleApp() {
     let unlistenShow: null | (() => void) = null;
     let unlistenHide: null | (() => void) = null;
     let unlistenVoiceToggle: null | (() => void) = null;
+    let unlistenShortcut: null | (() => void) = null;
 
     const setup = async () => {
       unlistenContext = await listen<ContextPayload>(
@@ -910,7 +941,9 @@ function BubbleApp() {
           }
 
           if (payload.autoRun && payload.text?.trim()) {
-            setQuestion(payload.text.trim());
+            const next = payload.text.trim();
+            questionRef.current = next;
+            if (inputRef.current) inputRef.current.value = next;
           }
 
           await fadeInAndShow();
@@ -947,6 +980,13 @@ function BubbleApp() {
           await startVoiceInput();
         }
       });
+
+      unlistenShortcut = await listen<string>("debug-shortcut", (event) => {
+        const value = String(event.payload || "");
+        if (!value) return;
+        setLastShortcut(value);
+        window.setTimeout(() => setLastShortcut(null), 1800);
+      });
     };
 
     void setup();
@@ -957,6 +997,7 @@ function BubbleApp() {
       unlistenShow?.();
       unlistenHide?.();
       unlistenVoiceToggle?.();
+      unlistenShortcut?.();
     };
   }, [uiLang, t]);
 
@@ -1066,6 +1107,15 @@ function BubbleApp() {
             inset 0 1px 1px rgba(255, 255, 255, 0.18),
             inset 0 -1px 1px rgba(0, 0, 0, 0.16);
           backface-visibility: hidden;
+        }
+
+        .macos-lite .bubble-shell {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+          background: rgba(24, 24, 28, 0.28);
+          box-shadow:
+            inset 0 1px 1px rgba(255, 255, 255, 0.18),
+            inset 0 -1px 1px rgba(0, 0, 0, 0.16);
         }
 
         .bubble-row {
@@ -1211,6 +1261,11 @@ function BubbleApp() {
           filter: blur(6px);
         }
 
+        .macos-lite .send-glow-line,
+        .macos-lite .send-glow-blur {
+          filter: none;
+        }
+
         .send-btn:hover .send-glow,
         .send-btn:focus-visible .send-glow {
           animation: sendGlowVisibility var(--glow-speed) ease-in-out infinite;
@@ -1290,7 +1345,7 @@ function BubbleApp() {
       `}</style>
 
       <div
-        className="bubble-stage"
+        className={`bubble-stage${isMacOS ? " macos-lite" : ""}`}
         style={{
           opacity: visible ? 1 : 0,
           transform: visible
@@ -1307,8 +1362,10 @@ function BubbleApp() {
               <div className="input-wrap">
                 <input
                   ref={inputRef}
-                  value={question}
-                  onChange={(e) => setQuestion(e.target.value)}
+                  defaultValue=""
+                  onChange={(e) => {
+                    questionRef.current = e.target.value;
+                  }}
                   className="bubble-input"
                   placeholder={placeholder}
                   onKeyDown={(e) => {
@@ -1326,6 +1383,10 @@ function BubbleApp() {
 
                 <div className="bubble-meta">
                   <span>{busy ? t.processing : hint}</span>
+                  {ollamaElapsedMs !== null && (
+                    <span> | Ollama {Math.ceil(ollamaElapsedMs / 1000)}s</span>
+                  )}
+                  {lastShortcut && <span> | key {lastShortcut}</span>}
                   {interimText && <span>| … {interimText}</span>}
                 </div>
               </div>

@@ -45,6 +45,15 @@ type TranscriptStatus = {
   segment_count: number;
 };
 
+type TranscriptPrereqs = {
+  ok: boolean;
+  default_input_device: string | null;
+  whisper_exe: string | null;
+  whisper_model: string | null;
+  needs_virtual_audio_routing: boolean;
+  message: string;
+};
+
 type SpeakerBlock = {
   speaker: string;
   text: string;
@@ -205,6 +214,11 @@ function TranscriptApp() {
   const [session, setSession] = useState<TranscriptSession | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [prereqs, setPrereqs] = useState<TranscriptPrereqs | null>(null);
+  const [setupBusy, setSetupBusy] = useState(false);
+  const [isMacOS] = useState(() =>
+    /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  );
 
   const [faithfulTranscript, setFaithfulTranscript] = useState("");
   const [speakerBlocks, setSpeakerBlocks] = useState<SpeakerBlock[]>([]);
@@ -212,6 +226,21 @@ function TranscriptApp() {
   const [actionItems, setActionItems] = useState<string[]>([]);
 
   const t = TEXTS[uiLang];
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("macos-lite", isMacOS);
+  }, [isMacOS]);
+
+  const refreshPrereqs = async () => {
+    try {
+      const p = await invoke<TranscriptPrereqs>("transcript_check_prereqs");
+      setPrereqs(p);
+      return p;
+    } catch (err) {
+      setError(String(err));
+      return null;
+    }
+  };
 
   const refresh = async () => {
     try {
@@ -288,6 +317,7 @@ function TranscriptApp() {
   }, []);
 
   useEffect(() => {
+    void refreshPrereqs();
     void refresh();
 
     let unlistenSegment: null | (() => void) = null;
@@ -391,6 +421,12 @@ function TranscriptApp() {
 
   const startTranscript = async () => {
     try {
+      const p = await refreshPrereqs();
+      if (p && !p.ok) {
+        setError(p.message);
+        return;
+      }
+
       setBusy(true);
       setError(null);
       setFaithfulTranscript("");
@@ -412,6 +448,60 @@ function TranscriptApp() {
       setError(String(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const downloadDefaultModel = async () => {
+    try {
+      setSetupBusy(true);
+      setError(null);
+      await invoke("transcript_download_default_model");
+      const p = await refreshPrereqs();
+      if (p && !p.ok) setError(p.message);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSetupBusy(false);
+    }
+  };
+
+  const openAudioMidiSetup = async () => {
+    try {
+      await invoke("transcript_open_audio_midi_setup");
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const openSoundSettings = async () => {
+    try {
+      await invoke("transcript_open_sound_settings");
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const openMicPrivacy = async () => {
+    try {
+      await invoke("transcript_open_microphone_privacy_settings");
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const openAccessibilityPrivacy = async () => {
+    try {
+      await invoke("transcript_open_accessibility_privacy_settings");
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const openBlackHoleDownload = async () => {
+    try {
+      await invoke("transcript_open_blackhole_download");
+    } catch (err) {
+      setError(String(err));
     }
   };
 
@@ -568,6 +658,12 @@ function TranscriptApp() {
             inset 0 -1px 1px rgba(0,0,0,0.18);
         }
 
+        .macos-lite .window {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+          background: rgba(18, 20, 26, 0.74);
+        }
+
         .window::before {
           content: "";
           position: absolute;
@@ -671,6 +767,11 @@ function TranscriptApp() {
           -webkit-app-region: no-drag;
         }
 
+        .macos-lite .btn {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+        }
+
         .btn:hover {
           background: var(--glass-fill-hover);
           border-color: rgba(255,255,255,0.16);
@@ -712,6 +813,11 @@ function TranscriptApp() {
           color: rgba(255,255,255,0.76);
           backdrop-filter: blur(10px);
           -webkit-backdrop-filter: blur(10px);
+        }
+
+        .macos-lite .chip {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
         }
 
         .chip-recording {
@@ -1016,6 +1122,51 @@ function TranscriptApp() {
                 {transcriptStatusLabel}
               </div>
             </div>
+
+            {prereqs && (prereqs.needs_virtual_audio_routing || !prereqs.ok) && (
+              <div className="error" style={{ background: "rgba(255,159,10,0.12)" }}>
+                <div style={{ marginBottom: 8 }}>{prereqs.message}</div>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button
+                    className="btn"
+                    onClick={downloadDefaultModel}
+                    disabled={setupBusy}
+                  >
+                    {setupBusy ? (
+                      <LoaderCircle size={16} className="spin" />
+                    ) : (
+                      <CheckSquare size={16} />
+                    )}
+                    Download default model
+                  </button>
+                  <button className="btn" onClick={openBlackHoleDownload}>
+                    <Mic size={16} />
+                    Get BlackHole
+                  </button>
+                  <button className="btn" onClick={openAudioMidiSetup}>
+                    <AudioLines size={16} />
+                    Audio MIDI Setup
+                  </button>
+                  <button className="btn" onClick={openSoundSettings}>
+                    <UserRound size={16} />
+                    Sound Settings
+                  </button>
+                  <button className="btn" onClick={openMicPrivacy}>
+                    <CheckSquare size={16} />
+                    Mic Privacy
+                  </button>
+                  <button className="btn" onClick={openAccessibilityPrivacy}>
+                    <CheckSquare size={16} />
+                    Accessibility
+                  </button>
+                  {prereqs.default_input_device ? (
+                    <div className="chip">
+                      Input: {prereqs.default_input_device}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            )}
 
             {error && <div className="error">{error}</div>}
 
