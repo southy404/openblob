@@ -342,6 +342,11 @@ async fn ping_ollama() -> Result<bool, String> {
 }
 
 #[tauri::command]
+async fn ensure_ollama_running() -> Result<bool, String> {
+    crate::core::legacy::ollama_text_runtime::ensure_ollama_running().await
+}
+
+#[tauri::command]
 async fn ask_ollama(
     mode: String,
     text: String,
@@ -729,9 +734,16 @@ pub fn run() {
                     .route("/command", post(handle_external_command))
                     .with_state(ExternalCommandState { app: app_handle });
 
-                let listener = tokio::net::TcpListener::bind("127.0.0.1:7842")
-                    .await
-                    .expect("Konnte lokalen Command-Server nicht starten");
+                let listener = match tokio::net::TcpListener::bind("127.0.0.1:7842").await {
+                    Ok(listener) => listener,
+                    Err(err) => {
+                        eprintln!(
+                            "[openblob] Command-Server konnte nicht starten (127.0.0.1:7842): {}",
+                            err
+                        );
+                        return;
+                    }
+                };
 
                 println!("[openblob] Command-Server läuft auf http://127.0.0.1:7842");
 
@@ -808,6 +820,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ping_ollama,
+            ensure_ollama_running,
             ask_ollama,
             trigger_copy_shortcut,
             get_cursor_position,

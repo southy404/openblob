@@ -3,6 +3,7 @@ use std::process::{Command, Stdio};
 use crate::modules::context::is_internal_companion_app;
 use crate::modules::i18n::replies::reply_with;
 
+#[cfg(windows)]
 fn command_exists_windows(command: &str) -> bool {
     Command::new("where")
         .arg(command)
@@ -13,6 +14,7 @@ fn command_exists_windows(command: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(windows)]
 fn spawn_hidden_cmd(args: &[&str]) -> Result<(), String> {
     Command::new("cmd")
         .args(args)
@@ -23,7 +25,27 @@ fn spawn_hidden_cmd(args: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn spawn_open(args: &[&str]) -> Result<(), String> {
+    Command::new("open")
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Could not open: {e}"))?;
+    Ok(())
+}
+
 pub fn open_url_prefer_browser(url: &str, new_window: bool, incognito: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (new_window, incognito);
+        spawn_open(&[url])?;
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
     let chrome_paths = [
         r"C:\Program Files\Google\Chrome\Application\chrome.exe",
         r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
@@ -86,6 +108,7 @@ pub fn open_url_prefer_browser(url: &str, new_window: bool, incognito: bool) -> 
         .map_err(|e| format!("Could not open URL: {e}"))?;
 
     Ok(())
+    }
 }
 
 fn known_web_fallback(target: &str) -> Option<&'static str> {
@@ -105,6 +128,52 @@ fn known_web_fallback(target: &str) -> Option<&'static str> {
 }
 
 fn open_known_local_target(target: &str) -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let opened = match target {
+            "finder" | "file explorer" | "explorer" => {
+                spawn_open(&["-a", "Finder"])?;
+                true
+            }
+            "settings" | "system settings" => {
+                // Works across macOS versions (Monterey+: System Settings).
+                // Falls back to the bundle id if the name is different.
+                if spawn_open(&["-a", "System Settings"]).is_ok() {
+                    true
+                } else if spawn_open(&["-b", "com.apple.systempreferences"]).is_ok() {
+                    true
+                } else {
+                    false
+                }
+            }
+            "safari" => {
+                spawn_open(&["-a", "Safari"])?;
+                true
+            }
+            "chrome" | "google chrome" => {
+                spawn_open(&["-a", "Google Chrome"])?;
+                true
+            }
+            "terminal" => {
+                spawn_open(&["-a", "Terminal"])?;
+                true
+            }
+            "calculator" | "calc" => {
+                spawn_open(&["-a", "Calculator"])?;
+                true
+            }
+            "notes" => {
+                spawn_open(&["-a", "Notes"])?;
+                true
+            }
+            _ => false,
+        };
+
+        return Ok(opened);
+    }
+
+    #[cfg(windows)]
+    {
     let opened = match target {
         "steam" => {
             let candidates = [
@@ -211,6 +280,7 @@ fn open_known_local_target(target: &str) -> Result<bool, String> {
     };
 
     Ok(opened)
+    }
 }
 
 pub fn open_app_target(
@@ -250,23 +320,38 @@ pub fn open_app_target(
         ));
     }
 
-    if let Some(game) = crate::modules::steam_games::find_steam_game(&normalized) {
-        let uri = crate::modules::steam_games::steam_launch_uri(&game.appid);
-        spawn_hidden_cmd(&["/C", "start", "", &uri])?;
-        return Ok(reply_with(
-            "open_app_launching_steam",
-            &[("target", game.name)],
-        ));
+    #[cfg(windows)]
+    {
+        if let Some(game) = crate::modules::steam_games::find_steam_game(&normalized) {
+            let uri = crate::modules::steam_games::steam_launch_uri(&game.appid);
+            spawn_hidden_cmd(&["/C", "start", "", &uri])?;
+            return Ok(reply_with(
+                "open_app_launching_steam",
+                &[("target", game.name)],
+            ));
+        }
+
+        if let Some(app) = crate::modules::windows_discovery::find_app_launch_target(&normalized) {
+            spawn_hidden_cmd(&["/C", "start", "", &app.launch_target])?;
+            return Ok(format!("Opening {}.", app.canonical_name));
+        }
+
+        if command_exists_windows(&normalized) {
+            spawn_hidden_cmd(&["/C", "start", "", &normalized])?;
+            return Ok(format!("Opening {}.", target));
+        }
     }
 
-    if let Some(app) = crate::modules::windows_discovery::find_app_launch_target(&normalized) {
-        spawn_hidden_cmd(&["/C", "start", "", &app.launch_target])?;
-        return Ok(format!("Opening {}.", app.canonical_name));
-    }
-
-    if command_exists_windows(&normalized) {
-        spawn_hidden_cmd(&["/C", "start", "", &normalized])?;
-        return Ok(format!("Opening {}.", target));
+    #[cfg(target_os = "macos")]
+    {
+        // Basic "open app by name" for macOS.
+        // `open -a` works for installed apps; otherwise we'll fall back to web.
+        if spawn_open(&["-a", target.trim()]).is_ok() {
+            return Ok(reply_with(
+                "open_app_opening",
+                &[("target", target.to_string())],
+            ));
+        }
     }
 
     if let Some(url) = known_web_fallback(&normalized) {
@@ -308,6 +393,31 @@ fn focus_hint_for_app(app: &str) -> Option<&'static str> {
 }
 
 pub fn focus_app_window(app: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let app = app.trim();
+        if app.is_empty() {
+            return Ok(());
+        }
+
+        let script = format!(
+            "tell application {} to activate",
+            serde_json::to_string(app).unwrap_or_else(|_| "\"\"".into())
+        );
+
+        Command::new("osascript")
+            .args(["-e", &script])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|e| format!("Could not focus app: {e}"))?;
+
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
     if let Some(hint) = focus_hint_for_app(app) {
         let script = format!(
             "$ws = New-Object -ComObject WScript.Shell; $null = $ws.AppActivate('{}')",
@@ -325,6 +435,7 @@ pub fn focus_app_window(app: &str) -> Result<(), String> {
     }
 
     Ok(())
+    }
 }
 
 pub fn remember_external_app(app: &str) {

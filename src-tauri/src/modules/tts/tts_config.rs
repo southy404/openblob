@@ -25,6 +25,18 @@ pub struct TtsConfig {
 
 impl Default for TtsConfig {
     fn default() -> Self {
+        #[cfg(target_os = "macos")]
+        let (piper_exe, piper_models_dir) = (
+            "piper".to_string(),
+            "piper_models".to_string(),
+        );
+
+        #[cfg(not(target_os = "macos"))]
+        let (piper_exe, piper_models_dir) = (
+            "../tools/piper/piper.exe".to_string(),
+            "models".to_string(),
+        );
+
         Self {
             default_lang: "de".into(),
 
@@ -34,8 +46,8 @@ impl Default for TtsConfig {
             de_voice: "de_DE-thorsten-medium".into(),
             en_voice: "en_US-lessac-high".into(),
 
-            piper_exe: "../tools/piper/piper.exe".into(),
-            piper_models_dir: "models".into(),
+            piper_exe,
+            piper_models_dir,
 
             kokoro_base_url: "http://127.0.0.1:8880".into(),
             enabled: true,

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, emit, emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -366,6 +365,8 @@ function BubbleApp() {
   const listeningRef = useRef(listening);
   const busyRef = useRef(false);
   const phaseRef = useRef<BlobPhase>("idle");
+  const suppressBlurHideUntilRef = useRef(0);
+  const blurHideTimerRef = useRef<number | null>(null);
 
   const t = BUBBLE_TEXTS[uiLang];
 
@@ -493,12 +494,34 @@ function BubbleApp() {
   useEffect(() => {
     const onBlur = () => {
       if (!visibleRef.current) return;
-      inputRef.current?.blur();
-      void fadeOutAndHide();
+      if (busyRef.current) return;
+      if (Date.now() < suppressBlurHideUntilRef.current) return;
+      if (blurHideTimerRef.current !== null) {
+        window.clearTimeout(blurHideTimerRef.current);
+      }
+
+      blurHideTimerRef.current = window.setTimeout(async () => {
+        blurHideTimerRef.current = null;
+        const win = getCurrentWindow();
+        const focused = await win.isFocused().catch(() => false);
+        if (focused) return;
+        if (!visibleRef.current) return;
+        if (busyRef.current) return;
+        if (Date.now() < suppressBlurHideUntilRef.current) return;
+
+        inputRef.current?.blur();
+        await fadeOutAndHide();
+      }, 350);
     };
 
     window.addEventListener("blur", onBlur);
-    return () => window.removeEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      if (blurHideTimerRef.current !== null) {
+        window.clearTimeout(blurHideTimerRef.current);
+        blurHideTimerRef.current = null;
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -563,6 +586,7 @@ function BubbleApp() {
     }
 
     try {
+      suppressBlurHideUntilRef.current = Date.now() + 800;
       const subtitleWindow = await ensureSubtitleWindow();
       await subtitleWindow.show().catch(() => {});
       await new Promise((resolve) => window.setTimeout(resolve, 80));
@@ -590,6 +614,14 @@ function BubbleApp() {
     requestAnimationFrame(() => setVisible(true));
     const focused = await win.isFocused().catch(() => false);
     if (focused) focusInputSoon();
+  };
+
+  const fadeInAndShowWithFocus = async () => {
+    const win = getCurrentWindow();
+    await win.show();
+    requestAnimationFrame(() => setVisible(true));
+    await win.setFocus().catch(() => {});
+    focusInputSoon();
   };
 
   const fadeOutAndHide = async () => {
@@ -628,6 +660,10 @@ function BubbleApp() {
     }, 250);
 
     try {
+      try {
+        await invoke("ensure_ollama_running");
+      } catch {}
+
       const result = await invoke<OllamaResult>("ask_ollama", {
         mode: bubbleMode === "chat" ? "chat" : "ask",
         text: prompt,
@@ -682,12 +718,6 @@ function BubbleApp() {
     await setBlobPhase("thinking");
 
     try {
-      if (bubbleMode === "chat") {
-        setHint(t.justChatting);
-        await runOllamaAsk(input);
-        return;
-      }
-
       const directUrl = getDirectKnownUrl(input);
 
       if (directUrl) {
@@ -768,7 +798,7 @@ function BubbleApp() {
         return;
       }
 
-      setHint(t.noLocalCommandMatched);
+      setHint(bubbleMode === "chat" ? t.justChatting : t.noLocalCommandMatched);
       await runOllamaAsk(input);
     } catch (error) {
       const message = String(error);
@@ -958,12 +988,12 @@ function BubbleApp() {
           stopVoiceInput();
           await fadeOutAndHide();
         } else {
-          await fadeInAndShow();
+          await fadeInAndShowWithFocus();
         }
       });
 
       unlistenShow = await listen("bubble-show", async () => {
-        await fadeInAndShow();
+        await fadeInAndShowWithFocus();
       });
 
       unlistenHide = await listen("bubble-hide", async () => {
@@ -1099,23 +1129,19 @@ function BubbleApp() {
           position: relative;
           border-radius: 999px;
           isolation: isolate;
-          background: rgba(24, 24, 28, 0.28);
+          background: transparent;
           backdrop-filter: blur(18px) saturate(155%);
           -webkit-backdrop-filter: blur(18px) saturate(155%);
-          border: 1px solid rgba(255, 255, 255, 0.14);
-          box-shadow:
-            inset 0 1px 1px rgba(255, 255, 255, 0.18),
-            inset 0 -1px 1px rgba(0, 0, 0, 0.16);
+          border: 0;
+          box-shadow: none;
           backface-visibility: hidden;
         }
 
         .macos-lite .bubble-shell {
           backdrop-filter: none;
           -webkit-backdrop-filter: none;
-          background: rgba(24, 24, 28, 0.28);
-          box-shadow:
-            inset 0 1px 1px rgba(255, 255, 255, 0.18),
-            inset 0 -1px 1px rgba(0, 0, 0, 0.16);
+          background: transparent;
+          box-shadow: none;
         }
 
         .bubble-row {
@@ -1133,6 +1159,10 @@ function BubbleApp() {
           flex-direction: column;
           justify-content: center;
           gap: 4px;
+          border-radius: 999px;
+          padding: 10px 16px 10px 18px;
+          border: 1px solid rgba(255, 255, 255, 0.14);
+          background: rgba(24, 24, 28, 0.28);
         }
 
         .bubble-input {
@@ -1166,8 +1196,8 @@ function BubbleApp() {
           width: 52px;
           height: 52px;
           border-radius: 50%;
-          border: 1px solid rgba(255, 255, 255, 0.12);
-          background: rgba(255, 255, 255, 0.09);
+          border: 0;
+          background: transparent;
           color: var(--text-main);
           display: grid;
           place-items: center;
@@ -1178,8 +1208,6 @@ function BubbleApp() {
         }
 
         .icon-btn:hover {
-          background: rgba(255, 255, 255, 0.16);
-          border-color: rgba(255, 255, 255, 0.24);
           transform: scale(1.04);
         }
 
@@ -1194,15 +1222,14 @@ function BubbleApp() {
         }
 
         .icon-btn-active {
-          background: rgba(255, 255, 255, 0.2);
-          border-color: rgba(255, 255, 255, 0.28);
+          background: transparent;
         }
 
         .send-btn {
           position: relative;
           border: none;
           border-radius: 50%;
-          background: rgba(255, 255, 255, 0.09);
+          background: transparent;
           box-shadow:
             inset 0 1px 1px rgba(255,255,255,0.22),
             inset 0 -1px 1px rgba(0,0,0,0.16),
@@ -1218,7 +1245,6 @@ function BubbleApp() {
         }
 
         .send-btn:hover {
-          background: rgba(255, 255, 255, 0.16);
           transform: scale(1.045);
         }
 
@@ -1509,4 +1535,4 @@ function BubbleApp() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<BubbleApp />);
+export default BubbleApp;

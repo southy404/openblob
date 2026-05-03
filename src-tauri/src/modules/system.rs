@@ -1,11 +1,13 @@
 use std::process::Command;
 
+#[cfg(windows)]
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
-    VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE, VK_MEDIA_PREV_TRACK, VK_VOLUME_DOWN,
-    VK_VOLUME_MUTE, VK_VOLUME_UP,
+    VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE, VK_MEDIA_PREV_TRACK, VK_VOLUME_DOWN, VK_VOLUME_MUTE,
+    VK_VOLUME_UP,
 };
 
+#[cfg(windows)]
 fn send_vk(vk: VIRTUAL_KEY) -> Result<(), String> {
     unsafe {
         let down = INPUT {
@@ -45,34 +47,87 @@ fn send_vk(vk: VIRTUAL_KEY) -> Result<(), String> {
     }
 }
 
+#[cfg(not(windows))]
+fn send_vk(_vk: ()) -> Result<(), String> {
+    Err("Not supported on this OS.".into())
+}
+
 #[tauri::command]
 pub fn media_play_pause() -> Result<(), String> {
-    send_vk(VK_MEDIA_PLAY_PAUSE)
+    #[cfg(windows)]
+    {
+        return send_vk(VK_MEDIA_PLAY_PAUSE);
+    }
+
+    #[cfg(not(windows))]
+    {
+        return send_vk(());
+    }
 }
 
 #[tauri::command]
 pub fn media_next_track() -> Result<(), String> {
-    send_vk(VK_MEDIA_NEXT_TRACK)
+    #[cfg(windows)]
+    {
+        return send_vk(VK_MEDIA_NEXT_TRACK);
+    }
+
+    #[cfg(not(windows))]
+    {
+        return send_vk(());
+    }
 }
 
 #[tauri::command]
 pub fn media_prev_track() -> Result<(), String> {
-    send_vk(VK_MEDIA_PREV_TRACK)
+    #[cfg(windows)]
+    {
+        return send_vk(VK_MEDIA_PREV_TRACK);
+    }
+
+    #[cfg(not(windows))]
+    {
+        return send_vk(());
+    }
 }
 
 #[tauri::command]
 pub fn volume_key_up() -> Result<(), String> {
-    send_vk(VK_VOLUME_UP)
+    #[cfg(windows)]
+    {
+        return send_vk(VK_VOLUME_UP);
+    }
+
+    #[cfg(not(windows))]
+    {
+        return send_vk(());
+    }
 }
 
 #[tauri::command]
 pub fn volume_key_down() -> Result<(), String> {
-    send_vk(VK_VOLUME_DOWN)
+    #[cfg(windows)]
+    {
+        return send_vk(VK_VOLUME_DOWN);
+    }
+
+    #[cfg(not(windows))]
+    {
+        return send_vk(());
+    }
 }
 
 #[tauri::command]
 pub fn volume_key_mute() -> Result<(), String> {
-    send_vk(VK_VOLUME_MUTE)
+    #[cfg(windows)]
+    {
+        return send_vk(VK_VOLUME_MUTE);
+    }
+
+    #[cfg(not(windows))]
+    {
+        return send_vk(());
+    }
 }
 
 #[tauri::command]
@@ -87,13 +142,22 @@ pub fn set_system_volume(_value: f32) -> Result<f32, String> {
 
 #[tauri::command]
 pub fn change_system_volume(delta: f32) -> Result<f32, String> {
-    if delta > 0.0 {
-        send_vk(VK_VOLUME_UP)?;
-    } else if delta < 0.0 {
-        send_vk(VK_VOLUME_DOWN)?;
+    #[cfg(windows)]
+    {
+        if delta > 0.0 {
+            send_vk(VK_VOLUME_UP)?;
+        } else if delta < 0.0 {
+            send_vk(VK_VOLUME_DOWN)?;
+        }
+
+        return Ok(0.0);
     }
 
-    Ok(0.0)
+    #[cfg(not(windows))]
+    {
+        let _ = delta;
+        Err("Not supported on this OS.".into())
+    }
 }
 
 #[tauri::command]
@@ -103,66 +167,131 @@ pub fn get_system_mute() -> Result<bool, String> {
 
 #[tauri::command]
 pub fn set_system_mute(value: bool) -> Result<bool, String> {
-    send_vk(VK_VOLUME_MUTE)?;
-    Ok(value)
+    #[cfg(windows)]
+    {
+        send_vk(VK_VOLUME_MUTE)?;
+        return Ok(value);
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = value;
+        return Err("Not supported on this OS.".into());
+    }
 }
 
 #[tauri::command]
 pub fn toggle_system_mute() -> Result<bool, String> {
-    send_vk(VK_VOLUME_MUTE)?;
-    Ok(false)
+    #[cfg(windows)]
+    {
+        send_vk(VK_VOLUME_MUTE)?;
+        return Ok(false);
+    }
+
+    #[cfg(not(windows))]
+    {
+        return Err("Not supported on this OS.".into());
+    }
 }
 
 #[tauri::command]
 pub fn open_downloads() -> Result<(), String> {
-    Command::new("explorer")
-        .arg("shell:Downloads")
-        .spawn()
-        .map_err(|e| format!("Failed to open Downloads: {e}"))?;
-    Ok(())
+    #[cfg(windows)]
+    {
+        Command::new("explorer")
+            .arg("shell:Downloads")
+            .spawn()
+            .map_err(|e| format!("Failed to open Downloads: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(windows))]
+    {
+        Err("Not supported on this OS.".into())
+    }
 }
 
 #[tauri::command]
 pub fn open_settings() -> Result<(), String> {
-    Command::new("explorer")
-        .arg("ms-settings:")
-        .spawn()
-        .map_err(|e| format!("Failed to open Settings: {e}"))?;
-    Ok(())
+    #[cfg(windows)]
+    {
+        Command::new("explorer")
+            .arg("ms-settings:")
+            .spawn()
+            .map_err(|e| format!("Failed to open Settings: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(windows))]
+    {
+        Err("Not supported on this OS.".into())
+    }
 }
 
 #[tauri::command]
 pub fn open_explorer() -> Result<(), String> {
-    Command::new("explorer")
-        .spawn()
-        .map_err(|e| format!("Failed to open File Explorer: {e}"))?;
-    Ok(())
+    #[cfg(windows)]
+    {
+        Command::new("explorer")
+            .spawn()
+            .map_err(|e| format!("Failed to open File Explorer: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(windows))]
+    {
+        Err("Not supported on this OS.".into())
+    }
 }
 
 #[tauri::command]
 pub fn lock_screen() -> Result<(), String> {
-    use windows::Win32::System::Shutdown::LockWorkStation;
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::Shutdown::LockWorkStation;
 
-    unsafe { LockWorkStation() }
-        .map_err(|e| format!("Failed to lock screen: {e}"))?;
+        unsafe { LockWorkStation() }
+            .map_err(|e| format!("Failed to lock screen: {e}"))?;
 
-    Ok(())
+        return Ok(());
+    }
+
+    #[cfg(not(windows))]
+    {
+        Err("Not supported on this OS.".into())
+    }
 }
 
 #[tauri::command]
 pub fn shutdown_pc() -> Result<(), String> {
-    Command::new("shutdown")
-        .args(["/s", "/t", "0"])
-        .spawn()
-        .map_err(|e| format!("Failed to shut down PC: {e}"))?;
-    Ok(())
+    #[cfg(windows)]
+    {
+        Command::new("shutdown")
+            .args(["/s", "/t", "0"])
+            .spawn()
+            .map_err(|e| format!("Failed to shut down PC: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(windows))]
+    {
+        Err("Not supported on this OS.".into())
+    }
 }
 
 #[tauri::command]
 pub fn restart_pc() -> Result<(), String> {
-    Command::new("shutdown")
-        .args(["/r", "/t", "0"])
-        .spawn()
-        .map_err(|e| format!("Failed to restart PC: {e}"))?;
-    Ok(())
+    #[cfg(windows)]
+    {
+        Command::new("shutdown")
+            .args(["/r", "/t", "0"])
+            .spawn()
+            .map_err(|e| format!("Failed to restart PC: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(windows))]
+    {
+        Err("Not supported on this OS.".into())
+    }
 }

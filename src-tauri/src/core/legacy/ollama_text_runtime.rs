@@ -1,6 +1,7 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::process::Command;
 use std::time::Duration;
 
 use crate::modules::i18n::replies::{reply, reply_with};
@@ -184,6 +185,26 @@ pub async fn ping_ollama() -> Result<bool, String> {
         .map_err(|e| reply_with("ollama_unreachable", &[("error", e.to_string())]))?;
 
     Ok(response.status().is_success())
+}
+
+pub async fn ensure_ollama_running() -> Result<bool, String> {
+    if ping_ollama().await.unwrap_or(false) {
+        return Ok(true);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("open").args(["-a", "Ollama"]).spawn();
+
+        for _ in 0..30 {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            if ping_ollama().await.unwrap_or(false) {
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
 }
 
 pub async fn ask_ollama(

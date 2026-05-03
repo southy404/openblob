@@ -1,6 +1,7 @@
 use super::kokoro;
 use super::piper;
 use super::tts_config::{detect_lang_from_text, preferred_lang, TtsConfig, TtsProvider};
+use std::process::{Command, Stdio};
 
 pub async fn speak(text: &str, lang: Option<&str>) -> Result<(), String> {
     let trimmed = text.trim();
@@ -87,12 +88,28 @@ async fn speak_with_provider(
 
     match provider {
         TtsProvider::Piper => {
-            piper::speak(
+            let result = piper::speak(
                 text,
                 &config.piper_exe,
                 &config.piper_models_dir,
                 trimmed_voice,
-            )
+            );
+
+            #[cfg(target_os = "macos")]
+            {
+                if result.is_err() {
+                    // Fallback to macOS built-in TTS if Piper isn't available.
+                    Command::new("say")
+                        .arg(text)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                        .map_err(|e| format!("TTS failed: {e}"))?;
+                    return Ok(());
+                }
+            }
+
+            result
         }
         TtsProvider::Kokoro => {
             kokoro::speak(
