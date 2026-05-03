@@ -606,6 +606,13 @@ async fn stop_tts() -> Result<(), String> {
     modules::tts::manager::stop().await
 }
 
+#[tauri::command]
+async fn tts_download_default_piper_assets() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(modules::tts::setup::tts_download_default_piper_assets)
+        .await
+        .map_err(|e| format!("Download task failed: {e}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -868,6 +875,7 @@ pub fn run() {
             save_current_transcript,
             summarize_current_transcript,
             process_transcript,
+            tts_download_default_piper_assets,
             modules::system::get_system_volume,
             modules::system::set_system_volume,
             modules::system::change_system_volume,

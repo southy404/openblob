@@ -49,6 +49,12 @@ type LocalizedText = {
 
   routeNone: string;
 
+  ttsTools: string;
+  downloadPiper: string;
+  downloading: string;
+  downloadDone: string;
+  downloadFailed: string;
+
   languageOptions: Array<{ value: UiLang; label: string }>;
 };
 
@@ -98,6 +104,12 @@ const TEXTS: Record<UiLang, LocalizedText> = {
 
     routeNone: "none",
 
+    ttsTools: "TTS Tools",
+    downloadPiper: "Download Piper + default voice (macOS)",
+    downloading: "Downloading…",
+    downloadDone: "Done.",
+    downloadFailed: "Failed.",
+
     languageOptions: [
       { value: "en", label: "English" },
       { value: "de", label: "Deutsch" },
@@ -126,6 +138,12 @@ const TEXTS: Record<UiLang, LocalizedText> = {
     commandCount: (count) => `${count} Befehl${count === 1 ? "" : "e"}`,
 
     routeNone: "keine",
+
+    ttsTools: "TTS-Werkzeuge",
+    downloadPiper: "Piper + Standardstimme laden (macOS)",
+    downloading: "Lade herunter…",
+    downloadDone: "Fertig.",
+    downloadFailed: "Fehlgeschlagen.",
 
     languageOptions: [
       { value: "en", label: "English" },
@@ -539,6 +557,8 @@ function DevWindow() {
   const [ownerName, setOwnerName] = useState("");
   const [language, setLanguage] = useState<UiLang>("en");
   const [saving, setSaving] = useState(false);
+  const [ttsBusy, setTtsBusy] = useState(false);
+  const [ttsMessage, setTtsMessage] = useState<string | null>(null);
   const [isMacOS] = useState(() =>
     /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
   );
@@ -668,6 +688,20 @@ function DevWindow() {
       console.error("failed to save identity", err);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const downloadPiper = async () => {
+    try {
+      setTtsBusy(true);
+      setTtsMessage(t.downloading);
+      const result = (await invoke("tts_download_default_piper_assets")) as string;
+      setTtsMessage(result || t.downloadDone);
+    } catch (err) {
+      console.error("tts download failed", err);
+      setTtsMessage(t.downloadFailed);
+    } finally {
+      setTtsBusy(false);
     }
   };
 
@@ -1347,6 +1381,33 @@ function DevWindow() {
                 >
                   {saving ? t.saving : t.save}
                 </button>
+              </div>
+            </div>
+
+            <div className="card identityCard">
+              <div className="label">{t.ttsTools}</div>
+
+              <div className="identityGrid">
+                <button
+                  className="saveBtn"
+                  onClick={() => void downloadPiper()}
+                  disabled={ttsBusy || !isMacOS}
+                  type="button"
+                  title={!isMacOS ? "macOS only" : undefined}
+                  style={{
+                    width: "100%",
+                    justifyContent: "center",
+                    gridColumn: "1 / -1",
+                  }}
+                >
+                  {ttsBusy ? t.downloading : t.downloadPiper}
+                </button>
+
+                {ttsMessage ? (
+                  <div className="field" style={{ gridColumn: "1 / -1" }}>
+                    <div className="fieldLabel">{ttsMessage}</div>
+                  </div>
+                ) : null}
               </div>
             </div>
 
