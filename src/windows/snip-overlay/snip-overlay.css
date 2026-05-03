@@ -32,10 +32,18 @@ body,
   pointer-events: none;
 }
 
+.macos-lite .snip-hint {
+  backdrop-filter: none;
+}
+
 .snip-selection {
   position: fixed;
   border: 1px solid rgba(255, 255, 255, 0.9);
   background: rgba(255, 255, 255, 0.08);
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.22),
     0 0 0 1px rgba(255, 255, 255, 0.3) inset;
+}
+
+.macos-lite .snip-selection {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3) inset;
 }

@@ -152,6 +152,8 @@ function SubtitleApp() {
 
         .subtitle-text {
           width: 100%;
+          max-width: 100%;
+          min-width: 0;
           text-align: center;
           color: #ffffff;
           font-size: clamp(24px, 2.15vw, 38px);

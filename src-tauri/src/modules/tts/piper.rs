@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tempfile::NamedTempFile;
 
+#[cfg(target_os = "macos")]
+use crate::modules::storage::paths;
+
 fn play_wav_windows(path: &Path) -> Result<(), String> {
     let wav = path
         .to_str()
@@ -36,6 +39,26 @@ $player.PlaySync()
     }
 }
 
+#[cfg(target_os = "macos")]
+fn play_wav_macos(path: &Path) -> Result<(), String> {
+    let path = path
+        .to_str()
+        .ok_or_else(|| "Invalid WAV path.".to_string())?;
+
+    let status = Command::new("afplay")
+        .arg(path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| format!("Could not play audio: {e}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err("afplay failed.".to_string())
+    }
+}
+
 fn resolve_model_path(models_dir: &str, voice: &str) -> Result<PathBuf, String> {
     let trimmed_models_dir = models_dir.trim();
     if trimmed_models_dir.is_empty() {
@@ -60,6 +83,21 @@ fn resolve_model_path(models_dir: &str, voice: &str) -> Result<PathBuf, String> 
 }
 
 fn resolve_path(path: &str) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        if path == "piper" {
+            if let Ok(dir) = paths::app_data_dir() {
+                return dir.join("tts").join("piper").join("piper");
+            }
+        }
+
+        if path == "piper_models" {
+            if let Ok(dir) = paths::app_data_dir() {
+                return dir.join("tts").join("models");
+            }
+        }
+    }
+
     let p = PathBuf::from(path);
 
     if p.is_absolute() {
@@ -169,5 +207,13 @@ pub fn speak(
         return Err("Piper hat keine WAV-Datei erzeugt.".to_string());
     }
 
-    play_wav_windows(&wav_path)
+    #[cfg(target_os = "macos")]
+    {
+        return play_wav_macos(&wav_path);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        play_wav_windows(&wav_path)
+    }
 }

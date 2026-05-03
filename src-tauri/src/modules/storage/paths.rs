@@ -4,6 +4,35 @@ use std::path::PathBuf;
 const APP_DIR_NAME: &str = "OpenBlob";
 
 fn fallback_base_dir() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            let home = home.trim();
+            if !home.is_empty() {
+                return PathBuf::from(home)
+                    .join("Library")
+                    .join("Application Support");
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+            let xdg = xdg.trim();
+            if !xdg.is_empty() {
+                return PathBuf::from(xdg);
+            }
+        }
+
+        if let Ok(home) = std::env::var("HOME") {
+            let home = home.trim();
+            if !home.is_empty() {
+                return PathBuf::from(home).join(".local").join("share");
+            }
+        }
+    }
+
     if let Ok(appdata) = std::env::var("APPDATA") {
         return PathBuf::from(appdata);
     }

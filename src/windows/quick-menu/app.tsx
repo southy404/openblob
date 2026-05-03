@@ -232,6 +232,9 @@ function QuickMenuApp() {
   const [hint, setHint] = useState(TEXTS.en.ready);
   const [activeApp, setActiveApp] = useState(TEXTS.en.unknown);
   const [pinned, setPinned] = useState(true);
+  const [isMacOS] = useState(() =>
+    /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  );
 
   const [transcriptRunning, setTranscriptRunning] = useState(false);
   const [transcriptBusy, setTranscriptBusy] = useState(false);
@@ -239,6 +242,10 @@ function QuickMenuApp() {
   const [errorText, setErrorText] = useState<string | null>(null);
 
   const t = TEXTS[uiLang];
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("macos-lite", isMacOS);
+  }, [isMacOS]);
 
   const transcriptChip = useMemo(() => {
     if (transcriptBusy && transcriptRunning) return t.transcriptStopping;
@@ -566,6 +573,12 @@ function QuickMenuApp() {
             inset 0 -1px 1px rgba(0,0,0,0.18);
         }
 
+        .macos-lite .quick-menu {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+          background: rgba(18, 20, 26, 0.74);
+        }
+
         .quick-menu::before {
           content: "";
           position: absolute;
@@ -669,6 +682,11 @@ function QuickMenuApp() {
           -webkit-backdrop-filter: blur(14px) saturate(135%);
         }
 
+        .macos-lite .quick-btn {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+        }
+
         .quick-btn:hover {
           background: var(--glass-fill-hover);
           border-color: rgba(255,255,255,0.16);
@@ -737,6 +755,11 @@ function QuickMenuApp() {
           color: rgba(255,255,255,0.74);
           backdrop-filter: blur(10px);
           -webkit-backdrop-filter: blur(10px);
+        }
+
+        .macos-lite .chip {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
         }
 
         .chip-recording {

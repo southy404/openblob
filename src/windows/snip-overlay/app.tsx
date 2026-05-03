@@ -25,9 +25,16 @@ function SnipOverlay() {
   const [end, setEnd] = useState<Point | null>(null);
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [isMacOS] = useState(() =>
+    /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  );
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const busyRef = useRef(false);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("macos-lite", isMacOS);
+  }, [isMacOS]);
 
   useEffect(() => {
     busyRef.current = busy;

@@ -1956,20 +1956,7 @@ export default function App() {
         }}
       >
         {hideGameState !== "seeking" && (
-          <div
-            className="shadow"
-            style={{
-              position: "absolute",
-              bottom: 18,
-              width: 120,
-              height: 28,
-              borderRadius: 999,
-              background:
-                "radial-gradient(circle, rgba(80, 110, 170, 0.18), rgba(80, 110, 170, 0))",
-              filter: "blur(8px)",
-              pointerEvents: "none",
-            }}
-          />
+          null
         )}
 
         <BlobAvatar

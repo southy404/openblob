@@ -32,6 +32,13 @@ function formatTime(totalSeconds: number) {
 
 function TimerOverlayApp() {
   const [timer, setTimer] = useState<TimerState>(null);
+  const [isMacOS] = useState(() =>
+    /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  );
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("macos-lite", isMacOS);
+  }, [isMacOS]);
 
   useEffect(() => {
     const applyGlass = async () => {
@@ -147,6 +154,12 @@ function TimerOverlayApp() {
           inset 0 -1px 1px rgba(0, 0, 0, 0.16);
         backface-visibility: hidden;
         padding: 12px 14px;
+      }
+
+      .macos-lite .timer-card {
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        background: rgba(18, 20, 26, 0.74);
       }
 
       .timer-card::before {
