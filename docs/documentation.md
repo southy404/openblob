@@ -414,6 +414,8 @@ Transcript segments
 
 OpenBlob uses a layered memory architecture that persists locally as JSON files. All memory files are also read by the Blob Connectors layer to provide context to external channel conversations.
 
+Long-term retrieval and SQLite-backed memory are being planned in [docs/proposals/memory-system.md](./proposals/memory-system.md).
+
 #### Memory layers
 
 | Layer       | File                     | Purpose                                                   |

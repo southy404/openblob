@@ -357,7 +357,7 @@ Fun interactions and real productivity are not opposites.
 
 ### AI / Intelligence
 
-- [ ] Persistent long-term memory
+- [ ] Persistent long-term memory ([proposal](./docs/proposals/memory-system.md))
 - [ ] Better multi-model routing
 - [ ] Structured reasoning pipeline
 - [ ] Tool-based agent system
