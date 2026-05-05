@@ -37,6 +37,14 @@ use crate::modules::memory::context::build_memory_context_for_query;
 use crate::modules::memory::episodic_memory::{append_episode, EpisodicMemoryEntry};
 use crate::modules::memory::events::MemoryEvent;
 use crate::modules::memory::import::{import_legacy_episodic_memory, import_legacy_semantic_facts};
+use crate::modules::memory::management::{
+    export_memory_json,
+    forget_memory as forget_memory_store,
+    wipe_memory as wipe_memory_store,
+    MemoryMutationReport,
+};
+use crate::modules::memory::reflection::{reflect_memory as reflect_memory_store, ReflectiveSummary};
+use crate::modules::memory::retention::apply_memory_retention as apply_memory_retention_store;
 use crate::modules::memory::writer::{enqueue_memory_event, start_memory_writer};
 use modules::companion::bonding::load_or_create_bonding_state;
 use modules::companion::personality::{load_or_create_personality_state, load_personality_state};
@@ -53,7 +61,7 @@ use modules::profile::user_profile::{
 };
 
 fn initialize_companion_persistence() -> Result<(), String> {
-    let _config = load_or_create_companion_config()?;
+    let config = load_or_create_companion_config()?;
     let _onboarding = load_or_create_onboarding_state()?;
     let _personality = load_or_create_personality_state()?;
     let _bonding = load_or_create_bonding_state()?;
@@ -71,6 +79,20 @@ fn initialize_companion_persistence() -> Result<(), String> {
         println!(
             "[openblob] Imported {} legacy semantic facts into SQLite ({} skipped)",
             semantic_report.imported, semantic_report.skipped
+        );
+    }
+    let retention_report = apply_memory_retention_store(&config.memory)?;
+    if retention_report.events > 0
+        || retention_report.facts > 0
+        || retention_report.summaries > 0
+        || retention_report.embeddings > 0
+    {
+        println!(
+            "[openblob] Applied memory retention: events={}, facts={}, summaries={}, embeddings={}",
+            retention_report.events,
+            retention_report.facts,
+            retention_report.summaries,
+            retention_report.embeddings
         );
     }
     Ok(())
@@ -248,6 +270,32 @@ async fn ask_ollama(
     model: Option<String>,
 ) -> Result<crate::core::legacy::ollama_text_runtime::OllamaTextResult, String> {
     crate::core::legacy::ollama_text_runtime::ask_ollama(mode, text, question, model).await
+}
+
+#[tauri::command]
+fn export_memory() -> Result<String, String> {
+    export_memory_json()
+}
+
+#[tauri::command]
+fn forget_memory(query: String) -> Result<MemoryMutationReport, String> {
+    forget_memory_store(&query)
+}
+
+#[tauri::command]
+fn wipe_memory() -> Result<MemoryMutationReport, String> {
+    wipe_memory_store()
+}
+
+#[tauri::command]
+fn apply_memory_retention() -> Result<MemoryMutationReport, String> {
+    let config = load_or_create_companion_config()?;
+    apply_memory_retention_store(&config.memory)
+}
+
+#[tauri::command]
+fn reflect_memory(scope: String) -> Result<ReflectiveSummary, String> {
+    reflect_memory_store(&scope)
 }
 
 #[tauri::command]
@@ -462,6 +510,28 @@ async fn handle_voice_command(app: tauri::AppHandle, input: String) -> Result<St
             .unwrap_or_else(|| "Owner".to_string());
 
         return Ok(format!("Your name is {}.", owner_name));
+    }
+
+    if normalized.contains("forget everything from today")
+        || normalized.contains("forget today")
+        || normalized.contains("vergiss alles von heute")
+    {
+        let report = forget_memory_store("today")?;
+        return Ok(format!(
+            "Forgot today's memory entries: {} events and {} summaries.",
+            report.events, report.summaries
+        ));
+    }
+
+    if let Some(topic) = normalized
+        .strip_prefix("forget about ")
+        .or_else(|| normalized.strip_prefix("forget memory about "))
+    {
+        let report = forget_memory_store(topic)?;
+        return Ok(format!(
+            "Forgot matching memory entries for '{}': {} events, {} facts, {} summaries.",
+            topic, report.events, report.facts, report.summaries
+        ));
     }
 
     if is_internal_companion_app(&ctx.app_name) && active_app != "unknown" {
@@ -719,6 +789,12 @@ pub fn run() {
                 eprintln!("Failed to start memory writer: {err}");
             }
 
+            tauri::async_runtime::spawn_blocking(|| {
+                if let Err(err) = reflect_memory_store("daily") {
+                    eprintln!("Failed to refresh daily memory reflection: {err}");
+                }
+            });
+
             let shortcut = app.global_shortcut();
 
             if !shortcut.is_registered("Ctrl+Space") {
@@ -734,6 +810,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ping_ollama,
             ask_ollama,
+            export_memory,
+            forget_memory,
+            wipe_memory,
+            apply_memory_retention,
+            reflect_memory,
             trigger_copy_shortcut,
             get_cursor_position,
             get_active_app,

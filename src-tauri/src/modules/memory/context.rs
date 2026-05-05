@@ -5,10 +5,12 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 
 use crate::modules::memory::embeddings::{
-    cosine_similarity, embed_text_with_ollama, load_event_embeddings,
+    cosine_similarity, embed_text_with_ollama, load_event_embeddings, load_sqlite_vec_event_matches,
 };
 use crate::modules::memory::events::PrivacyTier;
 use crate::modules::memory::facts::{load_active_memory_facts, ActiveMemoryFact};
+use crate::modules::memory::reflection::{load_recent_reflective_summaries, ReflectiveSummary};
+use crate::modules::memory::retention::decayed_importance;
 use crate::modules::memory::sqlite_store::open_memory_database;
 
 const DEFAULT_MEMORY_CONTEXT_LIMIT: usize = 12;
@@ -55,8 +57,9 @@ pub fn build_memory_context_from_connection(
     limit: Option<usize>,
 ) -> Result<MemoryContext, String> {
     let facts = load_active_memory_facts(conn, 12)?;
+    let summaries = load_recent_reflective_summaries(conn, 3)?;
     let events = load_ranked_events(conn, query, normalized_limit(limit))?;
-    Ok(format_memory_context(&facts, &events))
+    Ok(format_memory_context(&facts, &summaries, &events))
 }
 
 fn normalized_limit(limit: Option<usize>) -> usize {
@@ -111,7 +114,13 @@ fn load_vector_events(
         _ => return Ok(Vec::new()),
     };
 
-    let mut scored = load_event_embeddings(conn, 512)?
+    let mut scored = load_sqlite_vec_event_matches(conn, &query_vector, limit)?
+        .into_iter()
+        .map(|vector_match| (vector_match.target_id, vector_match.score))
+        .collect::<Vec<_>>();
+
+    if scored.is_empty() {
+        scored = load_event_embeddings(conn, 512)?
         .into_iter()
         .map(|embedding| {
             let score = cosine_similarity(&query_vector, &embedding.vector);
@@ -119,6 +128,7 @@ fn load_vector_events(
         })
         .filter(|(_, score)| *score > 0.0)
         .collect::<Vec<_>>();
+    }
 
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(limit);
@@ -290,7 +300,7 @@ fn event_score(event: &MemoryContextEvent) -> f64 {
         .unwrap_or(0.0);
     let vector_score = event.vector_score.unwrap_or(0.0).max(0.0);
     let recency_score = recency_score(&event.created_at);
-    let importance_score = event.importance.clamp(0.0, 1.0) as f64;
+    let importance_score = decayed_importance(event.importance, &event.created_at, 30);
 
     (vector_score * 0.40) + (text_score * 0.30) + (recency_score * 0.18) + (importance_score * 0.12)
 }
@@ -319,8 +329,12 @@ fn escape_fts_query(query: &str) -> String {
         .join(" OR ")
 }
 
-fn format_memory_context(facts: &[ActiveMemoryFact], events: &[MemoryContextEvent]) -> MemoryContext {
-    if facts.is_empty() && events.is_empty() {
+fn format_memory_context(
+    facts: &[ActiveMemoryFact],
+    summaries: &[ReflectiveSummary],
+    events: &[MemoryContextEvent],
+) -> MemoryContext {
+    if facts.is_empty() && summaries.is_empty() && events.is_empty() {
         return MemoryContext {
             memory: String::new(),
             event_count: 0,
@@ -345,6 +359,17 @@ fn format_memory_context(facts: &[ActiveMemoryFact], events: &[MemoryContextEven
             if let Some(line) = format_event_line(event) {
                 lines.push(line);
             }
+        }
+    }
+
+    if !summaries.is_empty() {
+        lines.push("## Reflections".to_string());
+        for summary in summaries {
+            lines.push(format!(
+                "- {} summary: {}",
+                summary.scope,
+                summary.summary.replace('\n', " ")
+            ));
         }
     }
 
@@ -459,6 +484,28 @@ mod tests {
 
         assert!(context.memory.contains("## Who you know"));
         assert!(context.memory.contains("user.name = Brandon"));
+    }
+
+    #[test]
+    fn reflective_summaries_are_included_in_memory_block() {
+        let conn = open_memory_database_in_memory().expect("database opens");
+        let summary = ReflectiveSummary {
+            id: "summary_test".into(),
+            scope: "daily".into(),
+            period_start: "2026-05-06T00:00:00Z".into(),
+            period_end: "2026-05-06T23:59:59Z".into(),
+            summary: "User focused on memory retrieval.".into(),
+            source: "deterministic".into(),
+            created_at: "2026-05-06T23:59:59Z".into(),
+        };
+        crate::modules::memory::reflection::insert_reflective_summary(&conn, &summary)
+            .expect("summary inserts");
+
+        let context =
+            build_memory_context_from_connection(&conn, None, Some(10)).expect("context builds");
+
+        assert!(context.memory.contains("## Reflections"));
+        assert!(context.memory.contains("User focused on memory retrieval."));
     }
 
     #[test]

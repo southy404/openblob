@@ -6,6 +6,9 @@ use rusqlite::{params, Connection};
 use serde::Deserialize;
 
 use crate::modules::memory::events::{MemoryEvent, PrivacyTier};
+use crate::modules::memory::sqlite_store::{
+    sqlite_vec_available, DEFAULT_EMBEDDING_DIMENSIONS,
+};
 
 pub const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text";
 
@@ -13,6 +16,12 @@ pub const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text";
 pub struct StoredEmbedding {
     pub target_id: String,
     pub vector: Vec<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VectorMatch {
+    pub target_id: String,
+    pub score: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,6 +151,78 @@ pub fn insert_embedding(
     )
     .map_err(|e| format!("Could not insert memory embedding '{target_id}': {e}"))?;
 
+    if vector.len() == DEFAULT_EMBEDDING_DIMENSIONS {
+        let _ = insert_sqlite_vec_embedding(conn, target_id, vector);
+    }
+
+    Ok(())
+}
+
+pub fn load_sqlite_vec_event_matches(
+    conn: &Connection,
+    query_vector: &[f32],
+    limit: usize,
+) -> Result<Vec<VectorMatch>, String> {
+    if query_vector.len() != DEFAULT_EMBEDDING_DIMENSIONS || !sqlite_vec_available(conn) {
+        return Ok(Vec::new());
+    }
+
+    let query_json = serde_json::to_string(query_vector)
+        .map_err(|e| format!("Could not serialize sqlite-vec query vector: {e}"))?;
+    let mut stmt = match conn.prepare(
+        r#"
+        SELECT target_id, distance
+        FROM memory_embedding_vec
+        WHERE embedding MATCH ?1
+          AND k = ?2
+        ORDER BY distance
+        "#,
+    ) {
+        Ok(stmt) => stmt,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let rows = stmt
+        .query_map(params![query_json, limit as i64], |row| {
+            let distance: f64 = row.get(1)?;
+            Ok(VectorMatch {
+                target_id: row.get(0)?,
+                score: 1.0 / (1.0 + distance.max(0.0)),
+            })
+        })
+        .map_err(|e| format!("Could not read sqlite-vec memory matches: {e}"))?;
+
+    let mut matches = Vec::new();
+    for row in rows {
+        matches.push(row.map_err(|e| format!("Could not decode sqlite-vec row: {e}"))?);
+    }
+
+    Ok(matches)
+}
+
+fn insert_sqlite_vec_embedding(
+    conn: &Connection,
+    target_id: &str,
+    vector: &[f32],
+) -> Result<(), String> {
+    if !sqlite_vec_available(conn) {
+        return Ok(());
+    }
+
+    let vector_json = serde_json::to_string(vector)
+        .map_err(|e| format!("Could not serialize sqlite-vec embedding: {e}"))?;
+
+    conn.execute(
+        "DELETE FROM memory_embedding_vec WHERE target_id = ?1",
+        [target_id],
+    )
+    .ok();
+    conn.execute(
+        "INSERT INTO memory_embedding_vec(embedding, target_id) VALUES (?1, ?2)",
+        params![vector_json, target_id],
+    )
+    .map_err(|e| format!("Could not insert sqlite-vec embedding '{target_id}': {e}"))?;
+
     Ok(())
 }
 
@@ -248,5 +329,11 @@ mod tests {
     fn cosine_similarity_scores_matching_vectors() {
         assert!(cosine_similarity(&[1.0, 0.0], &[1.0, 0.0]) > 0.99);
         assert_eq!(cosine_similarity(&[1.0, 0.0], &[0.0, 1.0]), 0.0);
+    }
+
+    #[test]
+    fn sqlite_vec_extension_is_available() {
+        let conn = open_memory_database_in_memory().expect("database opens");
+        assert!(sqlite_vec_available(&conn));
     }
 }

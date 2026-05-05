@@ -1,12 +1,14 @@
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use rusqlite::{params, Connection};
 
 use crate::modules::memory::events::{MemoryEvent, PrivacyTier};
 use crate::modules::storage::paths::memory_database_path;
 
-pub const CURRENT_MEMORY_SCHEMA_VERSION: i64 = 4;
+pub const CURRENT_MEMORY_SCHEMA_VERSION: i64 = 6;
+pub const DEFAULT_EMBEDDING_DIMENSIONS: usize = 768;
 
 pub fn open_memory_database() -> Result<Connection, String> {
     let path = memory_database_path()?;
@@ -14,6 +16,8 @@ pub fn open_memory_database() -> Result<Connection, String> {
 }
 
 pub fn open_memory_database_at(path: &Path) -> Result<Connection, String> {
+    register_sqlite_vec_auto_extension();
+
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| {
             format!(
@@ -31,6 +35,8 @@ pub fn open_memory_database_at(path: &Path) -> Result<Connection, String> {
 
 #[cfg(test)]
 pub fn open_memory_database_in_memory() -> Result<Connection, String> {
+    register_sqlite_vec_auto_extension();
+
     let conn = Connection::open_in_memory()
         .map_err(|e| format!("Could not open in-memory memory database: {e}"))?;
     run_migrations(&conn)?;
@@ -173,7 +179,63 @@ pub fn run_migrations(conn: &Connection) -> Result<(), String> {
         .map_err(|e| format!("Could not initialize memory embeddings schema: {e}"))?;
     }
 
+    if current_version < 5 {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS memory_summaries (
+                id TEXT PRIMARY KEY,
+                scope TEXT NOT NULL,
+                period_start TEXT NOT NULL,
+                period_end TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                source TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                UNIQUE(scope, period_start, period_end)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_memory_summaries_scope_period
+                ON memory_summaries(scope, period_end);
+
+            PRAGMA user_version = 5;
+            "#,
+        )
+        .map_err(|e| format!("Could not initialize memory summaries schema: {e}"))?;
+    }
+
+    if current_version < 6 {
+        if sqlite_vec_available(conn) {
+            conn.execute_batch(&format!(
+                r#"
+                CREATE VIRTUAL TABLE IF NOT EXISTS memory_embedding_vec USING vec0(
+                    embedding float[{DEFAULT_EMBEDDING_DIMENSIONS}],
+                    target_id text
+                );
+                "#
+            ))
+            .map_err(|e| format!("Could not initialize sqlite-vec memory table: {e}"))?;
+        }
+
+        conn.execute_batch("PRAGMA user_version = 6;")
+            .map_err(|e| format!("Could not finalize memory schema version: {e}"))?;
+    }
+
     Ok(())
+}
+
+pub fn sqlite_vec_available(conn: &Connection) -> bool {
+    conn.query_row("SELECT vec_version()", [], |row| row.get::<_, String>(0))
+        .is_ok()
+}
+
+fn register_sqlite_vec_auto_extension() {
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+
+    REGISTERED.get_or_init(|| unsafe {
+        rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+            sqlite_vec::sqlite3_vec_init as *const (),
+        )));
+    });
 }
 
 pub fn insert_memory_event(conn: &Connection, event: &MemoryEvent) -> Result<(), String> {
@@ -298,6 +360,8 @@ mod tests {
             .expect("fts table count");
 
         assert_eq!(fts_count, 1);
+
+        assert!(sqlite_vec_available(&conn));
     }
 
     #[test]

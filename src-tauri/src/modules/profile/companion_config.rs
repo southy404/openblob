@@ -72,6 +72,16 @@ pub struct MemoryConfig {
     pub prompt_context_enabled: bool,
     #[serde(default = "default_memory_context_limit")]
     pub prompt_context_limit: usize,
+    #[serde(default = "default_memory_retention_days")]
+    pub retention_days: u32,
+    #[serde(default = "default_summary_retention_days")]
+    pub summary_retention_days: u32,
+    #[serde(default = "default_decay_half_life_days")]
+    pub decay_half_life_days: u32,
+    #[serde(default = "default_max_events")]
+    pub max_events: u32,
+    #[serde(default = "default_vector_backend")]
+    pub vector_backend: String,
 }
 
 impl Default for MemoryConfig {
@@ -80,6 +90,11 @@ impl Default for MemoryConfig {
             backend: default_memory_backend(),
             prompt_context_enabled: default_memory_prompt_enabled(),
             prompt_context_limit: default_memory_context_limit(),
+            retention_days: default_memory_retention_days(),
+            summary_retention_days: default_summary_retention_days(),
+            decay_half_life_days: default_decay_half_life_days(),
+            max_events: default_max_events(),
+            vector_backend: default_vector_backend(),
         }
     }
 }
@@ -148,6 +163,11 @@ impl CompanionConfig {
         clamp_unit(&mut self.behavior.playfulness);
         self.memory.backend = normalize_memory_backend(&self.memory.backend);
         self.memory.prompt_context_limit = self.memory.prompt_context_limit.clamp(1, 50);
+        self.memory.retention_days = self.memory.retention_days.clamp(1, 3650);
+        self.memory.summary_retention_days = self.memory.summary_retention_days.clamp(1, 3650);
+        self.memory.decay_half_life_days = self.memory.decay_half_life_days.clamp(1, 3650);
+        self.memory.max_events = self.memory.max_events.clamp(100, 1_000_000);
+        self.memory.vector_backend = normalize_vector_backend(&self.memory.vector_backend);
 
         if self.blob_name.trim().is_empty() {
             self.blob_name = "OpenBlob".into();
@@ -212,10 +232,37 @@ fn default_memory_context_limit() -> usize {
     12
 }
 
+fn default_memory_retention_days() -> u32 {
+    365
+}
+
+fn default_summary_retention_days() -> u32 {
+    730
+}
+
+fn default_decay_half_life_days() -> u32 {
+    30
+}
+
+fn default_max_events() -> u32 {
+    50_000
+}
+
+fn default_vector_backend() -> String {
+    "sqlite_vec".into()
+}
+
 fn normalize_memory_backend(input: &str) -> String {
     match input.trim().to_lowercase().as_str() {
         "legacy" => "legacy".into(),
         "sqlite" => "sqlite".into(),
         _ => "dual_write".into(),
+    }
+}
+
+fn normalize_vector_backend(input: &str) -> String {
+    match input.trim().to_lowercase().as_str() {
+        "json" | "json_fallback" => "json".into(),
+        _ => "sqlite_vec".into(),
     }
 }
