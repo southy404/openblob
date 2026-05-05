@@ -124,6 +124,28 @@ impl MemoryEvent {
         .with_importance(0.42)
     }
 
+    pub fn successful_connector_command(
+        channel: impl Into<String>,
+        user_input: impl Into<String>,
+        summary: impl Into<String>,
+        outcome: impl Into<String>,
+        privacy: &PrivacyConfig,
+    ) -> Self {
+        let channel = channel.into();
+
+        Self::new(
+            MemoryEventKind::ConnectorMessage,
+            channel.clone(),
+            privacy_tier_for_kind(MemoryEventKind::ConnectorMessage, privacy),
+        )
+        .with_app_name(channel)
+        .with_context_domain("external")
+        .with_user_input(user_input)
+        .with_summary(summary)
+        .with_outcome(outcome)
+        .with_importance(0.6)
+    }
+
     pub fn with_app_name(mut self, value: impl Into<String>) -> Self {
         self.app_name = cleaned_optional(value.into());
         self
@@ -260,5 +282,22 @@ mod tests {
             MemoryEventKind::Command,
             &privacy
         ));
+    }
+
+    #[test]
+    fn connector_command_records_channel_as_source_and_app() {
+        let event = MemoryEvent::successful_connector_command(
+            "telegram",
+            "open spotify",
+            "Opened Spotify.",
+            "success",
+            &PrivacyConfig::default(),
+        );
+
+        assert_eq!(event.kind, MemoryEventKind::ConnectorMessage);
+        assert_eq!(event.source, "telegram");
+        assert_eq!(event.app_name.as_deref(), Some("telegram"));
+        assert_eq!(event.context_domain.as_deref(), Some("external"));
+        assert_eq!(event.importance, 0.6);
     }
 }

@@ -34,6 +34,8 @@ mod modules {
 
 use crate::core::app::run_command_pipeline;
 use crate::modules::memory::episodic_memory::{EpisodicMemoryEntry, append_episode};
+use crate::modules::memory::events::MemoryEvent;
+use crate::modules::memory::writer::{enqueue_memory_event, start_memory_writer};
 use modules::companion::bonding::load_or_create_bonding_state;
 use modules::companion::personality::{load_or_create_personality_state, load_personality_state};
 use modules::context::{is_internal_companion_app, resolve_active_context};
@@ -570,9 +572,10 @@ pub fn run() {
 
                         // Episode speichern
                         if result_msg != "NO_ACTION" {
+                            let channel = payload.channel.unwrap_or_else(|| "unknown".to_string());
                             let entry = EpisodicMemoryEntry::new(
                                 "external_command",
-                                &payload.channel.unwrap_or_else(|| "unknown".to_string()),
+                                &channel,
                                 "external",
                                 &input,
                                 &result_msg,
@@ -580,6 +583,17 @@ pub fn run() {
                                 0.6,
                             );
                             let _ = append_episode(&entry);
+
+                            if let Ok(config) = load_or_create_companion_config() {
+                                let event = MemoryEvent::successful_connector_command(
+                                    channel,
+                                    &input,
+                                    &result_msg,
+                                    "success",
+                                    &config.privacy,
+                                );
+                                let _ = enqueue_memory_event(event);
+                            }
                         }
 
                         Json(CommandResponse {
@@ -652,6 +666,10 @@ pub fn run() {
 
             if let Err(err) = initialize_companion_persistence() {
                 eprintln!("Failed to initialize companion persistence: {err}");
+            }
+
+            if let Err(err) = start_memory_writer() {
+                eprintln!("Failed to start memory writer: {err}");
             }
 
             let shortcut = app.global_shortcut();

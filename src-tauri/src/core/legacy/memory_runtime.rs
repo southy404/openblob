@@ -1,6 +1,9 @@
 use crate::modules::companion::bonding::{load_bonding_state, save_bonding_state};
 use crate::modules::memory::episodic_memory::{append_episode, EpisodicMemoryEntry};
+use crate::modules::memory::events::MemoryEvent;
 use crate::modules::memory::semantic_memory::{load_or_create_semantic_memory, save_semantic_memory};
+use crate::modules::memory::writer::enqueue_memory_event;
+use crate::modules::profile::companion_config::load_or_create_companion_config;
 use crate::modules::profile::user_profile::{load_or_create_user_profile, save_user_profile};
 
 pub fn summarize_success_reply(reply: &str) -> String {
@@ -51,6 +54,8 @@ pub fn register_successful_interaction(
     context_domain: &str,
     reply: &str,
 ) {
+    let summary = summarize_success_reply(reply);
+
     if let Ok(mut bonding) = load_bonding_state() {
         bonding.register_helpful_interaction();
         let _ = save_bonding_state(&bonding);
@@ -81,10 +86,22 @@ pub fn register_successful_interaction(
         app_name,
         context_domain,
         input,
-        summarize_success_reply(reply),
+        &summary,
         "success",
         0.42,
     );
 
     let _ = append_episode(&episode);
+
+    if let Ok(config) = load_or_create_companion_config() {
+        let event = MemoryEvent::successful_command(
+            app_name,
+            context_domain,
+            input,
+            summary,
+            "success",
+            &config.privacy,
+        );
+        let _ = enqueue_memory_event(event);
+    }
 }
