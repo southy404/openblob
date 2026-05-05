@@ -6,7 +6,7 @@ use rusqlite::{params, Connection};
 use crate::modules::memory::events::{MemoryEvent, PrivacyTier};
 use crate::modules::storage::paths::memory_database_path;
 
-pub const CURRENT_MEMORY_SCHEMA_VERSION: i64 = 2;
+pub const CURRENT_MEMORY_SCHEMA_VERSION: i64 = 3;
 
 pub fn open_memory_database() -> Result<Connection, String> {
     let path = memory_database_path()?;
@@ -121,6 +121,35 @@ pub fn run_migrations(conn: &Connection) -> Result<(), String> {
             "#,
         )
         .map_err(|e| format!("Could not initialize memory FTS schema: {e}"))?;
+    }
+
+    if current_version < 3 {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS memory_facts (
+                id TEXT PRIMARY KEY,
+                source_key TEXT NOT NULL UNIQUE,
+                subject TEXT NOT NULL,
+                predicate TEXT NOT NULL,
+                object TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 0.7,
+                valid_from TEXT NOT NULL,
+                valid_to TEXT,
+                superseded_by TEXT,
+                source TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_memory_facts_subject_predicate
+                ON memory_facts(subject, predicate);
+
+            CREATE INDEX IF NOT EXISTS idx_memory_facts_valid
+                ON memory_facts(valid_to, valid_from);
+
+            PRAGMA user_version = 3;
+            "#,
+        )
+        .map_err(|e| format!("Could not initialize memory facts schema: {e}"))?;
     }
 
     Ok(())

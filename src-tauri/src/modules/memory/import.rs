@@ -6,8 +6,12 @@ use serde_json::json;
 
 use crate::modules::memory::episodic_memory::EpisodicMemoryEntry;
 use crate::modules::memory::events::{MemoryEvent, MemoryEventKind, PrivacyTier};
+use crate::modules::memory::facts::{insert_memory_fact, MemoryFact};
+use crate::modules::memory::semantic_memory::SemanticMemory;
 use crate::modules::memory::sqlite_store::{insert_memory_event, open_memory_database};
-use crate::modules::storage::paths::episodic_memory_path;
+use crate::modules::profile::user_profile::UserProfile;
+use crate::modules::storage::json_store::load_json;
+use crate::modules::storage::paths::{episodic_memory_path, semantic_memory_path, user_profile_path};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LegacyImportReport {
@@ -21,6 +25,45 @@ pub fn import_legacy_episodic_memory() -> Result<LegacyImportReport, String> {
     let source_path = episodic_memory_path()?;
     let mut conn = open_memory_database()?;
     import_legacy_episodic_memory_from_path(&mut conn, &source_path, true)
+}
+
+pub fn import_legacy_semantic_facts() -> Result<LegacyImportReport, String> {
+    let conn = open_memory_database()?;
+    let mut imported = 0;
+    let mut skipped = 0;
+    let semantic_path = semantic_memory_path()?;
+    let profile_path = user_profile_path()?;
+
+    if semantic_path.exists() {
+        match load_json::<SemanticMemory>(&semantic_path) {
+            Ok(memory) => {
+                for fact in semantic_memory_to_facts(memory.normalized()) {
+                    insert_memory_fact(&conn, &fact)?;
+                    imported += 1;
+                }
+            }
+            Err(_) => skipped += 1,
+        }
+    }
+
+    if profile_path.exists() {
+        match load_json::<UserProfile>(&profile_path) {
+            Ok(profile) => {
+                for fact in user_profile_to_facts(profile.normalized()) {
+                    insert_memory_fact(&conn, &fact)?;
+                    imported += 1;
+                }
+            }
+            Err(_) => skipped += 1,
+        }
+    }
+
+    Ok(LegacyImportReport {
+        imported,
+        skipped,
+        source_path: semantic_path,
+        migrated_path: None,
+    })
 }
 
 pub fn import_legacy_episodic_memory_from_path(
@@ -132,6 +175,119 @@ fn legacy_kind(kind: &str) -> MemoryEventKind {
         "transcript_segment" => MemoryEventKind::TranscriptSegment,
         _ => MemoryEventKind::Command,
     }
+}
+
+fn semantic_memory_to_facts(memory: SemanticMemory) -> Vec<MemoryFact> {
+    let mut facts = Vec::new();
+
+    for language in memory.preferred_languages {
+        facts.push(legacy_fact(
+            format!("legacy:semantic:preferred_language:{language}"),
+            "user",
+            "preferred_language",
+            language,
+        ));
+    }
+
+    for app in memory.favorite_apps {
+        facts.push(legacy_fact(
+            format!("legacy:semantic:favorite_app:{}", app.to_lowercase()),
+            "user",
+            "favorite_app",
+            app,
+        ));
+    }
+
+    for topic in memory.recurring_topics {
+        facts.push(legacy_fact(
+            format!("legacy:semantic:recurring_topic:{}", topic.to_lowercase()),
+            "user",
+            "recurring_topic",
+            topic,
+        ));
+    }
+
+    if let Some(style) = memory.inferred_user_style {
+        facts.push(legacy_fact(
+            "legacy:semantic:inferred_user_style",
+            "user",
+            "inferred_style",
+            style,
+        ));
+    }
+
+    for (index, note) in memory.notes.into_iter().enumerate() {
+        facts.push(legacy_fact(
+            format!("legacy:semantic:note:{index}:{}", note.to_lowercase()),
+            "user",
+            "note",
+            note,
+        ));
+    }
+
+    facts
+}
+
+fn user_profile_to_facts(profile: UserProfile) -> Vec<MemoryFact> {
+    let mut facts = Vec::new();
+
+    if let Some(name) = profile.display_name {
+        facts.push(legacy_fact(
+            "legacy:profile:display_name",
+            "user",
+            "name",
+            name,
+        ));
+    }
+
+    for language in profile.languages {
+        facts.push(legacy_fact(
+            format!("legacy:profile:language:{language}"),
+            "user",
+            "preferred_language",
+            language,
+        ));
+    }
+
+    if let Some(style) = profile.preferred_response_style {
+        facts.push(legacy_fact(
+            "legacy:profile:preferred_response_style",
+            "user",
+            "preferred_response_style",
+            style,
+        ));
+    }
+
+    for app in profile.favorite_apps {
+        facts.push(legacy_fact(
+            format!("legacy:profile:favorite_app:{}", app.to_lowercase()),
+            "user",
+            "favorite_app",
+            app,
+        ));
+    }
+
+    for topic in profile.recurring_topics {
+        facts.push(legacy_fact(
+            format!("legacy:profile:recurring_topic:{}", topic.to_lowercase()),
+            "user",
+            "recurring_topic",
+            topic,
+        ));
+    }
+
+    facts
+}
+
+fn legacy_fact(
+    source_key: impl Into<String>,
+    subject: impl Into<String>,
+    predicate: impl Into<String>,
+    object: impl Into<String>,
+) -> MemoryFact {
+    MemoryFact::new(source_key, subject, predicate, object, "legacy_import")
+        .with_confidence(0.78)
+        .with_metadata(json!({ "imported_from": "legacy_json" }))
 }
 
 fn clean(value: String) -> Option<String> {

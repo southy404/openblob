@@ -3,6 +3,7 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 
 use crate::modules::memory::events::PrivacyTier;
+use crate::modules::memory::facts::{load_active_memory_facts, ActiveMemoryFact};
 use crate::modules::memory::sqlite_store::open_memory_database;
 
 const DEFAULT_MEMORY_CONTEXT_LIMIT: usize = 12;
@@ -47,8 +48,9 @@ pub fn build_memory_context_from_connection(
     query: Option<&str>,
     limit: Option<usize>,
 ) -> Result<MemoryContext, String> {
+    let facts = load_active_memory_facts(conn, 12)?;
     let events = load_ranked_events(conn, query, normalized_limit(limit))?;
-    Ok(format_memory_context(&events))
+    Ok(format_memory_context(&facts, &events))
 }
 
 fn normalized_limit(limit: Option<usize>) -> usize {
@@ -228,19 +230,32 @@ fn escape_fts_query(query: &str) -> String {
         .join(" OR ")
 }
 
-fn format_memory_context(events: &[MemoryContextEvent]) -> MemoryContext {
-    if events.is_empty() {
+fn format_memory_context(facts: &[ActiveMemoryFact], events: &[MemoryContextEvent]) -> MemoryContext {
+    if facts.is_empty() && events.is_empty() {
         return MemoryContext {
             memory: String::new(),
             event_count: 0,
         };
     }
 
-    let mut lines = vec!["<memory>".to_string(), "## Recent activity".to_string()];
+    let mut lines = vec!["<memory>".to_string()];
 
-    for event in events {
-        if let Some(line) = format_event_line(event) {
-            lines.push(line);
+    if !facts.is_empty() {
+        lines.push("## Who you know".to_string());
+        for fact in facts {
+            lines.push(format!(
+                "- {}.{} = {} [since {}]",
+                fact.subject, fact.predicate, fact.object, fact.valid_from
+            ));
+        }
+    }
+
+    if !events.is_empty() {
+        lines.push("## Recent activity".to_string());
+        for event in events {
+            if let Some(line) = format_event_line(event) {
+                lines.push(line);
+            }
         }
     }
 
@@ -336,6 +351,25 @@ mod tests {
             .memory
             .contains("[desktop/Terminal]: User ran the memory test suite. (success)"));
         assert!(context.memory.ends_with("\n</memory>"));
+    }
+
+    #[test]
+    fn active_facts_are_included_in_memory_block() {
+        let conn = open_memory_database_in_memory().expect("database opens");
+        let fact = crate::modules::memory::facts::MemoryFact::new(
+            "test:user:name",
+            "user",
+            "name",
+            "Brandon",
+            "test",
+        );
+        crate::modules::memory::facts::insert_memory_fact(&conn, &fact).expect("fact inserts");
+
+        let context =
+            build_memory_context_from_connection(&conn, None, Some(10)).expect("context builds");
+
+        assert!(context.memory.contains("## Who you know"));
+        assert!(context.memory.contains("user.name = Brandon"));
     }
 
     #[test]
