@@ -34,6 +34,7 @@ mod modules {
 
 use crate::core::app::run_command_pipeline;
 use crate::modules::memory::episodic_memory::{EpisodicMemoryEntry, append_episode};
+use crate::modules::memory::context::build_memory_context;
 use crate::modules::memory::events::MemoryEvent;
 use crate::modules::memory::writer::{enqueue_memory_event, start_memory_writer};
 use modules::companion::bonding::load_or_create_bonding_state;
@@ -512,7 +513,7 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            use axum::{extract::State, routing::post, Json, Router};
+            use axum::{extract::{Query, State}, routing::{get, post}, Json, Router};
             use serde::{Deserialize, Serialize};
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
@@ -531,6 +532,18 @@ pub fn run() {
             struct CommandResponse {
                 result: String,
                 action_taken: bool,
+            }
+
+            #[derive(Deserialize)]
+            struct MemoryContextQuery {
+                limit: Option<usize>,
+            }
+
+            #[derive(Serialize)]
+            struct MemoryContextResponse {
+                memory: String,
+                event_count: usize,
+                error: Option<String>,
             }
 
             async fn handle_external_command(
@@ -608,11 +621,29 @@ pub fn run() {
                 }
             }
 
+            async fn handle_memory_context(
+                Query(query): Query<MemoryContextQuery>,
+            ) -> Json<MemoryContextResponse> {
+                match build_memory_context(query.limit) {
+                    Ok(context) => Json(MemoryContextResponse {
+                        memory: context.memory,
+                        event_count: context.event_count,
+                        error: None,
+                    }),
+                    Err(err) => Json(MemoryContextResponse {
+                        memory: String::new(),
+                        event_count: 0,
+                        error: Some(err),
+                    }),
+                }
+            }
+
             let app_handle = app.handle().clone();
 
             tauri::async_runtime::spawn(async move {
                 let router = Router::new()
                     .route("/command", post(handle_external_command))
+                    .route("/memory/context", get(handle_memory_context))
                     .with_state(ExternalCommandState { app: app_handle });
 
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:7842")

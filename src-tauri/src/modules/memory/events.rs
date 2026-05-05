@@ -59,6 +59,15 @@ impl PrivacyTier {
     pub fn should_persist(self) -> bool {
         !matches!(self, Self::Transient)
     }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "transient" => Self::Transient,
+            "metadata_only" => Self::MetadataOnly,
+            "full" => Self::Full,
+            _ => Self::Redacted,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
