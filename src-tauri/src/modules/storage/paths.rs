@@ -81,6 +81,10 @@ pub fn semantic_memory_path() -> Result<PathBuf, String> {
     Ok(memory_dir()?.join("semantic_memory.json"))
 }
 
+pub fn memory_database_path() -> Result<PathBuf, String> {
+    Ok(memory_dir()?.join("memory.db"))
+}
+
 fn ensure_dir(path: &PathBuf) -> Result<(), String> {
     fs::create_dir_all(path)
         .map_err(|e| format!("Could not create directory '{}': {e}", path.display()))

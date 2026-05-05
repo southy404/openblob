@@ -33,7 +33,11 @@ mod modules {
 }
 
 use crate::core::app::run_command_pipeline;
-use crate::modules::memory::episodic_memory::{EpisodicMemoryEntry, append_episode};
+use crate::modules::memory::context::build_memory_context_for_query;
+use crate::modules::memory::episodic_memory::{append_episode, EpisodicMemoryEntry};
+use crate::modules::memory::events::MemoryEvent;
+use crate::modules::memory::import::{import_legacy_episodic_memory, import_legacy_semantic_facts};
+use crate::modules::memory::writer::{enqueue_memory_event, start_memory_writer};
 use modules::companion::bonding::load_or_create_bonding_state;
 use modules::companion::personality::{load_or_create_personality_state, load_personality_state};
 use modules::context::{is_internal_companion_app, resolve_active_context};
@@ -55,6 +59,20 @@ fn initialize_companion_persistence() -> Result<(), String> {
     let _bonding = load_or_create_bonding_state()?;
     let _user_profile = load_or_create_user_profile()?;
     let _semantic_memory = load_or_create_semantic_memory()?;
+    let report = import_legacy_episodic_memory()?;
+    if report.imported > 0 || report.skipped > 0 {
+        println!(
+            "[openblob] Imported {} legacy memory events into SQLite ({} skipped)",
+            report.imported, report.skipped
+        );
+    }
+    let semantic_report = import_legacy_semantic_facts()?;
+    if semantic_report.imported > 0 || semantic_report.skipped > 0 {
+        println!(
+            "[openblob] Imported {} legacy semantic facts into SQLite ({} skipped)",
+            semantic_report.imported, semantic_report.skipped
+        );
+    }
     Ok(())
 }
 
@@ -510,7 +528,7 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            use axum::{extract::State, routing::post, Json, Router};
+            use axum::{extract::{Query, State}, routing::{get, post}, Json, Router};
             use serde::{Deserialize, Serialize};
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
@@ -529,6 +547,19 @@ pub fn run() {
             struct CommandResponse {
                 result: String,
                 action_taken: bool,
+            }
+
+            #[derive(Deserialize)]
+            struct MemoryContextQuery {
+                q: Option<String>,
+                limit: Option<usize>,
+            }
+
+            #[derive(Serialize)]
+            struct MemoryContextResponse {
+                memory: String,
+                event_count: usize,
+                error: Option<String>,
             }
 
             async fn handle_external_command(
@@ -570,9 +601,10 @@ pub fn run() {
 
                         // Episode speichern
                         if result_msg != "NO_ACTION" {
+                            let channel = payload.channel.unwrap_or_else(|| "unknown".to_string());
                             let entry = EpisodicMemoryEntry::new(
                                 "external_command",
-                                &payload.channel.unwrap_or_else(|| "unknown".to_string()),
+                                &channel,
                                 "external",
                                 &input,
                                 &result_msg,
@@ -580,6 +612,17 @@ pub fn run() {
                                 0.6,
                             );
                             let _ = append_episode(&entry);
+
+                            if let Ok(config) = load_or_create_companion_config() {
+                                let event = MemoryEvent::successful_connector_command(
+                                    channel,
+                                    &input,
+                                    &result_msg,
+                                    "success",
+                                    &config.privacy,
+                                );
+                                let _ = enqueue_memory_event(event);
+                            }
                         }
 
                         Json(CommandResponse {
@@ -594,11 +637,29 @@ pub fn run() {
                 }
             }
 
+            async fn handle_memory_context(
+                Query(query): Query<MemoryContextQuery>,
+            ) -> Json<MemoryContextResponse> {
+                match build_memory_context_for_query(query.q.as_deref(), query.limit) {
+                    Ok(context) => Json(MemoryContextResponse {
+                        memory: context.memory,
+                        event_count: context.event_count,
+                        error: None,
+                    }),
+                    Err(err) => Json(MemoryContextResponse {
+                        memory: String::new(),
+                        event_count: 0,
+                        error: Some(err),
+                    }),
+                }
+            }
+
             let app_handle = app.handle().clone();
 
             tauri::async_runtime::spawn(async move {
                 let router = Router::new()
                     .route("/command", post(handle_external_command))
+                    .route("/memory/context", get(handle_memory_context))
                     .with_state(ExternalCommandState { app: app_handle });
 
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:7842")
@@ -652,6 +713,10 @@ pub fn run() {
 
             if let Err(err) = initialize_companion_persistence() {
                 eprintln!("Failed to initialize companion persistence: {err}");
+            }
+
+            if let Err(err) = start_memory_writer() {
+                eprintln!("Failed to start memory writer: {err}");
             }
 
             let shortcut = app.global_shortcut();
