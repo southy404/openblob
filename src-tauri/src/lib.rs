@@ -33,9 +33,10 @@ mod modules {
 }
 
 use crate::core::app::run_command_pipeline;
-use crate::modules::memory::episodic_memory::{EpisodicMemoryEntry, append_episode};
 use crate::modules::memory::context::build_memory_context;
+use crate::modules::memory::episodic_memory::{append_episode, EpisodicMemoryEntry};
 use crate::modules::memory::events::MemoryEvent;
+use crate::modules::memory::import::import_legacy_episodic_memory;
 use crate::modules::memory::writer::{enqueue_memory_event, start_memory_writer};
 use modules::companion::bonding::load_or_create_bonding_state;
 use modules::companion::personality::{load_or_create_personality_state, load_personality_state};
@@ -58,6 +59,13 @@ fn initialize_companion_persistence() -> Result<(), String> {
     let _bonding = load_or_create_bonding_state()?;
     let _user_profile = load_or_create_user_profile()?;
     let _semantic_memory = load_or_create_semantic_memory()?;
+    let report = import_legacy_episodic_memory()?;
+    if report.imported > 0 || report.skipped > 0 {
+        println!(
+            "[openblob] Imported {} legacy memory events into SQLite ({} skipped)",
+            report.imported, report.skipped
+        );
+    }
     Ok(())
 }
 
