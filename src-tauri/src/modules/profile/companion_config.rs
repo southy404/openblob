@@ -65,6 +65,26 @@ impl Default for PrivacyConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryConfig {
+    #[serde(default = "default_memory_backend")]
+    pub backend: String,
+    #[serde(default = "default_memory_prompt_enabled")]
+    pub prompt_context_enabled: bool,
+    #[serde(default = "default_memory_context_limit")]
+    pub prompt_context_limit: usize,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_memory_backend(),
+            prompt_context_enabled: default_memory_prompt_enabled(),
+            prompt_context_limit: default_memory_context_limit(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompanionConfig {
     pub version: u32,
     pub blob_name: String,
@@ -76,6 +96,8 @@ pub struct CompanionConfig {
     pub appearance: AppearanceConfig,
     pub behavior: BehaviorConfig,
     pub privacy: PrivacyConfig,
+    #[serde(default)]
+    pub memory: MemoryConfig,
 }
 
 impl Default for CompanionConfig {
@@ -94,6 +116,7 @@ impl Default for CompanionConfig {
             appearance: AppearanceConfig::default(),
             behavior: BehaviorConfig::default(),
             privacy: PrivacyConfig::default(),
+            memory: MemoryConfig::default(),
         }
     }
 }
@@ -123,6 +146,8 @@ impl CompanionConfig {
         clamp_unit(&mut self.behavior.proactive_level);
         clamp_unit(&mut self.behavior.expressiveness);
         clamp_unit(&mut self.behavior.playfulness);
+        self.memory.backend = normalize_memory_backend(&self.memory.backend);
+        self.memory.prompt_context_limit = self.memory.prompt_context_limit.clamp(1, 50);
 
         if self.blob_name.trim().is_empty() {
             self.blob_name = "OpenBlob".into();
@@ -173,4 +198,24 @@ pub fn normalize_lang(input: &str) -> String {
 
 fn clamp_unit(value: &mut f32) {
     *value = value.clamp(0.0, 1.0);
+}
+
+fn default_memory_backend() -> String {
+    "dual_write".into()
+}
+
+fn default_memory_prompt_enabled() -> bool {
+    true
+}
+
+fn default_memory_context_limit() -> usize {
+    12
+}
+
+fn normalize_memory_backend(input: &str) -> String {
+    match input.trim().to_lowercase().as_str() {
+        "legacy" => "legacy".into(),
+        "sqlite" => "sqlite".into(),
+        _ => "dual_write".into(),
+    }
 }
