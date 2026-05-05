@@ -6,7 +6,7 @@ use rusqlite::{params, Connection};
 use crate::modules::memory::events::{MemoryEvent, PrivacyTier};
 use crate::modules::storage::paths::memory_database_path;
 
-pub const CURRENT_MEMORY_SCHEMA_VERSION: i64 = 3;
+pub const CURRENT_MEMORY_SCHEMA_VERSION: i64 = 4;
 
 pub fn open_memory_database() -> Result<Connection, String> {
     let path = memory_database_path()?;
@@ -150,6 +150,27 @@ pub fn run_migrations(conn: &Connection) -> Result<(), String> {
             "#,
         )
         .map_err(|e| format!("Could not initialize memory facts schema: {e}"))?;
+    }
+
+    if current_version < 4 {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS memory_embeddings (
+                target_id TEXT PRIMARY KEY,
+                target_kind TEXT NOT NULL,
+                model TEXT NOT NULL,
+                dimensions INTEGER NOT NULL,
+                vector_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_memory_embeddings_kind_model
+                ON memory_embeddings(target_kind, model);
+
+            PRAGMA user_version = 4;
+            "#,
+        )
+        .map_err(|e| format!("Could not initialize memory embeddings schema: {e}"))?;
     }
 
     Ok(())

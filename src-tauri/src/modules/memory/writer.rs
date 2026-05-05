@@ -5,6 +5,7 @@ use std::thread;
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 
 use crate::modules::memory::events::{MemoryEvent, PrivacyTier};
+use crate::modules::memory::embeddings::try_embed_event;
 use crate::modules::memory::sqlite_store::{insert_memory_event, open_memory_database_at};
 use crate::modules::storage::paths::memory_database_path;
 
@@ -81,6 +82,9 @@ fn run_memory_writer_at_path(receiver: Receiver<MemoryEvent>, db_path: PathBuf) 
     for event in receiver {
         if let Err(err) = insert_memory_event(&conn, &event) {
             eprintln!("[openblob] Memory writer failed to persist event: {err}");
+        }
+        if let Err(err) = try_embed_event(&conn, &event) {
+            eprintln!("[openblob] Memory writer skipped embedding: {err}");
         }
     }
 }

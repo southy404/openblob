@@ -1,7 +1,12 @@
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 
+use crate::modules::memory::embeddings::{
+    cosine_similarity, embed_text_with_ollama, load_event_embeddings,
+};
 use crate::modules::memory::events::PrivacyTier;
 use crate::modules::memory::facts::{load_active_memory_facts, ActiveMemoryFact};
 use crate::modules::memory::sqlite_store::open_memory_database;
@@ -29,6 +34,7 @@ struct MemoryContextEvent {
     outcome: Option<String>,
     importance: f32,
     search_rank: Option<f64>,
+    vector_score: Option<f64>,
 }
 
 pub fn build_memory_context(limit: Option<usize>) -> Result<MemoryContext, String> {
@@ -66,7 +72,13 @@ fn load_ranked_events(
 ) -> Result<Vec<MemoryContextEvent>, String> {
     let query = query.map(str::trim).filter(|value| !value.is_empty());
     let mut events = if let Some(query) = query {
-        load_fts_events(conn, query, limit.saturating_mul(3))?
+        let mut events = load_vector_events(conn, query, limit)?;
+        for event in load_fts_events(conn, query, limit.saturating_mul(3))? {
+            if !events.iter().any(|existing| existing.id == event.id) {
+                events.push(event);
+            }
+        }
+        events
     } else {
         Vec::new()
     };
@@ -85,6 +97,38 @@ fn load_ranked_events(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     events.truncate(limit);
+
+    Ok(events)
+}
+
+fn load_vector_events(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<MemoryContextEvent>, String> {
+    let query_vector = match embed_text_with_ollama(query, Duration::from_millis(150)) {
+        Ok(vector) if !vector.is_empty() => vector,
+        _ => return Ok(Vec::new()),
+    };
+
+    let mut scored = load_event_embeddings(conn, 512)?
+        .into_iter()
+        .map(|embedding| {
+            let score = cosine_similarity(&query_vector, &embedding.vector);
+            (embedding.target_id, score)
+        })
+        .filter(|(_, score)| *score > 0.0)
+        .collect::<Vec<_>>();
+
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(limit);
+
+    let mut events = Vec::new();
+    for (event_id, vector_score) in scored {
+        if let Some(event) = load_event_by_id(conn, &event_id, Some(vector_score))? {
+            events.push(event);
+        }
+    }
 
     Ok(events)
 }
@@ -192,7 +236,51 @@ fn decode_context_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryContext
         outcome: row.get(9)?,
         importance: row.get(10)?,
         search_rank: row.get(11)?,
+        vector_score: None,
     })
+}
+
+fn load_event_by_id(
+    conn: &Connection,
+    event_id: &str,
+    vector_score: Option<f64>,
+) -> Result<Option<MemoryContextEvent>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                id,
+                created_at,
+                kind,
+                source,
+                privacy_tier,
+                app_name,
+                context_domain,
+                user_input,
+                summary,
+                outcome,
+                importance,
+                NULL AS rank
+            FROM memory_events
+            WHERE id = ?1
+              AND privacy_tier != 'transient'
+            "#,
+        )
+        .map_err(|e| format!("Could not prepare memory event lookup: {e}"))?;
+
+    let mut rows = stmt
+        .query_map([event_id], decode_context_row)
+        .map_err(|e| format!("Could not read memory event lookup row: {e}"))?;
+
+    match rows.next() {
+        Some(row) => {
+            let mut event =
+                row.map_err(|e| format!("Could not decode memory event lookup row: {e}"))?;
+            event.vector_score = vector_score;
+            Ok(Some(event))
+        }
+        None => Ok(None),
+    }
 }
 
 fn event_score(event: &MemoryContextEvent) -> f64 {
@@ -200,10 +288,11 @@ fn event_score(event: &MemoryContextEvent) -> f64 {
         .search_rank
         .map(|rank| 1.0 / (1.0 + rank.abs()))
         .unwrap_or(0.0);
+    let vector_score = event.vector_score.unwrap_or(0.0).max(0.0);
     let recency_score = recency_score(&event.created_at);
     let importance_score = event.importance.clamp(0.0, 1.0) as f64;
 
-    (text_score * 0.55) + (recency_score * 0.25) + (importance_score * 0.20)
+    (vector_score * 0.40) + (text_score * 0.30) + (recency_score * 0.18) + (importance_score * 0.12)
 }
 
 fn recency_score(created_at: &str) -> f64 {

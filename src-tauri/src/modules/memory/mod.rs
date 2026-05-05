@@ -1,4 +1,5 @@
 pub mod context;
+pub mod embeddings;
 pub mod episodic_memory;
 pub mod events;
 pub mod facts;
