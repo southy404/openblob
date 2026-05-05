@@ -4,7 +4,7 @@ use serde_json::json;
 use std::time::Duration;
 
 use crate::modules::i18n::replies::{reply, reply_with};
-use crate::modules::memory::context::build_memory_context;
+use crate::modules::memory::context::build_memory_context_for_query;
 use crate::modules::profile::companion_config::load_or_create_companion_config;
 use crate::modules::profile::user_profile::load_or_create_user_profile;
 
@@ -248,7 +248,15 @@ pub async fn ask_ollama(
     let mut system = system_prompt(&mode, &blob_name, &owner_name, &preferred_language);
 
     if config.memory.prompt_context_enabled && config.memory.backend != "legacy" {
-        if let Ok(memory_context) = build_memory_context(Some(config.memory.prompt_context_limit)) {
+        let memory_query = question
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(trimmed);
+
+        if let Ok(memory_context) =
+            build_memory_context_for_query(Some(memory_query), Some(config.memory.prompt_context_limit))
+        {
             system = append_memory_context(system, &memory_context.memory);
         }
     }

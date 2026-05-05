@@ -6,7 +6,7 @@ use rusqlite::{params, Connection};
 use crate::modules::memory::events::{MemoryEvent, PrivacyTier};
 use crate::modules::storage::paths::memory_database_path;
 
-pub const CURRENT_MEMORY_SCHEMA_VERSION: i64 = 1;
+pub const CURRENT_MEMORY_SCHEMA_VERSION: i64 = 2;
 
 pub fn open_memory_database() -> Result<Connection, String> {
     let path = memory_database_path()?;
@@ -84,6 +84,45 @@ pub fn run_migrations(conn: &Connection) -> Result<(), String> {
         .map_err(|e| format!("Could not initialize memory database schema: {e}"))?;
     }
 
+    if current_version < 2 {
+        conn.execute_batch(
+            r#"
+            CREATE VIRTUAL TABLE IF NOT EXISTS memory_events_fts USING fts5(
+                event_id UNINDEXED,
+                searchable_text
+            );
+
+            INSERT INTO memory_events_fts(event_id, searchable_text)
+            SELECT
+                id,
+                trim(
+                    coalesce(kind, '') || ' ' ||
+                    coalesce(source, '') || ' ' ||
+                    coalesce(app_name, '') || ' ' ||
+                    coalesce(context_domain, '') || ' ' ||
+                    coalesce(user_input, '') || ' ' ||
+                    coalesce(summary, '') || ' ' ||
+                    coalesce(outcome, '')
+                )
+            FROM memory_events
+            WHERE privacy_tier != 'transient'
+              AND trim(
+                    coalesce(kind, '') || ' ' ||
+                    coalesce(source, '') || ' ' ||
+                    coalesce(app_name, '') || ' ' ||
+                    coalesce(context_domain, '') || ' ' ||
+                    coalesce(user_input, '') || ' ' ||
+                    coalesce(summary, '') || ' ' ||
+                    coalesce(outcome, '')
+              ) != ''
+              AND id NOT IN (SELECT event_id FROM memory_events_fts);
+
+            PRAGMA user_version = 2;
+            "#,
+        )
+        .map_err(|e| format!("Could not initialize memory FTS schema: {e}"))?;
+    }
+
     Ok(())
 }
 
@@ -131,7 +170,48 @@ pub fn insert_memory_event(conn: &Connection, event: &MemoryEvent) -> Result<(),
     )
     .map_err(|e| format!("Could not insert memory event '{}': {e}", event.id))?;
 
+    index_memory_event(conn, event)?;
+
     Ok(())
+}
+
+fn index_memory_event(conn: &Connection, event: &MemoryEvent) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM memory_events_fts WHERE event_id = ?1",
+        [event.id.as_str()],
+    )
+    .map_err(|e| format!("Could not refresh memory FTS row '{}': {e}", event.id))?;
+
+    let searchable_text = searchable_text_for_event(event);
+    if searchable_text.is_empty() {
+        return Ok(());
+    }
+
+    conn.execute(
+        "INSERT INTO memory_events_fts(event_id, searchable_text) VALUES (?1, ?2)",
+        params![event.id.as_str(), searchable_text],
+    )
+    .map_err(|e| format!("Could not index memory event '{}': {e}", event.id))?;
+
+    Ok(())
+}
+
+fn searchable_text_for_event(event: &MemoryEvent) -> String {
+    [
+        Some(event.kind.as_str()),
+        Some(event.source.as_str()),
+        event.app_name.as_deref(),
+        event.context_domain.as_deref(),
+        event.user_input.as_deref(),
+        event.summary.as_deref(),
+        event.outcome.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ")
 }
 
 #[cfg(test)]
@@ -158,6 +238,16 @@ mod tests {
             .expect("table count");
 
         assert_eq!(table_count, 1);
+
+        let fts_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'memory_events_fts'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fts table count");
+
+        assert_eq!(fts_count, 1);
     }
 
     #[test]
@@ -197,5 +287,15 @@ mod tests {
             .expect("stored kind");
 
         assert_eq!(stored_kind, "command");
+
+        let fts_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_events_fts WHERE event_id = ?1",
+                [event.id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("fts row count");
+
+        assert_eq!(fts_count, 1);
     }
 }

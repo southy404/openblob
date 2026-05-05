@@ -33,7 +33,7 @@ mod modules {
 }
 
 use crate::core::app::run_command_pipeline;
-use crate::modules::memory::context::build_memory_context;
+use crate::modules::memory::context::build_memory_context_for_query;
 use crate::modules::memory::episodic_memory::{append_episode, EpisodicMemoryEntry};
 use crate::modules::memory::events::MemoryEvent;
 use crate::modules::memory::import::import_legacy_episodic_memory;
@@ -544,6 +544,7 @@ pub fn run() {
 
             #[derive(Deserialize)]
             struct MemoryContextQuery {
+                q: Option<String>,
                 limit: Option<usize>,
             }
 
@@ -632,7 +633,7 @@ pub fn run() {
             async fn handle_memory_context(
                 Query(query): Query<MemoryContextQuery>,
             ) -> Json<MemoryContextResponse> {
-                match build_memory_context(query.limit) {
+                match build_memory_context_for_query(query.q.as_deref(), query.limit) {
                     Ok(context) => Json(MemoryContextResponse {
                         memory: context.memory,
                         event_count: context.event_count,

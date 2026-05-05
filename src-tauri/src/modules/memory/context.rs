@@ -1,4 +1,5 @@
-use rusqlite::Connection;
+use chrono::{DateTime, Utc};
+use rusqlite::{params, Connection};
 use serde::Serialize;
 
 use crate::modules::memory::events::PrivacyTier;
@@ -13,8 +14,9 @@ pub struct MemoryContext {
     pub event_count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct MemoryContextEvent {
+    id: String,
     created_at: String,
     kind: String,
     source: String,
@@ -24,18 +26,28 @@ struct MemoryContextEvent {
     user_input: Option<String>,
     summary: Option<String>,
     outcome: Option<String>,
+    importance: f32,
+    search_rank: Option<f64>,
 }
 
 pub fn build_memory_context(limit: Option<usize>) -> Result<MemoryContext, String> {
+    build_memory_context_for_query(None, limit)
+}
+
+pub fn build_memory_context_for_query(
+    query: Option<&str>,
+    limit: Option<usize>,
+) -> Result<MemoryContext, String> {
     let conn = open_memory_database()?;
-    build_memory_context_from_connection(&conn, limit)
+    build_memory_context_from_connection(&conn, query, limit)
 }
 
 pub fn build_memory_context_from_connection(
     conn: &Connection,
+    query: Option<&str>,
     limit: Option<usize>,
 ) -> Result<MemoryContext, String> {
-    let events = load_recent_events(conn, normalized_limit(limit))?;
+    let events = load_ranked_events(conn, query, normalized_limit(limit))?;
     Ok(format_memory_context(&events))
 }
 
@@ -45,11 +57,85 @@ fn normalized_limit(limit: Option<usize>) -> usize {
         .clamp(1, MAX_MEMORY_CONTEXT_LIMIT)
 }
 
+fn load_ranked_events(
+    conn: &Connection,
+    query: Option<&str>,
+    limit: usize,
+) -> Result<Vec<MemoryContextEvent>, String> {
+    let query = query.map(str::trim).filter(|value| !value.is_empty());
+    let mut events = if let Some(query) = query {
+        load_fts_events(conn, query, limit.saturating_mul(3))?
+    } else {
+        Vec::new()
+    };
+
+    if events.len() < limit {
+        for event in load_recent_events(conn, limit.saturating_mul(2))? {
+            if !events.iter().any(|existing| existing.id == event.id) {
+                events.push(event);
+            }
+        }
+    }
+
+    events.sort_by(|a, b| {
+        event_score(b)
+            .partial_cmp(&event_score(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    events.truncate(limit);
+
+    Ok(events)
+}
+
+fn load_fts_events(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<MemoryContextEvent>, String> {
+    let query = escape_fts_query(query);
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                e.id,
+                e.created_at,
+                e.kind,
+                e.source,
+                e.privacy_tier,
+                e.app_name,
+                e.context_domain,
+                e.user_input,
+                e.summary,
+                e.outcome,
+                e.importance,
+                bm25(memory_events_fts) AS rank
+            FROM memory_events_fts
+            JOIN memory_events e ON e.id = memory_events_fts.event_id
+            WHERE memory_events_fts MATCH ?1
+              AND e.privacy_tier != 'transient'
+            ORDER BY rank
+            LIMIT ?2
+            "#,
+        )
+        .map_err(|e| format!("Could not prepare memory FTS query: {e}"))?;
+
+    let rows = stmt
+        .query_map(params![query, limit as i64], decode_context_row)
+        .map_err(|e| format!("Could not read memory FTS rows: {e}"))?;
+
+    collect_context_rows(rows)
+}
+
 fn load_recent_events(conn: &Connection, limit: usize) -> Result<Vec<MemoryContextEvent>, String> {
     let mut stmt = conn
         .prepare(
             r#"
             SELECT
+                id,
                 created_at,
                 kind,
                 source,
@@ -58,7 +144,9 @@ fn load_recent_events(conn: &Connection, limit: usize) -> Result<Vec<MemoryConte
                 context_domain,
                 user_input,
                 summary,
-                outcome
+                outcome,
+                importance,
+                NULL AS rank
             FROM memory_events
             WHERE privacy_tier != 'transient'
             ORDER BY created_at DESC
@@ -68,29 +156,76 @@ fn load_recent_events(conn: &Connection, limit: usize) -> Result<Vec<MemoryConte
         .map_err(|e| format!("Could not prepare memory context query: {e}"))?;
 
     let rows = stmt
-        .query_map([limit as i64], |row| {
-            let privacy_tier: String = row.get(3)?;
-
-            Ok(MemoryContextEvent {
-                created_at: row.get(0)?,
-                kind: row.get(1)?,
-                source: row.get(2)?,
-                privacy_tier: PrivacyTier::from_str(&privacy_tier),
-                app_name: row.get(4)?,
-                context_domain: row.get(5)?,
-                user_input: row.get(6)?,
-                summary: row.get(7)?,
-                outcome: row.get(8)?,
-            })
-        })
+        .query_map([limit as i64], decode_context_row)
         .map_err(|e| format!("Could not read memory context rows: {e}"))?;
 
+    collect_context_rows(rows)
+}
+
+fn collect_context_rows<F>(rows: rusqlite::MappedRows<'_, F>) -> Result<Vec<MemoryContextEvent>, String>
+where
+    F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<MemoryContextEvent>,
+{
     let mut events = Vec::new();
     for row in rows {
         events.push(row.map_err(|e| format!("Could not decode memory context row: {e}"))?);
     }
 
     Ok(events)
+}
+
+fn decode_context_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryContextEvent> {
+    let privacy_tier: String = row.get(4)?;
+
+    Ok(MemoryContextEvent {
+        id: row.get(0)?,
+        created_at: row.get(1)?,
+        kind: row.get(2)?,
+        source: row.get(3)?,
+        privacy_tier: PrivacyTier::from_str(&privacy_tier),
+        app_name: row.get(5)?,
+        context_domain: row.get(6)?,
+        user_input: row.get(7)?,
+        summary: row.get(8)?,
+        outcome: row.get(9)?,
+        importance: row.get(10)?,
+        search_rank: row.get(11)?,
+    })
+}
+
+fn event_score(event: &MemoryContextEvent) -> f64 {
+    let text_score = event
+        .search_rank
+        .map(|rank| 1.0 / (1.0 + rank.abs()))
+        .unwrap_or(0.0);
+    let recency_score = recency_score(&event.created_at);
+    let importance_score = event.importance.clamp(0.0, 1.0) as f64;
+
+    (text_score * 0.55) + (recency_score * 0.25) + (importance_score * 0.20)
+}
+
+fn recency_score(created_at: &str) -> f64 {
+    let Ok(created_at) = DateTime::parse_from_rfc3339(created_at) else {
+        return 0.0;
+    };
+
+    let age_hours = Utc::now()
+        .signed_duration_since(created_at.with_timezone(&Utc))
+        .num_hours()
+        .max(0) as f64;
+
+    1.0 / (1.0 + (age_hours / 24.0))
+}
+
+fn escape_fts_query(query: &str) -> String {
+    query
+        .split_whitespace()
+        .map(|term| {
+            let escaped = term.replace('"', "\"\"");
+            format!("\"{escaped}\"")
+        })
+        .collect::<Vec<_>>()
+        .join(" OR ")
 }
 
 fn format_memory_context(events: &[MemoryContextEvent]) -> MemoryContext {
@@ -174,7 +309,7 @@ mod tests {
     fn empty_database_returns_empty_memory_block() {
         let conn = open_memory_database_in_memory().expect("database opens");
         let context =
-            build_memory_context_from_connection(&conn, None).expect("context builds");
+            build_memory_context_from_connection(&conn, None, None).expect("context builds");
 
         assert_eq!(context.memory, "");
         assert_eq!(context.event_count, 0);
@@ -193,7 +328,7 @@ mod tests {
         insert_memory_event(&conn, &event).expect("event inserts");
 
         let context =
-            build_memory_context_from_connection(&conn, Some(10)).expect("context builds");
+            build_memory_context_from_connection(&conn, None, Some(10)).expect("context builds");
 
         assert_eq!(context.event_count, 1);
         assert!(context.memory.starts_with("<memory>\n## Recent activity\n- "));
@@ -217,9 +352,34 @@ mod tests {
         insert_memory_event(&conn, &event).expect("event inserts");
 
         let context =
-            build_memory_context_from_connection(&conn, Some(10)).expect("context builds");
+            build_memory_context_from_connection(&conn, None, Some(10)).expect("context builds");
 
         assert!(context.memory.contains("snip event from screen"));
         assert!(!context.memory.contains("secret visible text"));
+    }
+
+    #[test]
+    fn query_terms_prioritize_fts_matches_over_recency() {
+        let conn = open_memory_database_in_memory().expect("database opens");
+        let relevant = MemoryEvent::new(MemoryEventKind::Command, "desktop", PrivacyTier::Redacted)
+            .with_app_name("Editor")
+            .with_context_domain("desktop")
+            .with_summary("User worked on the NeuralScript parser.")
+            .with_importance(0.9);
+        let irrelevant =
+            MemoryEvent::new(MemoryEventKind::Command, "desktop", PrivacyTier::Redacted)
+                .with_app_name("Browser")
+                .with_context_domain("desktop")
+                .with_summary("User opened a music website.")
+                .with_importance(0.1);
+
+        insert_memory_event(&conn, &relevant).expect("relevant event inserts");
+        insert_memory_event(&conn, &irrelevant).expect("irrelevant event inserts");
+
+        let context = build_memory_context_from_connection(&conn, Some("NeuralScript"), Some(1))
+            .expect("context builds");
+
+        assert!(context.memory.contains("NeuralScript parser"));
+        assert!(!context.memory.contains("music website"));
     }
 }
