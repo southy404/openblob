@@ -5,7 +5,10 @@ use reqwest::blocking::Client;
 use rusqlite::{params, Connection};
 use serde::Deserialize;
 
-use crate::modules::memory::events::{MemoryEvent, PrivacyTier};
+use crate::modules::memory::events::{MemoryEvent, MemoryEventKind, PrivacyTier};
+use crate::modules::memory::sqlite_store::{
+    open_memory_database, sqlite_vec_available, DEFAULT_EMBEDDING_DIMENSIONS,
+};
 
 pub const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text";
 
@@ -13,6 +16,12 @@ pub const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text";
 pub struct StoredEmbedding {
     pub target_id: String,
     pub vector: Vec<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VectorMatch {
+    pub target_id: String,
+    pub score: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,6 +115,126 @@ pub fn try_embed_event(conn: &Connection, event: &MemoryEvent) -> Result<(), Str
     insert_embedding(conn, event.id.as_str(), "event", DEFAULT_EMBEDDING_MODEL, &vector)
 }
 
+pub fn backfill_missing_event_embeddings(limit: usize) -> Result<usize, String> {
+    let conn = open_memory_database()?;
+    backfill_missing_event_embeddings_with_connection(&conn, limit)
+}
+
+pub fn backfill_missing_event_embeddings_with_connection(
+    conn: &Connection,
+    limit: usize,
+) -> Result<usize, String> {
+    let events = load_events_missing_embeddings(conn, limit)?;
+    let mut inserted = 0;
+
+    for event in events {
+        let had_embedding = event_embedding_exists(conn, &event.id)?;
+        match try_embed_event(conn, &event) {
+            Ok(()) => {
+                if !had_embedding && event_embedding_exists(conn, &event.id)? {
+                    inserted += 1;
+                }
+            }
+            Err(err) => {
+                if err.contains("Could not call Ollama")
+                    || err.contains("Ollama embeddings failed")
+                    || err.contains("Could not create Ollama")
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(inserted)
+}
+
+pub(crate) fn load_events_missing_embeddings(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<MemoryEvent>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                e.id,
+                e.version,
+                e.created_at,
+                e.kind,
+                e.source,
+                e.privacy_tier,
+                e.app_name,
+                e.context_domain,
+                e.user_input,
+                e.summary,
+                e.outcome,
+                e.importance,
+                e.metadata_json
+            FROM memory_events e
+            LEFT JOIN memory_embeddings emb
+              ON emb.target_id = e.id
+             AND emb.target_kind = 'event'
+             AND emb.model = ?1
+            WHERE emb.target_id IS NULL
+              AND e.privacy_tier != 'transient'
+            ORDER BY e.created_at DESC
+            LIMIT ?2
+            "#,
+        )
+        .map_err(|e| format!("Could not prepare missing embedding query: {e}"))?;
+
+    let rows = stmt
+        .query_map(params![DEFAULT_EMBEDDING_MODEL, limit as i64], |row| {
+            let kind: String = row.get(3)?;
+            let privacy_tier: String = row.get(5)?;
+            let metadata_json: String = row.get(12)?;
+            let version: i64 = row.get(1)?;
+
+            Ok(MemoryEvent {
+                id: row.get(0)?,
+                version: version.max(0) as u32,
+                timestamp: row.get(2)?,
+                kind: MemoryEventKind::from_str(&kind),
+                source: row.get(4)?,
+                privacy_tier: PrivacyTier::from_str(&privacy_tier),
+                app_name: row.get(6)?,
+                context_domain: row.get(7)?,
+                user_input: row.get(8)?,
+                summary: row.get(9)?,
+                outcome: row.get(10)?,
+                importance: row.get(11)?,
+                metadata: serde_json::from_str(&metadata_json)
+                    .unwrap_or_else(|_| serde_json::json!({})),
+            })
+        })
+        .map_err(|e| format!("Could not read missing embedding rows: {e}"))?;
+
+    let mut events = Vec::new();
+    for row in rows {
+        events.push(row.map_err(|e| format!("Could not decode missing embedding row: {e}"))?);
+    }
+
+    Ok(events)
+}
+
+fn event_embedding_exists(conn: &Connection, event_id: &str) -> Result<bool, String> {
+    let count: i64 = conn
+        .query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM memory_embeddings
+            WHERE target_id = ?1
+              AND target_kind = 'event'
+              AND model = ?2
+            "#,
+            params![event_id, DEFAULT_EMBEDDING_MODEL],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Could not check memory embedding '{event_id}': {e}"))?;
+
+    Ok(count > 0)
+}
+
 pub fn insert_embedding(
     conn: &Connection,
     target_id: &str,
@@ -141,6 +270,78 @@ pub fn insert_embedding(
         ],
     )
     .map_err(|e| format!("Could not insert memory embedding '{target_id}': {e}"))?;
+
+    if vector.len() == DEFAULT_EMBEDDING_DIMENSIONS {
+        let _ = insert_sqlite_vec_embedding(conn, target_id, vector);
+    }
+
+    Ok(())
+}
+
+pub fn load_sqlite_vec_event_matches(
+    conn: &Connection,
+    query_vector: &[f32],
+    limit: usize,
+) -> Result<Vec<VectorMatch>, String> {
+    if query_vector.len() != DEFAULT_EMBEDDING_DIMENSIONS || !sqlite_vec_available(conn) {
+        return Ok(Vec::new());
+    }
+
+    let query_json = serde_json::to_string(query_vector)
+        .map_err(|e| format!("Could not serialize sqlite-vec query vector: {e}"))?;
+    let mut stmt = match conn.prepare(
+        r#"
+        SELECT target_id, distance
+        FROM memory_embedding_vec
+        WHERE embedding MATCH ?1
+          AND k = ?2
+        ORDER BY distance
+        "#,
+    ) {
+        Ok(stmt) => stmt,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let rows = stmt
+        .query_map(params![query_json, limit as i64], |row| {
+            let distance: f64 = row.get(1)?;
+            Ok(VectorMatch {
+                target_id: row.get(0)?,
+                score: 1.0 / (1.0 + distance.max(0.0)),
+            })
+        })
+        .map_err(|e| format!("Could not read sqlite-vec memory matches: {e}"))?;
+
+    let mut matches = Vec::new();
+    for row in rows {
+        matches.push(row.map_err(|e| format!("Could not decode sqlite-vec row: {e}"))?);
+    }
+
+    Ok(matches)
+}
+
+fn insert_sqlite_vec_embedding(
+    conn: &Connection,
+    target_id: &str,
+    vector: &[f32],
+) -> Result<(), String> {
+    if !sqlite_vec_available(conn) {
+        return Ok(());
+    }
+
+    let vector_json = serde_json::to_string(vector)
+        .map_err(|e| format!("Could not serialize sqlite-vec embedding: {e}"))?;
+
+    conn.execute(
+        "DELETE FROM memory_embedding_vec WHERE target_id = ?1",
+        [target_id],
+    )
+    .ok();
+    conn.execute(
+        "INSERT INTO memory_embedding_vec(embedding, target_id) VALUES (?1, ?2)",
+        params![vector_json, target_id],
+    )
+    .map_err(|e| format!("Could not insert sqlite-vec embedding '{target_id}': {e}"))?;
 
     Ok(())
 }
@@ -245,8 +446,35 @@ mod tests {
     }
 
     #[test]
+    fn missing_embedding_query_excludes_already_embedded_events() {
+        let conn = open_memory_database_in_memory().expect("database opens");
+        let event = MemoryEvent::new(MemoryEventKind::Command, "desktop", PrivacyTier::Redacted)
+            .with_summary("needs embedding");
+        let event_id = event.id.clone();
+
+        crate::modules::memory::sqlite_store::insert_memory_event(&conn, &event)
+            .expect("event inserts");
+
+        let missing = load_events_missing_embeddings(&conn, 10).expect("missing loads");
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].id, event_id);
+
+        insert_embedding(&conn, &event_id, "event", DEFAULT_EMBEDDING_MODEL, &[1.0, 0.0])
+            .expect("embedding inserts");
+
+        let missing = load_events_missing_embeddings(&conn, 10).expect("missing reloads");
+        assert!(missing.is_empty());
+    }
+
+    #[test]
     fn cosine_similarity_scores_matching_vectors() {
         assert!(cosine_similarity(&[1.0, 0.0], &[1.0, 0.0]) > 0.99);
         assert_eq!(cosine_similarity(&[1.0, 0.0], &[0.0, 1.0]), 0.0);
+    }
+
+    #[test]
+    fn sqlite_vec_extension_is_available() {
+        let conn = open_memory_database_in_memory().expect("database opens");
+        assert!(sqlite_vec_available(&conn));
     }
 }

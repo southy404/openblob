@@ -5,10 +5,12 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 
 use crate::modules::memory::embeddings::{
-    cosine_similarity, embed_text_with_ollama, load_event_embeddings,
+    cosine_similarity, embed_text_with_ollama, load_event_embeddings, load_sqlite_vec_event_matches,
 };
 use crate::modules::memory::events::PrivacyTier;
 use crate::modules::memory::facts::{load_active_memory_facts, ActiveMemoryFact};
+use crate::modules::memory::reflection::{load_recent_reflective_summaries, ReflectiveSummary};
+use crate::modules::memory::retention::decayed_importance;
 use crate::modules::memory::sqlite_store::open_memory_database;
 
 const DEFAULT_MEMORY_CONTEXT_LIMIT: usize = 12;
@@ -35,6 +37,13 @@ struct MemoryContextEvent {
     importance: f32,
     search_rank: Option<f64>,
     vector_score: Option<f64>,
+    active_context_score: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActiveMemoryContext {
+    pub app_name: Option<String>,
+    pub context_domain: Option<String>,
 }
 
 pub fn build_memory_context(limit: Option<usize>) -> Result<MemoryContext, String> {
@@ -46,17 +55,28 @@ pub fn build_memory_context_for_query(
     limit: Option<usize>,
 ) -> Result<MemoryContext, String> {
     let conn = open_memory_database()?;
-    build_memory_context_from_connection(&conn, query, limit)
+    build_memory_context_from_connection(&conn, query, None, limit)
+}
+
+pub fn build_memory_context_for_query_and_context(
+    query: Option<&str>,
+    active_context: Option<ActiveMemoryContext>,
+    limit: Option<usize>,
+) -> Result<MemoryContext, String> {
+    let conn = open_memory_database()?;
+    build_memory_context_from_connection(&conn, query, active_context.as_ref(), limit)
 }
 
 pub fn build_memory_context_from_connection(
     conn: &Connection,
     query: Option<&str>,
+    active_context: Option<&ActiveMemoryContext>,
     limit: Option<usize>,
 ) -> Result<MemoryContext, String> {
     let facts = load_active_memory_facts(conn, 12)?;
-    let events = load_ranked_events(conn, query, normalized_limit(limit))?;
-    Ok(format_memory_context(&facts, &events))
+    let summaries = load_recent_reflective_summaries(conn, 3)?;
+    let events = load_ranked_events(conn, query, active_context, normalized_limit(limit))?;
+    Ok(format_memory_context(&facts, &summaries, &events))
 }
 
 fn normalized_limit(limit: Option<usize>) -> usize {
@@ -68,6 +88,7 @@ fn normalized_limit(limit: Option<usize>) -> usize {
 fn load_ranked_events(
     conn: &Connection,
     query: Option<&str>,
+    active_context: Option<&ActiveMemoryContext>,
     limit: usize,
 ) -> Result<Vec<MemoryContextEvent>, String> {
     let query = query.map(str::trim).filter(|value| !value.is_empty());
@@ -91,6 +112,10 @@ fn load_ranked_events(
         }
     }
 
+    for event in &mut events {
+        event.active_context_score = active_context_score(event, active_context);
+    }
+
     events.sort_by(|a, b| {
         event_score(b)
             .partial_cmp(&event_score(a))
@@ -111,7 +136,13 @@ fn load_vector_events(
         _ => return Ok(Vec::new()),
     };
 
-    let mut scored = load_event_embeddings(conn, 512)?
+    let mut scored = load_sqlite_vec_event_matches(conn, &query_vector, limit)?
+        .into_iter()
+        .map(|vector_match| (vector_match.target_id, vector_match.score))
+        .collect::<Vec<_>>();
+
+    if scored.is_empty() {
+        scored = load_event_embeddings(conn, 512)?
         .into_iter()
         .map(|embedding| {
             let score = cosine_similarity(&query_vector, &embedding.vector);
@@ -119,6 +150,7 @@ fn load_vector_events(
         })
         .filter(|(_, score)| *score > 0.0)
         .collect::<Vec<_>>();
+    }
 
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(limit);
@@ -237,6 +269,7 @@ fn decode_context_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryContext
         importance: row.get(10)?,
         search_rank: row.get(11)?,
         vector_score: None,
+        active_context_score: 0.0,
     })
 }
 
@@ -290,9 +323,14 @@ fn event_score(event: &MemoryContextEvent) -> f64 {
         .unwrap_or(0.0);
     let vector_score = event.vector_score.unwrap_or(0.0).max(0.0);
     let recency_score = recency_score(&event.created_at);
-    let importance_score = event.importance.clamp(0.0, 1.0) as f64;
+    let importance_score = decayed_importance(event.importance, &event.created_at, 30);
+    let active_context_score = event.active_context_score;
 
-    (vector_score * 0.40) + (text_score * 0.30) + (recency_score * 0.18) + (importance_score * 0.12)
+    (vector_score * 0.36)
+        + (text_score * 0.27)
+        + (recency_score * 0.16)
+        + (importance_score * 0.11)
+        + (active_context_score * 0.10)
 }
 
 fn recency_score(created_at: &str) -> f64 {
@@ -319,8 +357,41 @@ fn escape_fts_query(query: &str) -> String {
         .join(" OR ")
 }
 
-fn format_memory_context(facts: &[ActiveMemoryFact], events: &[MemoryContextEvent]) -> MemoryContext {
-    if facts.is_empty() && events.is_empty() {
+fn active_context_score(
+    event: &MemoryContextEvent,
+    active_context: Option<&ActiveMemoryContext>,
+) -> f64 {
+    let Some(active_context) = active_context else {
+        return 0.0;
+    };
+
+    let mut score = 0.0;
+    if let (Some(event_app), Some(active_app)) =
+        (event.app_name.as_deref(), active_context.app_name.as_deref())
+    {
+        if event_app.eq_ignore_ascii_case(active_app) {
+            score += 0.65;
+        }
+    }
+
+    if let (Some(event_domain), Some(active_domain)) = (
+        event.context_domain.as_deref(),
+        active_context.context_domain.as_deref(),
+    ) {
+        if event_domain.eq_ignore_ascii_case(active_domain) {
+            score += 0.35;
+        }
+    }
+
+    score
+}
+
+fn format_memory_context(
+    facts: &[ActiveMemoryFact],
+    summaries: &[ReflectiveSummary],
+    events: &[MemoryContextEvent],
+) -> MemoryContext {
+    if facts.is_empty() && summaries.is_empty() && events.is_empty() {
         return MemoryContext {
             memory: String::new(),
             event_count: 0,
@@ -345,6 +416,17 @@ fn format_memory_context(facts: &[ActiveMemoryFact], events: &[MemoryContextEven
             if let Some(line) = format_event_line(event) {
                 lines.push(line);
             }
+        }
+    }
+
+    if !summaries.is_empty() {
+        lines.push("## Reflections".to_string());
+        for summary in summaries {
+            lines.push(format!(
+                "- {} summary: {}",
+                summary.scope,
+                summary.summary.replace('\n', " ")
+            ));
         }
     }
 
@@ -413,7 +495,7 @@ mod tests {
     fn empty_database_returns_empty_memory_block() {
         let conn = open_memory_database_in_memory().expect("database opens");
         let context =
-            build_memory_context_from_connection(&conn, None, None).expect("context builds");
+            build_memory_context_from_connection(&conn, None, None, None).expect("context builds");
 
         assert_eq!(context.memory, "");
         assert_eq!(context.event_count, 0);
@@ -432,7 +514,7 @@ mod tests {
         insert_memory_event(&conn, &event).expect("event inserts");
 
         let context =
-            build_memory_context_from_connection(&conn, None, Some(10)).expect("context builds");
+            build_memory_context_from_connection(&conn, None, None, Some(10)).expect("context builds");
 
         assert_eq!(context.event_count, 1);
         assert!(context.memory.starts_with("<memory>\n## Recent activity\n- "));
@@ -455,10 +537,32 @@ mod tests {
         crate::modules::memory::facts::insert_memory_fact(&conn, &fact).expect("fact inserts");
 
         let context =
-            build_memory_context_from_connection(&conn, None, Some(10)).expect("context builds");
+            build_memory_context_from_connection(&conn, None, None, Some(10)).expect("context builds");
 
         assert!(context.memory.contains("## Who you know"));
         assert!(context.memory.contains("user.name = Brandon"));
+    }
+
+    #[test]
+    fn reflective_summaries_are_included_in_memory_block() {
+        let conn = open_memory_database_in_memory().expect("database opens");
+        let summary = ReflectiveSummary {
+            id: "summary_test".into(),
+            scope: "daily".into(),
+            period_start: "2026-05-06T00:00:00Z".into(),
+            period_end: "2026-05-06T23:59:59Z".into(),
+            summary: "User focused on memory retrieval.".into(),
+            source: "deterministic".into(),
+            created_at: "2026-05-06T23:59:59Z".into(),
+        };
+        crate::modules::memory::reflection::insert_reflective_summary(&conn, &summary)
+            .expect("summary inserts");
+
+        let context =
+            build_memory_context_from_connection(&conn, None, None, Some(10)).expect("context builds");
+
+        assert!(context.memory.contains("## Reflections"));
+        assert!(context.memory.contains("User focused on memory retrieval."));
     }
 
     #[test]
@@ -475,7 +579,7 @@ mod tests {
         insert_memory_event(&conn, &event).expect("event inserts");
 
         let context =
-            build_memory_context_from_connection(&conn, None, Some(10)).expect("context builds");
+            build_memory_context_from_connection(&conn, None, None, Some(10)).expect("context builds");
 
         assert!(context.memory.contains("snip event from screen"));
         assert!(!context.memory.contains("secret visible text"));
@@ -499,10 +603,37 @@ mod tests {
         insert_memory_event(&conn, &relevant).expect("relevant event inserts");
         insert_memory_event(&conn, &irrelevant).expect("irrelevant event inserts");
 
-        let context = build_memory_context_from_connection(&conn, Some("NeuralScript"), Some(1))
+        let context = build_memory_context_from_connection(&conn, Some("NeuralScript"), None, Some(1))
             .expect("context builds");
 
         assert!(context.memory.contains("NeuralScript parser"));
         assert!(!context.memory.contains("music website"));
+    }
+
+    #[test]
+    fn active_context_bonus_can_prioritize_matching_app() {
+        let conn = open_memory_database_in_memory().expect("database opens");
+        let browser = MemoryEvent::new(MemoryEventKind::Command, "desktop", PrivacyTier::Redacted)
+            .with_app_name("Browser")
+            .with_context_domain("desktop")
+            .with_summary("Browser task.")
+            .with_importance(0.1);
+        let editor = MemoryEvent::new(MemoryEventKind::Command, "desktop", PrivacyTier::Redacted)
+            .with_app_name("Editor")
+            .with_context_domain("desktop")
+            .with_summary("Editor task.")
+            .with_importance(0.1);
+
+        insert_memory_event(&conn, &browser).expect("browser inserts");
+        insert_memory_event(&conn, &editor).expect("editor inserts");
+
+        let active = ActiveMemoryContext {
+            app_name: Some("Editor".into()),
+            context_domain: Some("desktop".into()),
+        };
+        let context = build_memory_context_from_connection(&conn, None, Some(&active), Some(1))
+            .expect("context builds");
+
+        assert!(context.memory.contains("Editor task."));
     }
 }
