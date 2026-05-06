@@ -126,6 +126,8 @@ pub struct CompanionConfig {
     pub wake_word_provider: String,
     #[serde(default)]
     pub wake_word_model_path: Option<String>,
+    #[serde(default)]
+    pub wake_word_auto_listen_enabled: bool,
     pub appearance: AppearanceConfig,
     pub behavior: BehaviorConfig,
     pub privacy: PrivacyConfig,
@@ -150,6 +152,7 @@ impl Default for CompanionConfig {
             wake_word_sensitivity: default_wake_word_sensitivity(),
             wake_word_provider: default_wake_word_provider(),
             wake_word_model_path: None,
+            wake_word_auto_listen_enabled: false,
             appearance: AppearanceConfig::default(),
             behavior: BehaviorConfig::default(),
             privacy: PrivacyConfig::default(),

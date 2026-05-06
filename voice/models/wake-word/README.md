@@ -25,4 +25,6 @@ Current provider behavior:
 - `mock` is dev-only and can simulate detection from loud local input.
 - `local-openwakeword` / `local-wakeword` discover local model files, but real open-source inference is not implemented yet.
 
+Wake-to-voice is optional and controlled separately by `wake_word_auto_listen_enabled`. When enabled, the frontend can react to a `wake-word-detected` event and start the same voice input flow used by the manual `ALT + M` shortcut.
+
 No cloud calls, paid provider keys, or raw audio recording files are required for this foundation.

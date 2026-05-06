@@ -48,6 +48,7 @@ type WakeWordStatusName =
 
 type WakeWordSettings = {
   wake_word_enabled: boolean;
+  wake_word_auto_listen_enabled: boolean;
   wake_word_phrase: string;
   wake_word_sensitivity: number;
   wake_word_provider: WakeWordProvider;
@@ -120,6 +121,9 @@ type LocalizedText = {
 
   wakeWord: string;
   wakeWordEnabled: string;
+  wakeWordAutoListen: string;
+  wakeWordFrontendEvent: string;
+  wakeWordAutoListenStatus: string;
   wakeWordPhrase: string;
   wakeWordSensitivity: string;
   wakeWordProvider: string;
@@ -191,6 +195,9 @@ const TEXTS: Record<UiLang, LocalizedText> = {
 
     wakeWord: "Wake Word",
     wakeWordEnabled: "Enabled",
+    wakeWordAutoListen: "Start voice input after wake word",
+    wakeWordFrontendEvent: "Frontend event",
+    wakeWordAutoListenStatus: "Wake-to-voice",
     wakeWordPhrase: "Phrase",
     wakeWordSensitivity: "Sensitivity",
     wakeWordProvider: "Provider",
@@ -243,6 +250,9 @@ const TEXTS: Record<UiLang, LocalizedText> = {
 
     wakeWord: "Wake Word",
     wakeWordEnabled: "Aktiviert",
+    wakeWordAutoListen: "Spracheingabe nach Wake Word starten",
+    wakeWordFrontendEvent: "Frontend-Event",
+    wakeWordAutoListenStatus: "Wake-to-Voice",
     wakeWordPhrase: "Phrase",
     wakeWordSensitivity: "Empfindlichkeit",
     wakeWordProvider: "Provider",
@@ -685,6 +695,7 @@ function DevWindow() {
   const [saving, setSaving] = useState(false);
   const [wakeWordSettings, setWakeWordSettings] = useState<WakeWordSettings>({
     wake_word_enabled: false,
+    wake_word_auto_listen_enabled: false,
     wake_word_phrase: "hey blob",
     wake_word_sensitivity: 0.5,
     wake_word_provider: "none",
@@ -728,8 +739,10 @@ function DevWindow() {
       discovered_models: [],
       search_paths: [],
       provider: "none",
-    });
+  });
   const [wakeWordSaving, setWakeWordSaving] = useState(false);
+  const [wakeWordLastFrontendEventAt, setWakeWordLastFrontendEventAt] =
+    useState<string | null>(null);
 
   const t = TEXTS[uiLang];
   const commandGroups = useMemo(() => getCommandGroups(uiLang), [uiLang]);
@@ -878,6 +891,7 @@ function DevWindow() {
       unlisten = await listen<WakeWordDetectedPayload>(
         "wake-word-detected",
         (event) => {
+          setWakeWordLastFrontendEventAt(event.payload.detectedAt);
           setWakeWordStatus((prev) => ({
             ...prev,
             status: "detected",
@@ -1834,6 +1848,27 @@ function DevWindow() {
                 </div>
 
                 <div className="field">
+                  <div className="fieldLabel">{t.wakeWordAutoListen}</div>
+                  <label className="checkField">
+                    <input
+                      type="checkbox"
+                      checked={wakeWordSettings.wake_word_auto_listen_enabled}
+                      onChange={(e) =>
+                        setWakeWordSettings((prev) => ({
+                          ...prev,
+                          wake_word_auto_listen_enabled: e.target.checked,
+                        }))
+                      }
+                    />
+                    <span>
+                      {wakeWordSettings.wake_word_auto_listen_enabled
+                        ? "on"
+                        : "off"}
+                    </span>
+                  </label>
+                </div>
+
+                <div className="field">
                   <div className="fieldLabel">{t.wakeWordPhrase}</div>
                   <input
                     className="textInput"
@@ -2005,6 +2040,22 @@ function DevWindow() {
                   <div className="metricLabel">{t.wakeWordProviderState}</div>
                   <div className="metricValue">
                     {wakeWordStatus.provider_state || "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordAutoListenStatus}</div>
+                  <div className="metricValue">
+                    {wakeWordSettings.wake_word_auto_listen_enabled
+                      ? "enabled"
+                      : "disabled"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordFrontendEvent}</div>
+                  <div className="metricValue">
+                    {wakeWordLastFrontendEventAt || "none"}
                   </div>
                 </div>
 
