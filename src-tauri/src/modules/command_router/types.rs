@@ -16,6 +16,7 @@ pub enum CompanionAction {
     GoogleSearch { query: String },
     YouTubeSearch { query: String },
     YouTubePlayTitle { title: String },
+    PlayOnService { service: String, query: String },
 
     StreamOpenTitle {
         service: String,

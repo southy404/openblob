@@ -358,17 +358,7 @@ pub async fn youtube_search(query: &str) -> Result<String, String> {
 }
 
 pub async fn youtube_play_title(title: &str) -> Result<String, String> {
-    let url = format!(
-        "https://www.youtube.com/results?search_query={}",
-        urlencoding::encode(title)
-    );
-
-    open_or_navigate_debug_url(&url).await?;
-
-    Ok(reply_with(
-        "browser_youtube_search",
-        &[("query", title.to_string())],
-    ))
+    youtube_search_and_play(title.to_string()).await
 }
 
 pub async fn new_tab() -> Result<String, String> {

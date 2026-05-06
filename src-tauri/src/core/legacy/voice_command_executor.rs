@@ -330,6 +330,14 @@ pub async fn execute_legacy_voice_command(
             passthrough_reply(input, context, browser_runtime::youtube_play_title(title).await)
         }
 
+        CompanionAction::PlayOnService { service, query } => {
+            passthrough_reply(
+                input,
+                context,
+                app_open_runtime::play_on_service(service, query),
+            )
+        }
+
         CompanionAction::BrowserOpenUrl {
             url,
             new_tab,

@@ -623,3 +623,82 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
         IntentKind::None => CompanionAction::None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modules::i18n::command_locale::init_command_locale;
+
+    fn init_locale() {
+        let _ = init_command_locale("en");
+    }
+
+    #[test]
+    fn direct_service_open_stays_app_launch() {
+        init_locale();
+
+        match parse_voice_command("open spotify") {
+            CompanionAction::OpenApp {
+                target,
+                prefer_browser,
+            } => {
+                assert_eq!(target, "spotify");
+                assert!(!prefer_browser);
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+
+        match parse_voice_command("open steam") {
+            CompanionAction::OpenApp { target, .. } => assert_eq!(target, "steam"),
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn youtube_play_title_is_autoplay_intent() {
+        init_locale();
+
+        match parse_voice_command("play michael jackson thriller on youtube") {
+            CompanionAction::YouTubePlayTitle { title } => {
+                assert_eq!(title, "michael jackson thriller");
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+
+        match parse_voice_command("spiele michael jackson thriller auf youtube") {
+            CompanionAction::YouTubePlayTitle { title } => {
+                assert_eq!(title, "michael jackson thriller");
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spotify_and_steam_play_commands_keep_target_service() {
+        init_locale();
+
+        match parse_voice_command("play michael jackson thriller on spotify") {
+            CompanionAction::PlayOnService { service, query } => {
+                assert_eq!(service, "spotify");
+                assert_eq!(query, "michael jackson thriller");
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+
+        match parse_voice_command("play elden ring on steam") {
+            CompanionAction::PlayOnService { service, query } => {
+                assert_eq!(service, "steam");
+                assert_eq!(query, "elden ring");
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+
+        match parse_voice_command("spiele elden ring auf steam") {
+            CompanionAction::PlayOnService { service, query } => {
+                assert_eq!(service, "steam");
+                assert_eq!(query, "elden ring");
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+}
