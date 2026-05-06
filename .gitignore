@@ -61,4 +61,9 @@ transcripts/
 *.bin
 *.ggml
 models/
-voice/models/
+!voice/models/
+voice/models/*
+!voice/models/wake-word/
+voice/models/wake-word/*
+!voice/models/wake-word/README.md
+!voice/models/wake-word/.gitkeep

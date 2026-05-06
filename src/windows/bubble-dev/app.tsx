@@ -26,7 +26,13 @@ type DevPayload = {
 type UiLang = "en" | "de";
 
 type RouteState = "none" | "command" | "ollama";
-type WakeWordProvider = "none" | "porcupine" | "mic-test" | "mock" | "disabled";
+type WakeWordProvider =
+  | "none"
+  | "mic-test"
+  | "mock"
+  | "local-openwakeword"
+  | "local-wakeword"
+  | "disabled";
 type WakeWordStatusName =
   | "disabled"
   | "stopped"
@@ -36,6 +42,8 @@ type WakeWordStatusName =
   | "no_input_device"
   | "permission_error"
   | "provider_missing"
+  | "model_missing"
+  | "provider_not_implemented"
   | "error";
 
 type WakeWordSettings = {
@@ -43,6 +51,7 @@ type WakeWordSettings = {
   wake_word_phrase: string;
   wake_word_sensitivity: number;
   wake_word_provider: WakeWordProvider;
+  wake_word_model_path?: string | null;
 };
 
 type WakeWordStatus = {
@@ -64,6 +73,32 @@ type WakeWordStatus = {
   last_audio_at?: string | null;
   audio_chunks_seen: number;
   input_level?: number | null;
+  provider_state: string;
+  model_path?: string | null;
+  model_missing: boolean;
+  detection_count: number;
+  last_detected_at?: string | null;
+  last_detection_score?: number | null;
+  wake_phrase_matched?: string | null;
+  provider_ready: boolean;
+  provider_error?: string | null;
+};
+
+type WakeWordModelStatus = {
+  configured_model_path?: string | null;
+  resolved_model_path?: string | null;
+  model_exists: boolean;
+  model_missing: boolean;
+  discovered_models: string[];
+  search_paths: string[];
+  provider: WakeWordProvider;
+};
+
+type WakeWordDetectedPayload = {
+  phrase: string;
+  provider: string;
+  score: number;
+  detectedAt: string;
 };
 
 type LocalizedText = {
@@ -98,6 +133,13 @@ type LocalizedText = {
   wakeWordChunks: string;
   wakeWordInputLevel: string;
   wakeWordLastError: string;
+  wakeWordProviderState: string;
+  wakeWordModelPath: string;
+  wakeWordModelStatus: string;
+  wakeWordModels: string;
+  wakeWordDetectionCount: string;
+  wakeWordLastDetected: string;
+  wakeWordDetectionScore: string;
 
   searchPlaceholder: string;
   noCommandsFound: string;
@@ -162,6 +204,13 @@ const TEXTS: Record<UiLang, LocalizedText> = {
     wakeWordChunks: "Chunks",
     wakeWordInputLevel: "Level",
     wakeWordLastError: "Last error",
+    wakeWordProviderState: "Provider state",
+    wakeWordModelPath: "Model",
+    wakeWordModelStatus: "Model status",
+    wakeWordModels: "Local models",
+    wakeWordDetectionCount: "Detections",
+    wakeWordLastDetected: "Last detected",
+    wakeWordDetectionScore: "Score",
 
     searchPlaceholder:
       "Filter commands, e.g. youtube, timer, browser, volume, shutdown ...",
@@ -207,6 +256,13 @@ const TEXTS: Record<UiLang, LocalizedText> = {
     wakeWordChunks: "Chunks",
     wakeWordInputLevel: "Pegel",
     wakeWordLastError: "Letzter Fehler",
+    wakeWordProviderState: "Provider-Status",
+    wakeWordModelPath: "Modell",
+    wakeWordModelStatus: "Modellstatus",
+    wakeWordModels: "Lokale Modelle",
+    wakeWordDetectionCount: "Erkennungen",
+    wakeWordLastDetected: "Zuletzt erkannt",
+    wakeWordDetectionScore: "Score",
 
     searchPlaceholder:
       "Befehle filtern, z. B. youtube, timer, browser, volume, shutdown ...",
@@ -632,6 +688,7 @@ function DevWindow() {
     wake_word_phrase: "hey blob",
     wake_word_sensitivity: 0.5,
     wake_word_provider: "none",
+    wake_word_model_path: null,
   });
   const [wakeWordStatus, setWakeWordStatus] = useState<WakeWordStatus>({
     status: "disabled",
@@ -652,7 +709,26 @@ function DevWindow() {
     last_audio_at: null,
     audio_chunks_seen: 0,
     input_level: null,
+    provider_state: "provider_missing",
+    model_path: null,
+    model_missing: false,
+    detection_count: 0,
+    last_detected_at: null,
+    last_detection_score: null,
+    wake_phrase_matched: null,
+    provider_ready: false,
+    provider_error: null,
   });
+  const [wakeWordModelStatus, setWakeWordModelStatus] =
+    useState<WakeWordModelStatus>({
+      configured_model_path: null,
+      resolved_model_path: null,
+      model_exists: false,
+      model_missing: false,
+      discovered_models: [],
+      search_paths: [],
+      provider: "none",
+    });
   const [wakeWordSaving, setWakeWordSaving] = useState(false);
 
   const t = TEXTS[uiLang];
@@ -738,13 +814,15 @@ function DevWindow() {
 
   const refreshWakeWord = async () => {
     try {
-      const [settings, status] = await Promise.all([
+      const [settings, status, modelStatus] = await Promise.all([
         invoke<WakeWordSettings>("get_wake_word_settings"),
         invoke<WakeWordStatus>("get_wake_word_status"),
+        invoke<WakeWordModelStatus>("get_wake_word_model_status"),
       ]);
 
       setWakeWordSettings(settings);
       setWakeWordStatus(status);
+      setWakeWordModelStatus(modelStatus);
     } catch (err) {
       console.error("failed to load wake word settings", err);
       setWakeWordStatus({
@@ -766,6 +844,15 @@ function DevWindow() {
         last_audio_at: null,
         audio_chunks_seen: 0,
         input_level: null,
+        provider_state: "error",
+        model_path: null,
+        model_missing: false,
+        detection_count: 0,
+        last_detected_at: null,
+        last_detection_score: null,
+        wake_phrase_matched: null,
+        provider_ready: false,
+        provider_error: String(err),
       });
     }
   };
@@ -782,6 +869,39 @@ function DevWindow() {
     }, 3000);
 
     return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    let unlisten: null | (() => void) = null;
+
+    const setup = async () => {
+      unlisten = await listen<WakeWordDetectedPayload>(
+        "wake-word-detected",
+        (event) => {
+          setWakeWordStatus((prev) => ({
+            ...prev,
+            status: "detected",
+            state: "detected",
+            message: "Wake word detected.",
+            listening: true,
+            detected: true,
+            provider_state: "detected",
+            detection_count: prev.detection_count + 1,
+            last_detected_at: event.payload.detectedAt,
+            last_detection_score: event.payload.score,
+            wake_phrase_matched: event.payload.phrase,
+            provider_ready: true,
+            provider_error: null,
+          }));
+        }
+      );
+    };
+
+    void setup();
+
+    return () => {
+      if (unlisten) unlisten();
+    };
   }, []);
 
   const closeWindow = async () => {
@@ -835,8 +955,12 @@ function DevWindow() {
         settings: wakeWordSettings,
       });
       setWakeWordSettings(saved);
-      const nextStatus = await invoke<WakeWordStatus>("get_wake_word_status");
+      const [nextStatus, modelStatus] = await Promise.all([
+        invoke<WakeWordStatus>("get_wake_word_status"),
+        invoke<WakeWordModelStatus>("get_wake_word_model_status"),
+      ]);
       setWakeWordStatus(nextStatus);
+      setWakeWordModelStatus(modelStatus);
     } catch (err) {
       console.error("failed to save wake word settings", err);
       setWakeWordStatus({
@@ -858,6 +982,15 @@ function DevWindow() {
         last_audio_at: null,
         audio_chunks_seen: 0,
         input_level: null,
+        provider_state: "error",
+        model_path: null,
+        model_missing: false,
+        detection_count: 0,
+        last_detected_at: null,
+        last_detection_score: null,
+        wake_phrase_matched: null,
+        provider_ready: false,
+        provider_error: String(err),
       });
     } finally {
       setWakeWordSaving(false);
@@ -868,6 +1001,10 @@ function DevWindow() {
     try {
       const nextStatus = await invoke<WakeWordStatus>("start_wake_word_listener");
       setWakeWordStatus(nextStatus);
+      const modelStatus = await invoke<WakeWordModelStatus>(
+        "get_wake_word_model_status"
+      );
+      setWakeWordModelStatus(modelStatus);
     } catch (err) {
       console.error("failed to start wake word listener", err);
     }
@@ -877,6 +1014,10 @@ function DevWindow() {
     try {
       const nextStatus = await invoke<WakeWordStatus>("stop_wake_word_listener");
       setWakeWordStatus(nextStatus);
+      const modelStatus = await invoke<WakeWordModelStatus>(
+        "get_wake_word_model_status"
+      );
+      setWakeWordModelStatus(modelStatus);
     } catch (err) {
       console.error("failed to stop wake word listener", err);
     }
@@ -1209,8 +1350,18 @@ function DevWindow() {
 
         .statusPill.no_input_device .statusDot,
         .statusPill.permission_error .statusDot,
-        .statusPill.provider_missing .statusDot {
+        .statusPill.provider_missing .statusDot,
+        .statusPill.model_missing .statusDot,
+        .statusPill.provider_not_implemented .statusDot {
           background: #ffd166;
+        }
+
+        .wakeNotice {
+          min-height: 28px;
+          color: rgba(255,255,255,0.72);
+          font-size: 12px;
+          line-height: 1.4;
+          word-break: break-word;
         }
 
         .wakeMetrics {
@@ -1712,8 +1863,24 @@ function DevWindow() {
                     <option value="disabled">disabled</option>
                     <option value="mic-test">mic-test</option>
                     <option value="mock">mock</option>
-                    <option value="porcupine">porcupine</option>
+                    <option value="local-openwakeword">local-openwakeword</option>
+                    <option value="local-wakeword">local-wakeword</option>
                   </select>
+                </div>
+
+                <div className="field">
+                  <div className="fieldLabel">{t.wakeWordModelPath}</div>
+                  <input
+                    className="textInput"
+                    value={wakeWordSettings.wake_word_model_path || ""}
+                    onChange={(e) =>
+                      setWakeWordSettings((prev) => ({
+                        ...prev,
+                        wake_word_model_path: e.target.value || null,
+                      }))
+                    }
+                    placeholder="voice/models/wake-word/model.onnx"
+                  />
                 </div>
 
                 <div className="field">
@@ -1780,6 +1947,27 @@ function DevWindow() {
                 </button>
               </div>
 
+              <div className="wakeNotice">
+                {wakeWordStatus.provider === "mic-test" &&
+                  "Mic test is active. No wake-word model is running."}
+                {wakeWordStatus.provider === "mock" &&
+                  "Mock wake-word detection is active for development only."}
+                {(wakeWordStatus.provider === "local-openwakeword" ||
+                  wakeWordStatus.provider === "local-wakeword") &&
+                  wakeWordStatus.model_missing &&
+                  "Local wake-word provider selected, but no model is installed."}
+                {(wakeWordStatus.provider === "local-openwakeword" ||
+                  wakeWordStatus.provider === "local-wakeword") &&
+                  !wakeWordStatus.model_missing &&
+                  wakeWordModelStatus.model_exists &&
+                  "Local wake-word model found, but runtime inference is not implemented yet."}
+                {wakeWordStatus.state === "detected" && " Wake word detected."}
+                {wakeWordStatus.state === "no_input_device" &&
+                  "No microphone input device is available."}
+                {wakeWordStatus.state === "permission_error" &&
+                  "Microphone permission or access error."}
+              </div>
+
               <div className="wakeMetrics">
                 <div className="wakeMetric">
                   <div className="metricLabel">{t.wakeWordInputDevice}</div>
@@ -1810,6 +1998,65 @@ function DevWindow() {
                     {wakeWordStatus.input_level == null
                       ? "none"
                       : `${Math.round(wakeWordStatus.input_level * 100)}%`}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordProviderState}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.provider_state || "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordModelStatus}</div>
+                  <div className="metricValue">
+                    {wakeWordModelStatus.model_exists
+                      ? "model found"
+                      : wakeWordStatus.model_missing
+                        ? "model missing"
+                        : "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordModelPath}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.model_path ||
+                      wakeWordModelStatus.resolved_model_path ||
+                      "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordModels}</div>
+                  <div className="metricValue">
+                    {wakeWordModelStatus.discovered_models.length
+                      ? wakeWordModelStatus.discovered_models.join(", ")
+                      : "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordDetectionCount}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.detection_count}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordLastDetected}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.last_detected_at || "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordDetectionScore}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.last_detection_score == null
+                      ? "none"
+                      : wakeWordStatus.last_detection_score.toFixed(3)}
                   </div>
                 </div>
 
