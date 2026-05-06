@@ -331,6 +331,9 @@ fn normalize_wake_word_phrase(input: &str, fallback: &str) -> String {
 pub fn normalize_wake_word_provider(input: &str) -> String {
     match input.trim().to_lowercase().as_str() {
         "porcupine" => "porcupine".into(),
+        "mic-test" | "mictest" | "mic_test" | "dev-mic-test" => "mic-test".into(),
+        "mock" => "mock".into(),
+        "disabled" => "disabled".into(),
         _ => DEFAULT_WAKE_WORD_PROVIDER.into(),
     }
 }
