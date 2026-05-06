@@ -30,6 +30,7 @@ mod modules {
     pub mod transcript;
     pub mod tts;
     pub mod voice;
+    pub mod wake_word;
     pub mod windows_discovery;
 }
 
@@ -938,6 +939,19 @@ pub fn run() {
                 eprintln!("Failed to start memory writer: {err}");
             }
 
+            if load_or_create_companion_config()
+                .map(|config| config.wake_word_enabled)
+                .unwrap_or(false)
+            {
+                match modules::wake_word::start_wake_word_listener() {
+                    Ok(status) => println!(
+                        "[openblob:wake-word] startup status: {} ({})",
+                        status.status, status.message
+                    ),
+                    Err(err) => eprintln!("[openblob:wake-word] startup failed: {err}"),
+                }
+            }
+
             tauri::async_runtime::spawn(async {
                 if let Err(err) = reflect_memory_store("session").await {
                     eprintln!("Failed to refresh session memory reflection: {err}");
@@ -1019,6 +1033,11 @@ pub fn run() {
             save_current_transcript,
             summarize_current_transcript,
             process_transcript,
+            modules::wake_word::get_wake_word_settings,
+            modules::wake_word::update_wake_word_settings,
+            modules::wake_word::start_wake_word_listener,
+            modules::wake_word::stop_wake_word_listener,
+            modules::wake_word::get_wake_word_status,
             modules::system::get_system_volume,
             modules::system::set_system_volume,
             modules::system::change_system_volume,
