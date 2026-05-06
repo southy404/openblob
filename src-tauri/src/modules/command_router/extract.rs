@@ -294,6 +294,7 @@ pub fn extract_stream_title(normalized: &str, service: &str) -> Option<String> {
     for prefix in [
         "play ",
         "spiele ",
+        "spiel ",
         "abspielen ",
         "open ",
         "oeffne ",

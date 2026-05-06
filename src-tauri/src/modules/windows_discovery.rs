@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
 use strsim::jaro_winkler;
@@ -28,6 +29,10 @@ pub fn find_app_launch_target(query: &str) -> Option<DiscoveredApp> {
     let mut candidates: Vec<DiscoveredApp> = Vec::new();
 
     for (name, launch) in aliases {
+        if !alias_launch_is_available(launch) {
+            continue;
+        }
+
         let score = score_candidate(&q, &normalize(name));
         if score >= 0.80 || normalize(name).contains(&q) || q.contains(&normalize(name)) {
             candidates.push(DiscoveredApp {
@@ -123,9 +128,9 @@ fn alias_candidates() -> HashMap<&'static str, &'static str> {
         ("task manager", "taskmgr"),
         ("settings", "ms-settings:"),
         ("einstellungen", "ms-settings:"),
-        ("steam", "steam"),
-        ("discord", "discord"),
-        ("spotify", "spotify"),
+        ("steam", "steam://open/main"),
+        ("discord", "discord://-/"),
+        ("spotify", "spotify:"),
         ("chrome", "chrome"),
         ("edge", "msedge"),
         ("fl studio", "FL64"),
@@ -134,6 +139,45 @@ fn alias_candidates() -> HashMap<&'static str, &'static str> {
         ("visual studio code", "code"),
         ("vscode", "code"),
     ])
+}
+
+fn alias_launch_is_available(launch: &str) -> bool {
+    if is_builtin_shell_target(launch) {
+        return true;
+    }
+
+    if let Some(protocol) = launch.split_once(':').map(|(protocol, _)| protocol) {
+        return protocol_registered(protocol);
+    }
+
+    if launch.contains('\\') {
+        return Path::new(launch).exists();
+    }
+
+    command_exists_windows(launch)
+}
+
+fn is_builtin_shell_target(launch: &str) -> bool {
+    matches!(
+        launch,
+        "calc" | "mspaint" | "notepad" | "explorer" | "taskmgr"
+    )
+}
+
+fn protocol_registered(protocol: &str) -> bool {
+    RegKey::predef(HKEY_CLASSES_ROOT)
+        .open_subkey(protocol)
+        .is_ok()
+}
+
+fn command_exists_windows(command: &str) -> bool {
+    Command::new("where")
+        .arg(command)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 fn scan_registry_and_start_menu_best(query: &str) -> Option<DiscoveredApp> {
@@ -313,7 +357,7 @@ fn scan_program_files_best(query: &str) -> Option<DiscoveredApp> {
 }
 
 fn path_match_best(query: &str) -> Option<DiscoveredApp> {
-    let output = std::process::Command::new("where")
+    let output = Command::new("where")
         .arg(query)
         .output()
         .ok()?;

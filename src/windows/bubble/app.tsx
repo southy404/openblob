@@ -608,6 +608,7 @@ function BubbleApp() {
         model,
       });
 
+      await setBlobPhase("executing");
       await showSubtitle(result.content, 5600);
 
       setHint(

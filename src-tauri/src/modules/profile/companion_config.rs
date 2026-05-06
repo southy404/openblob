@@ -6,6 +6,8 @@ use crate::modules::storage::paths::companion_config_path;
 pub const CURRENT_COMPANION_CONFIG_VERSION: u32 = 1;
 pub const DEFAULT_PRIMARY_LANGUAGE: &str = "en";
 pub const SUPPORTED_LANGUAGES: &[&str] = &["en", "de"];
+pub const DEFAULT_CHAT_MODEL: &str = "llama3.1:8b";
+pub const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppearanceConfig {
@@ -106,6 +108,10 @@ pub struct CompanionConfig {
     pub preferred_language: String,
     pub fallback_language: String,
     pub supported_languages: Vec<String>,
+    #[serde(default = "default_chat_model")]
+    pub chat_model: String,
+    #[serde(default = "default_embedding_model")]
+    pub embedding_model: String,
     pub voice_enabled: bool,
     pub voice_id: String,
     pub appearance: AppearanceConfig,
@@ -122,10 +128,9 @@ impl Default for CompanionConfig {
             blob_name: "OpenBlob".into(),
             preferred_language: DEFAULT_PRIMARY_LANGUAGE.into(),
             fallback_language: "de".into(),
-            supported_languages: SUPPORTED_LANGUAGES
-                .iter()
-                .map(|v| v.to_string())
-                .collect(),
+            supported_languages: SUPPORTED_LANGUAGES.iter().map(|v| v.to_string()).collect(),
+            chat_model: default_chat_model(),
+            embedding_model: default_embedding_model(),
             voice_enabled: true,
             voice_id: "default".into(),
             appearance: AppearanceConfig::default(),
@@ -144,10 +149,7 @@ impl CompanionConfig {
         self.fallback_language = normalize_lang(&self.fallback_language);
 
         if self.supported_languages.is_empty() {
-            self.supported_languages = SUPPORTED_LANGUAGES
-                .iter()
-                .map(|v| v.to_string())
-                .collect();
+            self.supported_languages = SUPPORTED_LANGUAGES.iter().map(|v| v.to_string()).collect();
         } else {
             self.supported_languages = self
                 .supported_languages
@@ -161,6 +163,8 @@ impl CompanionConfig {
         clamp_unit(&mut self.behavior.proactive_level);
         clamp_unit(&mut self.behavior.expressiveness);
         clamp_unit(&mut self.behavior.playfulness);
+        self.chat_model = normalize_model_name(&self.chat_model, DEFAULT_CHAT_MODEL);
+        self.embedding_model = normalize_model_name(&self.embedding_model, DEFAULT_EMBEDDING_MODEL);
         self.memory.backend = normalize_memory_backend(&self.memory.backend);
         self.memory.prompt_context_limit = self.memory.prompt_context_limit.clamp(1, 50);
         self.memory.retention_days = self.memory.retention_days.clamp(1, 3650);
@@ -224,6 +228,14 @@ fn default_memory_backend() -> String {
     "dual_write".into()
 }
 
+fn default_chat_model() -> String {
+    DEFAULT_CHAT_MODEL.into()
+}
+
+fn default_embedding_model() -> String {
+    DEFAULT_EMBEDDING_MODEL.into()
+}
+
 fn default_memory_prompt_enabled() -> bool {
     true
 }
@@ -264,5 +276,14 @@ fn normalize_vector_backend(input: &str) -> String {
     match input.trim().to_lowercase().as_str() {
         "json" | "json_fallback" => "json".into(),
         _ => "sqlite_vec".into(),
+    }
+}
+
+fn normalize_model_name(input: &str, fallback: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        fallback.into()
+    } else {
+        trimmed.into()
     }
 }

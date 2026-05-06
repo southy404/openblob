@@ -1,9 +1,9 @@
+use crate::modules::session_memory;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use crate::modules::session_memory;
 
 const DEBUG_PORT: u16 = 9222;
 
@@ -31,6 +31,22 @@ pub struct BrowserContext {
 
 fn debug_json_url(path: &str) -> String {
     format!("http://127.0.0.1:{DEBUG_PORT}{path}")
+}
+
+fn controlled_service_matches_url(service: &str, url: &str) -> bool {
+    let service = service.trim().to_lowercase();
+    let url = url.trim().to_lowercase();
+
+    match service.as_str() {
+        "youtube" => url.contains("youtube.com") || url.contains("youtu.be"),
+        "google" => url.contains("google."),
+        "gmail" => url.contains("mail.google."),
+        "github" => url.contains("github.com"),
+        "reddit" => url.contains("reddit.com"),
+        "twitch" => url.contains("twitch.tv"),
+        other if !other.is_empty() => url.contains(other),
+        _ => false,
+    }
 }
 
 pub async fn list_tabs() -> Result<Vec<BrowserTab>, String> {
@@ -112,6 +128,37 @@ pub async fn get_active_tab() -> Result<BrowserTab, String> {
     }
 
     let state = session_memory::get_state();
+
+    if let Some(target) = state.active_controlled_target.as_ref() {
+        if target.is_active_controlled_target && target.kind.is_browser_like() {
+            if !target.url.trim().is_empty() {
+                if let Some(tab) = page_tabs.iter().find(|t| t.url == target.url).cloned() {
+                    return Ok(tab);
+                }
+            }
+
+            if !target.window_title.trim().is_empty() {
+                if let Some(tab) = page_tabs
+                    .iter()
+                    .find(|t| t.title.trim() == target.window_title.trim())
+                    .cloned()
+                {
+                    return Ok(tab);
+                }
+            }
+
+            if !target.service.trim().is_empty() {
+                if let Some(tab) = page_tabs
+                    .iter()
+                    .rev()
+                    .find(|t| controlled_service_matches_url(&target.service, &t.url))
+                    .cloned()
+                {
+                    return Ok(tab);
+                }
+            }
+        }
+    }
 
     if !state.last_browser_url.trim().is_empty() {
         if let Some(tab) = page_tabs
@@ -266,7 +313,8 @@ pub async fn get_browser_context() -> Result<BrowserContext, String> {
 "#;
 
     let result = eval_js(&tab, script).await?;
-    serde_json::from_value(result).map_err(|e| format!("Browser-Kontext konnte nicht gelesen werden: {e}"))
+    serde_json::from_value(result)
+        .map_err(|e| format!("Browser-Kontext konnte nicht gelesen werden: {e}"))
 }
 
 pub async fn type_in_best_input(text: &str) -> Result<String, String> {
@@ -478,7 +526,7 @@ pub async fn youtube_play_best_match(query: &str) -> Result<String, String> {
 
     let script = format!(
         r#"
-(() => {{
+(async () => {{
   const wanted = {safe_query}.toLowerCase();
 
   const normalize = (s) =>
@@ -489,11 +537,47 @@ pub async fn youtube_play_best_match(query: &str) -> Result<String, String> {
       .trim();
 
   const target = normalize(wanted);
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-  const candidates = [...document.querySelectorAll('a#video-title, a.ytd-video-renderer')];
+  function playableCandidates() {{
+    return [...document.querySelectorAll('a#video-title[href*="/watch"], ytd-video-renderer a#video-title[href*="/watch"], ytd-rich-item-renderer a#video-title[href*="/watch"]')]
+      .filter((el) => {{
+        const href = el.href || el.getAttribute("href") || "";
+        if (!href) return false;
+        if (href.includes("/shorts/")) return false;
+        if (href.includes("/playlist")) return false;
+        if (href.includes("/channel/") || href.includes("/@")) return false;
+        const title = normalize(el.textContent || el.getAttribute("title") || "");
+        return Boolean(title);
+      }});
+  }}
+
+  let candidates = [];
+  for (let i = 0; i < 12; i++) {{
+    candidates = playableCandidates();
+    if (candidates.length > 0) break;
+    await sleep(250);
+  }}
 
   let best = null;
   let bestScore = -1;
+
+  function bigrams(text) {{
+    const compact = text.replace(/\s+/g, "");
+    if (compact.length < 2) return new Set(compact ? [compact] : []);
+    const out = new Set();
+    for (let i = 0; i < compact.length - 1; i++) out.add(compact.slice(i, i + 2));
+    return out;
+  }}
+
+  function dice(a, b) {{
+    const left = bigrams(a);
+    const right = bigrams(b);
+    if (left.size === 0 || right.size === 0) return 0;
+    let hits = 0;
+    for (const gram of left) if (right.has(gram)) hits++;
+    return (2 * hits) / (left.size + right.size);
+  }}
 
   function score(title, target) {{
     if (!title || !target) return 0;
@@ -505,19 +589,24 @@ pub async fn youtube_play_best_match(query: &str) -> Result<String, String> {
     for (const w of targetWords) {{
       if (titleWords.has(w)) hits++;
     }}
-    return hits * 100;
+    return hits * 140 + dice(title, target) * 420;
   }}
 
-  for (const el of candidates) {{
+  candidates.forEach((el, index) => {{
     const title = normalize(el.textContent || el.getAttribute("title") || "");
-    const current = score(title, target);
+    const rawTitle = (el.textContent || el.getAttribute("title") || "").toLowerCase();
+    const officialBonus = rawTitle.includes("official") ? 80 : 0;
+    const musicBonus = rawTitle.includes("music video") ? 35 : 0;
+    const rankBonus = Math.max(0, 120 - index * 8);
+    const current = score(title, target) + officialBonus + musicBonus + rankBonus;
     if (current > bestScore) {{
       bestScore = current;
       best = el;
     }}
-  }}
+  }});
 
   if (best) {{
+    best.scrollIntoView({{ block: "center" }});
     best.click();
     return {{
       ok: true,

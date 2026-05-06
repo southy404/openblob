@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use reqwest::blocking::Client;
+use reqwest::Client;
 use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::json;
@@ -8,7 +8,9 @@ use serde_json::json;
 use crate::modules::memory::events::{MemoryEvent, MemoryEventKind, PrivacyTier};
 use crate::modules::memory::facts::{insert_memory_fact_superseding, ExtractedMemoryFact};
 #[cfg(not(test))]
-use crate::modules::profile::companion_config::load_or_create_companion_config;
+use crate::modules::profile::companion_config::{
+    load_or_create_companion_config, DEFAULT_CHAT_MODEL,
+};
 
 #[derive(Debug, Deserialize)]
 struct OllamaFactResponse {
@@ -38,11 +40,52 @@ pub fn extract_and_store_facts_for_event(
         return Ok(0);
     }
 
-    let mut facts = deterministic_facts_for_event(event);
+    let facts = deterministic_facts_for_event(event);
     if facts.is_empty() {
-        facts = ollama_facts_for_event(event).unwrap_or_default();
+        return Ok(0);
     }
 
+    store_extracted_facts_for_event(conn, event, facts)
+}
+
+pub async fn extract_and_store_facts_for_event_async(
+    conn: &Connection,
+    event: &MemoryEvent,
+) -> Result<usize, String> {
+    let facts = extract_facts_for_event_async(event).await?;
+    store_extracted_facts_for_event(conn, event, facts)
+}
+
+pub async fn extract_facts_for_event_async(
+    event: &MemoryEvent,
+) -> Result<Vec<ExtractedMemoryFact>, String> {
+    #[cfg(not(test))]
+    {
+        if !load_or_create_companion_config()
+            .map(|config| config.privacy.store_semantic_memory)
+            .unwrap_or(true)
+        {
+            return Ok(Vec::new());
+        }
+    }
+
+    if !event_allows_fact_extraction(event) {
+        return Ok(Vec::new());
+    }
+
+    let mut facts = deterministic_facts_for_event(event);
+    if facts.is_empty() {
+        facts = ollama_facts_for_event(event).await.unwrap_or_default();
+    }
+
+    Ok(facts)
+}
+
+pub fn store_extracted_facts_for_event(
+    conn: &Connection,
+    event: &MemoryEvent,
+    facts: Vec<ExtractedMemoryFact>,
+) -> Result<usize, String> {
     let mut inserted = 0;
     for (index, fact) in facts.into_iter().enumerate() {
         if let Some(fact) = fact.into_memory_fact(&event.id, "semantic_extraction", index) {
@@ -78,7 +121,11 @@ fn deterministic_facts_from_text(text: &str) -> Vec<ExtractedMemoryFact> {
         facts.push(fact("user", "preferred_language", value, 0.82));
     }
 
-    for prefix in ["i am working on ", "i'm working on ", "currently working on "] {
+    for prefix in [
+        "i am working on ",
+        "i'm working on ",
+        "currently working on ",
+    ] {
         if let Some(value) = strip_prefix_value(text, &lower, prefix) {
             facts.push(fact("user", "working_on", value, 0.78));
         }
@@ -101,10 +148,17 @@ fn deterministic_facts_from_text(text: &str) -> Vec<ExtractedMemoryFact> {
     facts
 }
 
-fn ollama_facts_for_event(event: &MemoryEvent) -> Result<Vec<ExtractedMemoryFact>, String> {
+async fn ollama_facts_for_event(event: &MemoryEvent) -> Result<Vec<ExtractedMemoryFact>, String> {
     let Some(text) = fact_source_text(event) else {
         return Ok(Vec::new());
     };
+
+    #[cfg(not(test))]
+    let model = load_or_create_companion_config()
+        .map(|config| config.chat_model)
+        .unwrap_or_else(|_| DEFAULT_CHAT_MODEL.into());
+    #[cfg(test)]
+    let model = "llama3.1:8b".to_string();
 
     let client = Client::builder()
         .timeout(Duration::from_secs(8))
@@ -126,7 +180,7 @@ EVENT:
     let response = client
         .post("http://127.0.0.1:11434/api/chat")
         .json(&json!({
-            "model": "llama3.1:8b",
+            "model": model,
             "stream": false,
             "keep_alive": "10m",
             "messages": [
@@ -135,14 +189,19 @@ EVENT:
             ]
         }))
         .send()
+        .await
         .map_err(|e| format!("Could not call Ollama fact extraction: {e}"))?;
 
     if !response.status().is_success() {
-        return Err(format!("Ollama fact extraction failed with {}", response.status()));
+        return Err(format!(
+            "Ollama fact extraction failed with {}",
+            response.status()
+        ));
     }
 
     let parsed = response
         .json::<OllamaFactResponse>()
+        .await
         .map_err(|e| format!("Could not decode fact extraction response: {e}"))?;
 
     parse_fact_json(&parsed.message.content)
@@ -310,14 +369,15 @@ mod tests {
         let event = MemoryEvent::new(MemoryEventKind::ChatTurn, "test", PrivacyTier::Redacted)
             .with_user_input("my cat is named Ash");
 
-        let inserted =
-            extract_and_store_facts_for_event(&conn, &event).expect("facts extracted");
+        let inserted = extract_and_store_facts_for_event(&conn, &event).expect("facts extracted");
 
         assert_eq!(inserted, 1);
         let object: String = conn
-            .query_row("SELECT object FROM memory_facts WHERE subject = 'user.cat'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT object FROM memory_facts WHERE subject = 'user.cat'",
+                [],
+                |row| row.get(0),
+            )
             .expect("stored fact");
         assert_eq!(object, "Ash");
     }

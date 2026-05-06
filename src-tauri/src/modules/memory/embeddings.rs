@@ -1,7 +1,9 @@
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use chrono::Utc;
-use reqwest::blocking::Client;
+use reqwest::{Client, StatusCode};
 use rusqlite::{params, Connection};
 use serde::Deserialize;
 
@@ -9,8 +11,11 @@ use crate::modules::memory::events::{MemoryEvent, MemoryEventKind, PrivacyTier};
 use crate::modules::memory::sqlite_store::{
     open_memory_database, sqlite_vec_available, DEFAULT_EMBEDDING_DIMENSIONS,
 };
+#[cfg(not(test))]
+use crate::modules::profile::companion_config::load_or_create_companion_config;
+use crate::modules::profile::companion_config::DEFAULT_EMBEDDING_MODEL;
 
-pub const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text";
+static LOGGED_EMBEDDING_FAILURES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredEmbedding {
@@ -34,10 +39,7 @@ pub fn embedding_text_for_event(event: &MemoryEvent) -> Option<String> {
         return None;
     }
 
-    let mut parts = vec![
-        event.kind.as_str().to_string(),
-        event.source.clone(),
-    ];
+    let mut parts = vec![event.kind.as_str().to_string(), event.source.clone()];
 
     if let Some(value) = &event.app_name {
         parts.push(value.clone());
@@ -71,11 +73,55 @@ pub fn embedding_text_for_event(event: &MemoryEvent) -> Option<String> {
     }
 }
 
-pub fn embed_text_with_ollama(text: &str, timeout: Duration) -> Result<Vec<f32>, String> {
+fn configured_embedding_model() -> String {
+    #[cfg(test)]
+    {
+        return DEFAULT_EMBEDDING_MODEL.into();
+    }
+
+    #[cfg(not(test))]
+    load_or_create_companion_config()
+        .map(|config| config.embedding_model)
+        .unwrap_or_else(|_| DEFAULT_EMBEDDING_MODEL.into())
+}
+
+fn debug_log(message: impl AsRef<str>) {
+    if std::env::var_os("RUST_BACKTRACE").is_some() {
+        println!("[openblob] {}", message.as_ref());
+    }
+}
+
+pub fn log_embedding_failure_once(err: &str) {
+    let key = err.trim().to_string();
+    if key.is_empty() {
+        return;
+    }
+
+    let seen = LOGGED_EMBEDDING_FAILURES.get_or_init(|| Mutex::new(HashSet::new()));
+    let should_log = seen
+        .lock()
+        .map(|mut seen| seen.insert(key.clone()))
+        .unwrap_or(true);
+
+    if should_log {
+        eprintln!("[openblob] Memory embedding skipped: {key}");
+    }
+}
+
+pub async fn embed_text_with_ollama(
+    text: &str,
+    timeout: Duration,
+    caller: &str,
+) -> Result<Vec<f32>, String> {
     let text = text.trim();
     if text.is_empty() {
         return Ok(Vec::new());
     }
+
+    let model = configured_embedding_model();
+    debug_log(format!(
+        "Embedding attempt start; caller={caller}; model={model}"
+    ));
 
     let client = Client::builder()
         .timeout(timeout)
@@ -85,61 +131,87 @@ pub fn embed_text_with_ollama(text: &str, timeout: Duration) -> Result<Vec<f32>,
     let response = client
         .post("http://127.0.0.1:11434/api/embeddings")
         .json(&serde_json::json!({
-            "model": DEFAULT_EMBEDDING_MODEL,
+            "model": model,
             "prompt": text
         }))
         .send()
+        .await
         .map_err(|e| format!("Could not call Ollama embeddings: {e}"))?;
 
     if !response.status().is_success() {
-        return Err(format!("Ollama embeddings failed with {}", response.status()));
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        let err = if status == StatusCode::NOT_FOUND {
+            format!("Embedding model not available. Pull with: ollama pull {model}")
+        } else if body.trim().is_empty() {
+            format!("Ollama embeddings failed with {status}")
+        } else {
+            format!("Ollama embeddings failed with {status}: {}", body.trim())
+        };
+        debug_log(format!(
+            "Embedding attempt failed; caller={caller}; model={model}; error={err}"
+        ));
+        return Err(err);
     }
 
     let parsed = response
         .json::<OllamaEmbeddingResponse>()
+        .await
         .map_err(|e| format!("Could not decode Ollama embedding response: {e}"))?;
+
+    debug_log(format!(
+        "Embedding attempt end; caller={caller}; model={model}; dimensions={}",
+        parsed.embedding.len()
+    ));
 
     Ok(parsed.embedding)
 }
 
-pub fn try_embed_event(conn: &Connection, event: &MemoryEvent) -> Result<(), String> {
+pub async fn embedding_for_event(
+    event: &MemoryEvent,
+) -> Result<Option<(String, Vec<f32>)>, String> {
     let Some(text) = embedding_text_for_event(event) else {
-        return Ok(());
+        return Ok(None);
     };
 
-    let vector = embed_text_with_ollama(&text, Duration::from_millis(750))?;
+    let model = configured_embedding_model();
+    let vector = embed_text_with_ollama(&text, Duration::from_millis(750), "memory_writer").await?;
     if vector.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
-    insert_embedding(conn, event.id.as_str(), "event", DEFAULT_EMBEDDING_MODEL, &vector)
+    Ok(Some((model, vector)))
 }
 
-pub fn backfill_missing_event_embeddings(limit: usize) -> Result<usize, String> {
-    let conn = open_memory_database()?;
-    backfill_missing_event_embeddings_with_connection(&conn, limit)
-}
-
-pub fn backfill_missing_event_embeddings_with_connection(
-    conn: &Connection,
-    limit: usize,
-) -> Result<usize, String> {
-    let events = load_events_missing_embeddings(conn, limit)?;
+pub async fn backfill_missing_event_embeddings(limit: usize) -> Result<usize, String> {
+    let events = {
+        let conn = open_memory_database()?;
+        load_events_missing_embeddings(&conn, limit)?
+    };
     let mut inserted = 0;
 
     for event in events {
-        let had_embedding = event_embedding_exists(conn, &event.id)?;
-        match try_embed_event(conn, &event) {
-            Ok(()) => {
-                if !had_embedding && event_embedding_exists(conn, &event.id)? {
+        let model = configured_embedding_model();
+        let had_embedding = {
+            let conn = open_memory_database()?;
+            event_embedding_exists(&conn, &event.id, &model)?
+        };
+        match embedding_for_event(&event).await {
+            Ok(Some((model, vector))) => {
+                let conn = open_memory_database()?;
+                insert_embedding(&conn, event.id.as_str(), "event", &model, &vector)?;
+                if !had_embedding && event_embedding_exists(&conn, &event.id, &model)? {
                     inserted += 1;
                 }
             }
+            Ok(None) => {}
             Err(err) => {
                 if err.contains("Could not call Ollama")
                     || err.contains("Ollama embeddings failed")
                     || err.contains("Could not create Ollama")
+                    || err.contains("Embedding model not available")
                 {
+                    log_embedding_failure_once(&err);
                     break;
                 }
             }
@@ -153,6 +225,7 @@ pub(crate) fn load_events_missing_embeddings(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<MemoryEvent>, String> {
+    let model = configured_embedding_model();
     let mut stmt = conn
         .prepare(
             r#"
@@ -184,7 +257,7 @@ pub(crate) fn load_events_missing_embeddings(
         .map_err(|e| format!("Could not prepare missing embedding query: {e}"))?;
 
     let rows = stmt
-        .query_map(params![DEFAULT_EMBEDDING_MODEL, limit as i64], |row| {
+        .query_map(params![model, limit as i64], |row| {
             let kind: String = row.get(3)?;
             let privacy_tier: String = row.get(5)?;
             let metadata_json: String = row.get(12)?;
@@ -217,7 +290,7 @@ pub(crate) fn load_events_missing_embeddings(
     Ok(events)
 }
 
-fn event_embedding_exists(conn: &Connection, event_id: &str) -> Result<bool, String> {
+fn event_embedding_exists(conn: &Connection, event_id: &str, model: &str) -> Result<bool, String> {
     let count: i64 = conn
         .query_row(
             r#"
@@ -227,7 +300,7 @@ fn event_embedding_exists(conn: &Connection, event_id: &str) -> Result<bool, Str
               AND target_kind = 'event'
               AND model = ?2
             "#,
-            params![event_id, DEFAULT_EMBEDDING_MODEL],
+            params![event_id, model],
             |row| row.get(0),
         )
         .map_err(|e| format!("Could not check memory embedding '{event_id}': {e}"))?;
@@ -350,6 +423,7 @@ pub fn load_event_embeddings(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<StoredEmbedding>, String> {
+    let model = configured_embedding_model();
     let mut stmt = conn
         .prepare(
             r#"
@@ -364,7 +438,7 @@ pub fn load_event_embeddings(
         .map_err(|e| format!("Could not prepare memory embedding query: {e}"))?;
 
     let rows = stmt
-        .query_map(params![DEFAULT_EMBEDDING_MODEL, limit as i64], |row| {
+        .query_map(params![model, limit as i64], |row| {
             let vector_json: String = row.get(1)?;
             let vector = serde_json::from_str::<Vec<f32>>(&vector_json).unwrap_or_default();
 
@@ -435,8 +509,14 @@ mod tests {
     fn stores_and_loads_event_embeddings() {
         let conn = open_memory_database_in_memory().expect("database opens");
 
-        insert_embedding(&conn, "mem_1", "event", DEFAULT_EMBEDDING_MODEL, &[1.0, 0.0])
-            .expect("embedding inserts");
+        insert_embedding(
+            &conn,
+            "mem_1",
+            "event",
+            DEFAULT_EMBEDDING_MODEL,
+            &[1.0, 0.0],
+        )
+        .expect("embedding inserts");
 
         let embeddings = load_event_embeddings(&conn, 10).expect("embeddings load");
 
@@ -459,8 +539,14 @@ mod tests {
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0].id, event_id);
 
-        insert_embedding(&conn, &event_id, "event", DEFAULT_EMBEDDING_MODEL, &[1.0, 0.0])
-            .expect("embedding inserts");
+        insert_embedding(
+            &conn,
+            &event_id,
+            "event",
+            DEFAULT_EMBEDDING_MODEL,
+            &[1.0, 0.0],
+        )
+        .expect("embedding inserts");
 
         let missing = load_events_missing_embeddings(&conn, 10).expect("missing reloads");
         assert!(missing.is_empty());

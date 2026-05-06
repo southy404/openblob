@@ -89,6 +89,7 @@ pub const KNOWN_TARGETS: &[(&str, &[&str])] = &[
 pub const STREAMING_SERVICE_ALIASES: &[(&str, &[&str])] = &[
     ("netflix", &["netflix", "netflx", "netfliks"]),
     ("youtube", &["youtube", "yt", "youtub", "jutube"]),
+    ("steam", &["steam", "steem", "stim"]),
     ("prime", &["prime", "prime video", "amazon prime"]),
     ("disney", &["disney", "disney plus", "disneyplus"]),
     ("twitch", &["twitch", "twuicth", "twich"]),

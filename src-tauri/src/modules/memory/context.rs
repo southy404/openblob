@@ -1,11 +1,11 @@
-use std::time::Duration;
-
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use serde::Serialize;
+use std::time::Duration;
 
 use crate::modules::memory::embeddings::{
-    cosine_similarity, embed_text_with_ollama, load_event_embeddings, load_sqlite_vec_event_matches,
+    cosine_similarity, embed_text_with_ollama, load_event_embeddings,
+    load_sqlite_vec_event_matches, log_embedding_failure_once,
 };
 use crate::modules::memory::events::PrivacyTier;
 use crate::modules::memory::facts::{load_active_memory_facts, ActiveMemoryFact};
@@ -67,6 +67,22 @@ pub fn build_memory_context_for_query_and_context(
     build_memory_context_from_connection(&conn, query, active_context.as_ref(), limit)
 }
 
+pub async fn build_memory_context_for_query_and_context_async(
+    query: Option<&str>,
+    active_context: Option<ActiveMemoryContext>,
+    limit: Option<usize>,
+) -> Result<MemoryContext, String> {
+    let query_vector = query_vector_for_context(query).await;
+    let conn = open_memory_database()?;
+    build_memory_context_from_connection_with_vector(
+        &conn,
+        query,
+        active_context.as_ref(),
+        limit,
+        query_vector.as_deref(),
+    )
+}
+
 pub fn build_memory_context_from_connection(
     conn: &Connection,
     query: Option<&str>,
@@ -75,8 +91,39 @@ pub fn build_memory_context_from_connection(
 ) -> Result<MemoryContext, String> {
     let facts = load_active_memory_facts(conn, 12)?;
     let summaries = load_recent_reflective_summaries(conn, 3)?;
-    let events = load_ranked_events(conn, query, active_context, normalized_limit(limit))?;
+    let events = load_ranked_events(conn, query, active_context, normalized_limit(limit), None)?;
     Ok(format_memory_context(&facts, &summaries, &events))
+}
+
+fn build_memory_context_from_connection_with_vector(
+    conn: &Connection,
+    query: Option<&str>,
+    active_context: Option<&ActiveMemoryContext>,
+    limit: Option<usize>,
+    query_vector: Option<&[f32]>,
+) -> Result<MemoryContext, String> {
+    let facts = load_active_memory_facts(conn, 12)?;
+    let summaries = load_recent_reflective_summaries(conn, 3)?;
+    let events = load_ranked_events(
+        conn,
+        query,
+        active_context,
+        normalized_limit(limit),
+        query_vector,
+    )?;
+    Ok(format_memory_context(&facts, &summaries, &events))
+}
+
+async fn query_vector_for_context(query: Option<&str>) -> Option<Vec<f32>> {
+    let query = query.map(str::trim).filter(|value| !value.is_empty())?;
+    match embed_text_with_ollama(query, Duration::from_millis(150), "memory_context").await {
+        Ok(vector) if !vector.is_empty() => Some(vector),
+        Err(err) => {
+            log_embedding_failure_once(&err);
+            None
+        }
+        _ => None,
+    }
 }
 
 fn normalized_limit(limit: Option<usize>) -> usize {
@@ -90,10 +137,14 @@ fn load_ranked_events(
     query: Option<&str>,
     active_context: Option<&ActiveMemoryContext>,
     limit: usize,
+    query_vector: Option<&[f32]>,
 ) -> Result<Vec<MemoryContextEvent>, String> {
     let query = query.map(str::trim).filter(|value| !value.is_empty());
     let mut events = if let Some(query) = query {
-        let mut events = load_vector_events(conn, query, limit)?;
+        let mut events = query_vector
+            .map(|vector| load_vector_events(conn, vector, limit))
+            .transpose()?
+            .unwrap_or_default();
         for event in load_fts_events(conn, query, limit.saturating_mul(3))? {
             if !events.iter().any(|existing| existing.id == event.id) {
                 events.push(event);
@@ -128,28 +179,23 @@ fn load_ranked_events(
 
 fn load_vector_events(
     conn: &Connection,
-    query: &str,
+    query_vector: &[f32],
     limit: usize,
 ) -> Result<Vec<MemoryContextEvent>, String> {
-    let query_vector = match embed_text_with_ollama(query, Duration::from_millis(150)) {
-        Ok(vector) if !vector.is_empty() => vector,
-        _ => return Ok(Vec::new()),
-    };
-
-    let mut scored = load_sqlite_vec_event_matches(conn, &query_vector, limit)?
+    let mut scored = load_sqlite_vec_event_matches(conn, query_vector, limit)?
         .into_iter()
         .map(|vector_match| (vector_match.target_id, vector_match.score))
         .collect::<Vec<_>>();
 
     if scored.is_empty() {
         scored = load_event_embeddings(conn, 512)?
-        .into_iter()
-        .map(|embedding| {
-            let score = cosine_similarity(&query_vector, &embedding.vector);
-            (embedding.target_id, score)
-        })
-        .filter(|(_, score)| *score > 0.0)
-        .collect::<Vec<_>>();
+            .into_iter()
+            .map(|embedding| {
+                let score = cosine_similarity(query_vector, &embedding.vector);
+                (embedding.target_id, score)
+            })
+            .filter(|(_, score)| *score > 0.0)
+            .collect::<Vec<_>>();
     }
 
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -240,7 +286,9 @@ fn load_recent_events(conn: &Connection, limit: usize) -> Result<Vec<MemoryConte
     collect_context_rows(rows)
 }
 
-fn collect_context_rows<F>(rows: rusqlite::MappedRows<'_, F>) -> Result<Vec<MemoryContextEvent>, String>
+fn collect_context_rows<F>(
+    rows: rusqlite::MappedRows<'_, F>,
+) -> Result<Vec<MemoryContextEvent>, String>
 where
     F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<MemoryContextEvent>,
 {
@@ -366,9 +414,10 @@ fn active_context_score(
     };
 
     let mut score = 0.0;
-    if let (Some(event_app), Some(active_app)) =
-        (event.app_name.as_deref(), active_context.app_name.as_deref())
-    {
+    if let (Some(event_app), Some(active_app)) = (
+        event.app_name.as_deref(),
+        active_context.app_name.as_deref(),
+    ) {
         if event_app.eq_ignore_ascii_case(active_app) {
             score += 0.65;
         }
@@ -513,11 +562,13 @@ mod tests {
 
         insert_memory_event(&conn, &event).expect("event inserts");
 
-        let context =
-            build_memory_context_from_connection(&conn, None, None, Some(10)).expect("context builds");
+        let context = build_memory_context_from_connection(&conn, None, None, Some(10))
+            .expect("context builds");
 
         assert_eq!(context.event_count, 1);
-        assert!(context.memory.starts_with("<memory>\n## Recent activity\n- "));
+        assert!(context
+            .memory
+            .starts_with("<memory>\n## Recent activity\n- "));
         assert!(context
             .memory
             .contains("[desktop/Terminal]: User ran the memory test suite. (success)"));
@@ -536,8 +587,8 @@ mod tests {
         );
         crate::modules::memory::facts::insert_memory_fact(&conn, &fact).expect("fact inserts");
 
-        let context =
-            build_memory_context_from_connection(&conn, None, None, Some(10)).expect("context builds");
+        let context = build_memory_context_from_connection(&conn, None, None, Some(10))
+            .expect("context builds");
 
         assert!(context.memory.contains("## Who you know"));
         assert!(context.memory.contains("user.name = Brandon"));
@@ -558,8 +609,8 @@ mod tests {
         crate::modules::memory::reflection::insert_reflective_summary(&conn, &summary)
             .expect("summary inserts");
 
-        let context =
-            build_memory_context_from_connection(&conn, None, None, Some(10)).expect("context builds");
+        let context = build_memory_context_from_connection(&conn, None, None, Some(10))
+            .expect("context builds");
 
         assert!(context.memory.contains("## Reflections"));
         assert!(context.memory.contains("User focused on memory retrieval."));
@@ -568,18 +619,14 @@ mod tests {
     #[test]
     fn metadata_only_events_do_not_expose_raw_input_without_summary() {
         let conn = open_memory_database_in_memory().expect("database opens");
-        let event = MemoryEvent::new(
-            MemoryEventKind::Snip,
-            "screen",
-            PrivacyTier::MetadataOnly,
-        )
-        .with_context_domain("screen")
-        .with_user_input("secret visible text");
+        let event = MemoryEvent::new(MemoryEventKind::Snip, "screen", PrivacyTier::MetadataOnly)
+            .with_context_domain("screen")
+            .with_user_input("secret visible text");
 
         insert_memory_event(&conn, &event).expect("event inserts");
 
-        let context =
-            build_memory_context_from_connection(&conn, None, None, Some(10)).expect("context builds");
+        let context = build_memory_context_from_connection(&conn, None, None, Some(10))
+            .expect("context builds");
 
         assert!(context.memory.contains("snip event from screen"));
         assert!(!context.memory.contains("secret visible text"));
@@ -603,8 +650,9 @@ mod tests {
         insert_memory_event(&conn, &relevant).expect("relevant event inserts");
         insert_memory_event(&conn, &irrelevant).expect("irrelevant event inserts");
 
-        let context = build_memory_context_from_connection(&conn, Some("NeuralScript"), None, Some(1))
-            .expect("context builds");
+        let context =
+            build_memory_context_from_connection(&conn, Some("NeuralScript"), None, Some(1))
+                .expect("context builds");
 
         assert!(context.memory.contains("NeuralScript parser"));
         assert!(!context.memory.contains("music website"));

@@ -51,6 +51,12 @@ fn is_direct_service_open_command(normalized: &str) -> bool {
             | "starte spotify"
             | "launch spotify"
             | "run spotify"
+            | "open steam"
+            | "oeffne steam"
+            | "start steam"
+            | "starte steam"
+            | "launch steam"
+            | "run steam"
             | "open twitch"
             | "oeffne twitch"
             | "start twitch"
@@ -68,12 +74,34 @@ pub fn parse_media_command(normalized: &str) -> Option<CompanionAction> {
         if is_direct_service_open_command(normalized) {
             return None;
         }
-        let has_content_verb =
-            contains_any_phrase(normalized, &["open ", "play ", "spiele ", "oeffne "]);
+        let has_content_verb = contains_any_phrase(
+            normalized,
+            &["open ", "play ", "spiele ", "spiel ", "oeffne ", "launch ", "starte ", "start "],
+        );
         if has_content_verb {
             let title = extract_stream_title(normalized, "youtube");
             if let Some(t) = title {
-                return Some(CompanionAction::YouTubeSearch { query: t });
+                return Some(CompanionAction::YouTubePlayTitle { title: t });
+            }
+        }
+        return None;
+    }
+
+    if matches!(service.as_deref(), Some("spotify" | "steam")) {
+        if is_direct_service_open_command(normalized) {
+            return None;
+        }
+        let has_content_verb = contains_any_phrase(
+            normalized,
+            &["open ", "play ", "spiele ", "spiel ", "oeffne ", "launch ", "starte ", "start "],
+        );
+        if has_content_verb {
+            let service_name = service.clone().expect("service exists");
+            if let Some(query) = extract_stream_title(normalized, &service_name) {
+                return Some(CompanionAction::PlayOnService {
+                    service: service_name,
+                    query,
+                });
             }
         }
         return None;
