@@ -364,8 +364,6 @@ function BubbleApp() {
 
   const t = BUBBLE_TEXTS[uiLang];
 
-  const t = BUBBLE_TEXTS[uiLang];
-
   const SpeechRecognitionCtor = useMemo(
     () => window.SpeechRecognition || window.webkitSpeechRecognition || null,
     []
