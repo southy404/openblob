@@ -13,6 +13,23 @@ type ContextPayload = {
   autoRun?: boolean;
 };
 
+type WakeWordDetectedPayload = {
+  phrase: string;
+  provider: string;
+  score: number;
+  detectedAt: string;
+};
+
+type WakeWordSettings = {
+  wake_word_enabled: boolean;
+  wake_word_auto_listen_enabled?: boolean;
+};
+
+type WakeWordStatus = {
+  state: string;
+  listening: boolean;
+};
+
 type OllamaResult = {
   content: string;
   model: string;
@@ -42,6 +59,7 @@ type SpeechRecognitionEventLike = {
 type BubbleMode = "command" | "chat";
 type UiLang = "en" | "de";
 type RouteState = "command" | "ollama" | "none";
+type VoiceCaptureSource = "shortcut" | "wake-word";
 
 type BlobPhase =
   | "idle"
@@ -68,6 +86,10 @@ type BubbleTexts = {
   localCommandFailed: string;
   listening: string;
   speechRecognitionUnsupported: string;
+  voiceInputUnavailable: string;
+  alreadyListening: string;
+  wakeWordDetected: string;
+  iHeardYou: string;
   voiceError: (msg: string) => string;
   microphoneError: (msg: string) => string;
   chattingWithModel: (model: string) => string;
@@ -128,6 +150,10 @@ const BUBBLE_TEXTS: Record<UiLang, BubbleTexts> = {
     localCommandFailed: "Local command failed.",
     listening: "Listening…",
     speechRecognitionUnsupported: "Speech recognition is not supported here.",
+    voiceInputUnavailable: "Voice input is not available.",
+    alreadyListening: "Already listening.",
+    wakeWordDetected: "Wake word detected.",
+    iHeardYou: "I heard you.",
     voiceError: (msg) => `Voice error: ${msg}`,
     microphoneError: (msg) => `Microphone error: ${msg}`,
     chattingWithModel: (model) => `Chatting with ${model}`,
@@ -165,6 +191,10 @@ const BUBBLE_TEXTS: Record<UiLang, BubbleTexts> = {
     listening: "Ich höre zu …",
     speechRecognitionUnsupported:
       "Spracherkennung wird hier nicht unterstützt.",
+    voiceInputUnavailable: "Spracheingabe ist nicht verfuegbar.",
+    alreadyListening: "Ich hoere schon zu.",
+    wakeWordDetected: "Wake word erkannt.",
+    iHeardYou: "Ja?",
     voiceError: (msg) => `Sprachfehler: ${msg}`,
     microphoneError: (msg) => `Mikrofonfehler: ${msg}`,
     chattingWithModel: (model) => `Chatte mit ${model}`,
@@ -361,8 +391,7 @@ function BubbleApp() {
   const listeningRef = useRef(listening);
   const busyRef = useRef(false);
   const phaseRef = useRef<BlobPhase>("idle");
-
-  const t = BUBBLE_TEXTS[uiLang];
+  const lastWakeVoiceAtRef = useRef(0);
 
   const t = BUBBLE_TEXTS[uiLang];
 
@@ -783,14 +812,28 @@ function BubbleApp() {
     await executeCommandOrAsk(text);
   };
 
-  const startVoiceInput = async () => {
+  const startVoiceInput = async (
+    source: VoiceCaptureSource = "shortcut"
+  ): Promise<boolean> => {
     if (!SpeechRecognitionCtor) {
-      setHint(t.speechRecognitionUnsupported);
+      setHint(
+        source === "wake-word"
+          ? t.voiceInputUnavailable
+          : t.speechRecognitionUnsupported
+      );
       await flashBlobAlert();
-      return;
+      return false;
     }
 
-    if (listeningRef.current || busyRef.current) return;
+    if (listeningRef.current) {
+      setHint(t.alreadyListening);
+      return false;
+    }
+
+    if (busyRef.current) {
+      setHint(t.processing);
+      return false;
+    }
 
     try {
       const recognition = new SpeechRecognitionCtor();
@@ -864,6 +907,7 @@ function BubbleApp() {
 
       recognitionRef.current = recognition;
       recognition.start();
+      return true;
     } catch (error) {
       setListening(false);
       listeningRef.current = false;
@@ -871,6 +915,7 @@ function BubbleApp() {
       finalVoiceTextRef.current = "";
       setHint(t.microphoneError(String(error)));
       await flashBlobAlert();
+      return false;
     }
   };
 
@@ -893,6 +938,7 @@ function BubbleApp() {
     let unlistenShow: null | (() => void) = null;
     let unlistenHide: null | (() => void) = null;
     let unlistenVoiceToggle: null | (() => void) = null;
+    let unlistenWakeWord: null | (() => void) = null;
 
     const setup = async () => {
       unlistenContext = await listen<ContextPayload>(
@@ -945,9 +991,71 @@ function BubbleApp() {
         if (listeningRef.current) {
           stopVoiceInput();
         } else {
-          await startVoiceInput();
+          await startVoiceInput("shortcut");
         }
       });
+
+      unlistenWakeWord = await listen<WakeWordDetectedPayload>(
+        "wake-word-detected",
+        async () => {
+          await fadeInAndShow();
+          setHint(t.wakeWordDetected);
+          await showSubtitle(t.iHeardYou, 1800);
+          await setBlobPhase("alert");
+
+          window.setTimeout(() => {
+            if (phaseRef.current === "alert") {
+              void setBlobPhase("idle");
+            }
+          }, 900);
+
+          const now = Date.now();
+
+          if (now - lastWakeVoiceAtRef.current < 2000) {
+            setHint(t.alreadyListening);
+            return;
+          }
+
+          if (listeningRef.current) {
+            setHint(t.alreadyListening);
+            return;
+          }
+
+          if (busyRef.current) {
+            setHint(t.processing);
+            return;
+          }
+
+          let settings: WakeWordSettings;
+          let status: WakeWordStatus;
+
+          try {
+            [settings, status] = await Promise.all([
+              invoke<WakeWordSettings>("get_wake_word_settings"),
+              invoke<WakeWordStatus>("get_wake_word_status"),
+            ]);
+          } catch (error) {
+            console.error("failed to read wake word status", error);
+            setHint(t.voiceInputUnavailable);
+            await flashBlobAlert();
+            return;
+          }
+
+          if (
+            !settings.wake_word_enabled ||
+            !settings.wake_word_auto_listen_enabled ||
+            (status.state !== "listening" && status.state !== "detected") ||
+            !status.listening
+          ) {
+            return;
+          }
+
+          lastWakeVoiceAtRef.current = now;
+          setHint(t.iHeardYou);
+          await sleep(180);
+          await startVoiceInput("wake-word");
+        }
+      );
     };
 
     void setup();
@@ -958,6 +1066,7 @@ function BubbleApp() {
       unlistenShow?.();
       unlistenHide?.();
       unlistenVoiceToggle?.();
+      unlistenWakeWord?.();
     };
   }, [uiLang, t]);
 
@@ -980,7 +1089,7 @@ function BubbleApp() {
         event.preventDefault();
 
         if (listeningRef.current) stopVoiceInput();
-        else void startVoiceInput();
+        else void startVoiceInput("shortcut");
       }
     };
 
@@ -1352,7 +1461,7 @@ function BubbleApp() {
                 className={`icon-btn ${listening ? "icon-btn-active" : ""}`}
                 onClick={() => {
                   if (listeningRef.current) stopVoiceInput();
-                  else void startVoiceInput();
+                  else void startVoiceInput("shortcut");
                 }}
                 title={t.speechRecognitionTitle(voiceShortcut)}
                 disabled={busy}

@@ -32,6 +32,8 @@ pub struct WakeWordSettings {
     pub wake_word_provider: String,
     #[serde(default)]
     pub wake_word_model_path: Option<String>,
+    #[serde(default)]
+    pub wake_word_auto_listen_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,6 +180,7 @@ fn settings_from_config() -> Result<WakeWordSettings, String> {
         wake_word_sensitivity: config.wake_word_sensitivity,
         wake_word_provider: config.wake_word_provider,
         wake_word_model_path: config.wake_word_model_path,
+        wake_word_auto_listen_enabled: config.wake_word_auto_listen_enabled,
     }))
 }
 
@@ -238,6 +241,7 @@ fn status_for_state(
             wake_word_sensitivity: default_wake_word_sensitivity(),
             wake_word_provider: default_wake_word_provider(),
             wake_word_model_path: None,
+            wake_word_auto_listen_enabled: false,
         })
     });
     status_for_state_with_settings(&settings, state, message, last_error)
@@ -1104,6 +1108,7 @@ pub fn update_wake_word_settings(settings: WakeWordSettings) -> Result<WakeWordS
     config.wake_word_sensitivity = settings.wake_word_sensitivity;
     config.wake_word_provider = settings.wake_word_provider.clone();
     config.wake_word_model_path = settings.wake_word_model_path.clone();
+    config.wake_word_auto_listen_enabled = settings.wake_word_auto_listen_enabled;
     save_companion_config(&config)?;
 
     if provider_changed || disabled {
