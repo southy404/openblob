@@ -11,6 +11,7 @@ import {
   Dice5,
   MonitorSmartphone,
   Search,
+  Radio,
   TerminalSquare,
   ChevronDown,
 } from "lucide-react";
@@ -25,6 +26,45 @@ type DevPayload = {
 type UiLang = "en" | "de";
 
 type RouteState = "none" | "command" | "ollama";
+type WakeWordProvider = "none" | "porcupine" | "mic-test" | "mock" | "disabled";
+type WakeWordStatusName =
+  | "disabled"
+  | "stopped"
+  | "starting"
+  | "listening"
+  | "detected"
+  | "no_input_device"
+  | "permission_error"
+  | "provider_missing"
+  | "error";
+
+type WakeWordSettings = {
+  wake_word_enabled: boolean;
+  wake_word_phrase: string;
+  wake_word_sensitivity: number;
+  wake_word_provider: WakeWordProvider;
+};
+
+type WakeWordStatus = {
+  status: WakeWordStatusName;
+  state: WakeWordStatusName;
+  message: string;
+  enabled: boolean;
+  phrase: string;
+  provider: WakeWordProvider;
+  sensitivity: number;
+  listening: boolean;
+  detected: boolean;
+  provider_configured: boolean;
+  selected_input_device?: string | null;
+  available_input_devices: string[];
+  last_error?: string | null;
+  last_started_at?: string | null;
+  last_stopped_at?: string | null;
+  last_audio_at?: string | null;
+  audio_chunks_seen: number;
+  input_level?: number | null;
+};
 
 type LocalizedText = {
   windowTitle: string;
@@ -42,6 +82,22 @@ type LocalizedText = {
   language: string;
   save: string;
   saving: string;
+
+  wakeWord: string;
+  wakeWordEnabled: string;
+  wakeWordPhrase: string;
+  wakeWordSensitivity: string;
+  wakeWordProvider: string;
+  wakeWordStatus: string;
+  wakeWordSave: string;
+  wakeWordRefresh: string;
+  wakeWordStart: string;
+  wakeWordStop: string;
+  wakeWordInputDevice: string;
+  wakeWordLastAudio: string;
+  wakeWordChunks: string;
+  wakeWordInputLevel: string;
+  wakeWordLastError: string;
 
   searchPlaceholder: string;
   noCommandsFound: string;
@@ -91,6 +147,22 @@ const TEXTS: Record<UiLang, LocalizedText> = {
     save: "Save",
     saving: "Saving...",
 
+    wakeWord: "Wake Word",
+    wakeWordEnabled: "Enabled",
+    wakeWordPhrase: "Phrase",
+    wakeWordSensitivity: "Sensitivity",
+    wakeWordProvider: "Provider",
+    wakeWordStatus: "Status",
+    wakeWordSave: "Save Wake Word",
+    wakeWordRefresh: "Refresh",
+    wakeWordStart: "Start Listener",
+    wakeWordStop: "Stop Listener",
+    wakeWordInputDevice: "Input",
+    wakeWordLastAudio: "Last audio",
+    wakeWordChunks: "Chunks",
+    wakeWordInputLevel: "Level",
+    wakeWordLastError: "Last error",
+
     searchPlaceholder:
       "Filter commands, e.g. youtube, timer, browser, volume, shutdown ...",
     noCommandsFound: "No commands found for this search.",
@@ -119,6 +191,22 @@ const TEXTS: Record<UiLang, LocalizedText> = {
     language: "Sprache",
     save: "Speichern",
     saving: "Speichert...",
+
+    wakeWord: "Wake Word",
+    wakeWordEnabled: "Aktiviert",
+    wakeWordPhrase: "Phrase",
+    wakeWordSensitivity: "Empfindlichkeit",
+    wakeWordProvider: "Provider",
+    wakeWordStatus: "Status",
+    wakeWordSave: "Wake Word speichern",
+    wakeWordRefresh: "Aktualisieren",
+    wakeWordStart: "Listener starten",
+    wakeWordStop: "Listener stoppen",
+    wakeWordInputDevice: "Eingang",
+    wakeWordLastAudio: "Letztes Audio",
+    wakeWordChunks: "Chunks",
+    wakeWordInputLevel: "Pegel",
+    wakeWordLastError: "Letzter Fehler",
 
     searchPlaceholder:
       "Befehle filtern, z. B. youtube, timer, browser, volume, shutdown ...",
@@ -539,6 +627,33 @@ function DevWindow() {
   const [ownerName, setOwnerName] = useState("");
   const [language, setLanguage] = useState<UiLang>("en");
   const [saving, setSaving] = useState(false);
+  const [wakeWordSettings, setWakeWordSettings] = useState<WakeWordSettings>({
+    wake_word_enabled: false,
+    wake_word_phrase: "hey blob",
+    wake_word_sensitivity: 0.5,
+    wake_word_provider: "none",
+  });
+  const [wakeWordStatus, setWakeWordStatus] = useState<WakeWordStatus>({
+    status: "disabled",
+    state: "disabled",
+    message: "Wake word is disabled.",
+    enabled: false,
+    phrase: "hey blob",
+    provider: "none",
+    sensitivity: 0.5,
+    listening: false,
+    detected: false,
+    provider_configured: false,
+    selected_input_device: null,
+    available_input_devices: [],
+    last_error: null,
+    last_started_at: null,
+    last_stopped_at: null,
+    last_audio_at: null,
+    audio_chunks_seen: 0,
+    input_level: null,
+  });
+  const [wakeWordSaving, setWakeWordSaving] = useState(false);
 
   const t = TEXTS[uiLang];
   const commandGroups = useMemo(() => getCommandGroups(uiLang), [uiLang]);
@@ -621,6 +736,54 @@ function DevWindow() {
     void loadIdentity();
   }, []);
 
+  const refreshWakeWord = async () => {
+    try {
+      const [settings, status] = await Promise.all([
+        invoke<WakeWordSettings>("get_wake_word_settings"),
+        invoke<WakeWordStatus>("get_wake_word_status"),
+      ]);
+
+      setWakeWordSettings(settings);
+      setWakeWordStatus(status);
+    } catch (err) {
+      console.error("failed to load wake word settings", err);
+      setWakeWordStatus({
+        status: "error",
+        state: "error",
+        message: String(err),
+        enabled: wakeWordSettings.wake_word_enabled,
+        phrase: wakeWordSettings.wake_word_phrase,
+        provider: wakeWordSettings.wake_word_provider,
+        sensitivity: wakeWordSettings.wake_word_sensitivity,
+        listening: false,
+        detected: false,
+        provider_configured: false,
+        selected_input_device: null,
+        available_input_devices: [],
+        last_error: String(err),
+        last_started_at: null,
+        last_stopped_at: null,
+        last_audio_at: null,
+        audio_chunks_seen: 0,
+        input_level: null,
+      });
+    }
+  };
+
+  useEffect(() => {
+    void refreshWakeWord();
+
+    const interval = window.setInterval(() => {
+      void invoke<WakeWordStatus>("get_wake_word_status")
+        .then(setWakeWordStatus)
+        .catch((err) => {
+          console.error("failed to refresh wake word status", err);
+        });
+    }, 3000);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
   const closeWindow = async () => {
     try {
       await appWindow.hide();
@@ -661,6 +824,61 @@ function DevWindow() {
       console.error("failed to save identity", err);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const saveWakeWordSettings = async () => {
+    try {
+      setWakeWordSaving(true);
+
+      const saved = await invoke<WakeWordSettings>("update_wake_word_settings", {
+        settings: wakeWordSettings,
+      });
+      setWakeWordSettings(saved);
+      const nextStatus = await invoke<WakeWordStatus>("get_wake_word_status");
+      setWakeWordStatus(nextStatus);
+    } catch (err) {
+      console.error("failed to save wake word settings", err);
+      setWakeWordStatus({
+        status: "error",
+        state: "error",
+        message: String(err),
+        enabled: wakeWordSettings.wake_word_enabled,
+        phrase: wakeWordSettings.wake_word_phrase,
+        provider: wakeWordSettings.wake_word_provider,
+        sensitivity: wakeWordSettings.wake_word_sensitivity,
+        listening: false,
+        detected: false,
+        provider_configured: false,
+        selected_input_device: null,
+        available_input_devices: [],
+        last_error: String(err),
+        last_started_at: null,
+        last_stopped_at: null,
+        last_audio_at: null,
+        audio_chunks_seen: 0,
+        input_level: null,
+      });
+    } finally {
+      setWakeWordSaving(false);
+    }
+  };
+
+  const startWakeWordListener = async () => {
+    try {
+      const nextStatus = await invoke<WakeWordStatus>("start_wake_word_listener");
+      setWakeWordStatus(nextStatus);
+    } catch (err) {
+      console.error("failed to start wake word listener", err);
+    }
+  };
+
+  const stopWakeWordListener = async () => {
+    try {
+      const nextStatus = await invoke<WakeWordStatus>("stop_wake_word_listener");
+      setWakeWordStatus(nextStatus);
+    } catch (err) {
+      console.error("failed to stop wake word listener", err);
     }
   };
 
@@ -924,6 +1142,106 @@ function DevWindow() {
           align-items: end;
         }
 
+        .wakeGrid {
+          display: grid;
+          grid-template-columns: minmax(130px, 0.7fr) minmax(150px, 1fr) minmax(130px, 0.8fr) minmax(160px, 1fr) auto;
+          gap: 10px;
+          align-items: end;
+        }
+
+        .checkField {
+          display: flex;
+          min-height: 42px;
+          align-items: center;
+          gap: 10px;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.07);
+          padding: 0 12px;
+          color: rgba(255,255,255,0.82);
+          font-size: 13px;
+        }
+
+        .checkField input {
+          width: 16px;
+          height: 16px;
+          accent-color: #75A3FF;
+        }
+
+        .rangeInput {
+          width: 100%;
+          accent-color: #75A3FF;
+        }
+
+        .statusPill {
+          min-height: 42px;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.07);
+          padding: 8px 12px;
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          color: rgba(255,255,255,0.78);
+          font-size: 12px;
+          line-height: 1.35;
+        }
+
+        .statusDot {
+          width: 8px;
+          height: 8px;
+          border-radius: 999px;
+          background: rgba(255,255,255,0.38);
+          flex-shrink: 0;
+        }
+
+        .statusPill.listening .statusDot {
+          background: #64f0ad;
+        }
+
+        .statusPill.detected .statusDot {
+          background: #75A3FF;
+        }
+
+        .statusPill.error .statusDot {
+          background: #ff8a8a;
+        }
+
+        .statusPill.no_input_device .statusDot,
+        .statusPill.permission_error .statusDot,
+        .statusPill.provider_missing .statusDot {
+          background: #ffd166;
+        }
+
+        .wakeMetrics {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 10px;
+        }
+
+        .wakeMetric {
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.08);
+          background: rgba(255,255,255,0.045);
+          padding: 10px 12px;
+          min-width: 0;
+        }
+
+        .wakeMetric .metricLabel {
+          font-size: 10px;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          opacity: 0.52;
+          margin-bottom: 5px;
+        }
+
+        .wakeMetric .metricValue {
+          font-size: 12px;
+          line-height: 1.4;
+          color: rgba(255,255,255,0.76);
+          word-break: break-word;
+        }
+
         .field {
           display: flex;
           flex-direction: column;
@@ -1155,6 +1473,14 @@ function DevWindow() {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
 
+          .wakeGrid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .wakeMetrics {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
           .saveBtn {
             width: 100%;
           }
@@ -1192,6 +1518,14 @@ function DevWindow() {
           }
 
           .identityGrid {
+            grid-template-columns: 1fr;
+          }
+
+          .wakeGrid {
+            grid-template-columns: 1fr;
+          }
+
+          .wakeMetrics {
             grid-template-columns: 1fr;
           }
 
@@ -1324,6 +1658,167 @@ function DevWindow() {
                 >
                   {saving ? t.saving : t.save}
                 </button>
+              </div>
+            </div>
+
+            <div className="card identityCard">
+              <div className="label">{t.wakeWord}</div>
+
+              <div className="wakeGrid">
+                <div className="field">
+                  <div className="fieldLabel">{t.wakeWordEnabled}</div>
+                  <label className="checkField">
+                    <input
+                      type="checkbox"
+                      checked={wakeWordSettings.wake_word_enabled}
+                      onChange={(e) =>
+                        setWakeWordSettings((prev) => ({
+                          ...prev,
+                          wake_word_enabled: e.target.checked,
+                        }))
+                      }
+                    />
+                    <span>{wakeWordSettings.wake_word_enabled ? "on" : "off"}</span>
+                  </label>
+                </div>
+
+                <div className="field">
+                  <div className="fieldLabel">{t.wakeWordPhrase}</div>
+                  <input
+                    className="textInput"
+                    value={wakeWordSettings.wake_word_phrase}
+                    onChange={(e) =>
+                      setWakeWordSettings((prev) => ({
+                        ...prev,
+                        wake_word_phrase: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="field">
+                  <div className="fieldLabel">{t.wakeWordProvider}</div>
+                  <select
+                    className="selectInput"
+                    value={wakeWordSettings.wake_word_provider}
+                    onChange={(e) =>
+                      setWakeWordSettings((prev) => ({
+                        ...prev,
+                        wake_word_provider: e.target.value as WakeWordProvider,
+                      }))
+                    }
+                  >
+                    <option value="none">none</option>
+                    <option value="disabled">disabled</option>
+                    <option value="mic-test">mic-test</option>
+                    <option value="mock">mock</option>
+                    <option value="porcupine">porcupine</option>
+                  </select>
+                </div>
+
+                <div className="field">
+                  <div className="fieldLabel">
+                    {t.wakeWordSensitivity}{" "}
+                    {Math.round(wakeWordSettings.wake_word_sensitivity * 100)}%
+                  </div>
+                  <input
+                    className="rangeInput"
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={wakeWordSettings.wake_word_sensitivity}
+                    onChange={(e) =>
+                      setWakeWordSettings((prev) => ({
+                        ...prev,
+                        wake_word_sensitivity: Number(e.target.value),
+                      }))
+                    }
+                  />
+                </div>
+
+                <button
+                  className="saveBtn"
+                  onClick={() => void saveWakeWordSettings()}
+                  disabled={wakeWordSaving}
+                  type="button"
+                >
+                  {wakeWordSaving ? t.saving : t.wakeWordSave}
+                </button>
+
+                <button
+                  className="saveBtn"
+                  onClick={() => void startWakeWordListener()}
+                  disabled={!wakeWordSettings.wake_word_enabled}
+                  type="button"
+                >
+                  {t.wakeWordStart}
+                </button>
+
+                <button
+                  className="saveBtn"
+                  onClick={() => void stopWakeWordListener()}
+                  type="button"
+                >
+                  {t.wakeWordStop}
+                </button>
+              </div>
+
+              <div className={`statusPill ${wakeWordStatus.state}`}>
+                <Radio size={14} />
+                <span className="statusDot" />
+                <span>
+                  {t.wakeWordStatus}: {wakeWordStatus.state}
+                  {wakeWordStatus.message ? ` - ${wakeWordStatus.message}` : ""}
+                </span>
+                <button
+                  className="saveBtn"
+                  onClick={() => void refreshWakeWord()}
+                  type="button"
+                >
+                  {t.wakeWordRefresh}
+                </button>
+              </div>
+
+              <div className="wakeMetrics">
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordInputDevice}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.selected_input_device ||
+                      wakeWordStatus.available_input_devices[0] ||
+                      "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordLastAudio}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.last_audio_at || "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordChunks}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.audio_chunks_seen}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordInputLevel}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.input_level == null
+                      ? "none"
+                      : `${Math.round(wakeWordStatus.input_level * 100)}%`}
+                  </div>
+                </div>
+
+                {wakeWordStatus.last_error && (
+                  <div className="wakeMetric">
+                    <div className="metricLabel">{t.wakeWordLastError}</div>
+                    <div className="metricValue">{wakeWordStatus.last_error}</div>
+                  </div>
+                )}
               </div>
             </div>
 

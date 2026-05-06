@@ -8,6 +8,8 @@ pub const DEFAULT_PRIMARY_LANGUAGE: &str = "en";
 pub const SUPPORTED_LANGUAGES: &[&str] = &["en", "de"];
 pub const DEFAULT_CHAT_MODEL: &str = "llama3.1:8b";
 pub const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text";
+pub const DEFAULT_WAKE_WORD_PHRASE: &str = "hey blob";
+pub const DEFAULT_WAKE_WORD_PROVIDER: &str = "none";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppearanceConfig {
@@ -114,6 +116,14 @@ pub struct CompanionConfig {
     pub embedding_model: String,
     pub voice_enabled: bool,
     pub voice_id: String,
+    #[serde(default)]
+    pub wake_word_enabled: bool,
+    #[serde(default = "default_wake_word_phrase")]
+    pub wake_word_phrase: String,
+    #[serde(default = "default_wake_word_sensitivity")]
+    pub wake_word_sensitivity: f32,
+    #[serde(default = "default_wake_word_provider")]
+    pub wake_word_provider: String,
     pub appearance: AppearanceConfig,
     pub behavior: BehaviorConfig,
     pub privacy: PrivacyConfig,
@@ -133,6 +143,10 @@ impl Default for CompanionConfig {
             embedding_model: default_embedding_model(),
             voice_enabled: true,
             voice_id: "default".into(),
+            wake_word_enabled: false,
+            wake_word_phrase: default_wake_word_phrase(),
+            wake_word_sensitivity: default_wake_word_sensitivity(),
+            wake_word_provider: default_wake_word_provider(),
             appearance: AppearanceConfig::default(),
             behavior: BehaviorConfig::default(),
             privacy: PrivacyConfig::default(),
@@ -180,6 +194,11 @@ impl CompanionConfig {
         if self.voice_id.trim().is_empty() {
             self.voice_id = "default".into();
         }
+
+        self.wake_word_phrase =
+            normalize_wake_word_phrase(&self.wake_word_phrase, DEFAULT_WAKE_WORD_PHRASE);
+        self.wake_word_sensitivity = self.wake_word_sensitivity.clamp(0.0, 1.0);
+        self.wake_word_provider = normalize_wake_word_provider(&self.wake_word_provider);
 
         self
     }
@@ -236,6 +255,18 @@ fn default_embedding_model() -> String {
     DEFAULT_EMBEDDING_MODEL.into()
 }
 
+pub fn default_wake_word_phrase() -> String {
+    DEFAULT_WAKE_WORD_PHRASE.into()
+}
+
+pub fn default_wake_word_sensitivity() -> f32 {
+    0.5
+}
+
+pub fn default_wake_word_provider() -> String {
+    DEFAULT_WAKE_WORD_PROVIDER.into()
+}
+
 fn default_memory_prompt_enabled() -> bool {
     true
 }
@@ -285,5 +316,24 @@ fn normalize_model_name(input: &str, fallback: &str) -> String {
         fallback.into()
     } else {
         trimmed.into()
+    }
+}
+
+fn normalize_wake_word_phrase(input: &str, fallback: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        fallback.into()
+    } else {
+        trimmed.into()
+    }
+}
+
+pub fn normalize_wake_word_provider(input: &str) -> String {
+    match input.trim().to_lowercase().as_str() {
+        "porcupine" => "porcupine".into(),
+        "mic-test" | "mictest" | "mic_test" | "dev-mic-test" => "mic-test".into(),
+        "mock" => "mock".into(),
+        "disabled" => "disabled".into(),
+        _ => DEFAULT_WAKE_WORD_PROVIDER.into(),
     }
 }

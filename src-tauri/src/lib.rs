@@ -30,6 +30,7 @@ mod modules {
     pub mod transcript;
     pub mod tts;
     pub mod voice;
+    pub mod wake_word;
     pub mod windows_discovery;
 }
 
@@ -1019,6 +1020,11 @@ pub fn run() {
             save_current_transcript,
             summarize_current_transcript,
             process_transcript,
+            modules::wake_word::get_wake_word_settings,
+            modules::wake_word::update_wake_word_settings,
+            modules::wake_word::start_wake_word_listener,
+            modules::wake_word::stop_wake_word_listener,
+            modules::wake_word::get_wake_word_status,
             modules::system::get_system_volume,
             modules::system::set_system_volume,
             modules::system::change_system_volume,
