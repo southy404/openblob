@@ -483,8 +483,7 @@ impl WakeWordProvider for MockWakeWordProvider {
             provider_configured: true,
             model_path: None,
             model_missing: false,
-            message: "Mock wake-word provider is active. Detection is simulated for dev testing."
-                .into(),
+            message: "Mock wake-word detection is active for development only.".into(),
             last_error: None,
             start_allowed: true,
             start_state: "listening".into(),
@@ -591,7 +590,7 @@ impl WakeWordProvider for LocalWakeWordProvider {
             };
         }
 
-        let message = "Wake-word model found, but local inference runtime is not implemented yet."
+        let message = "Local wake-word model found, but runtime inference is not implemented yet."
             .to_string();
         WakeWordProviderAvailability {
             provider_state: "model_found_runtime_not_implemented".into(),
@@ -602,7 +601,7 @@ impl WakeWordProvider for LocalWakeWordProvider {
             message: message.clone(),
             last_error: Some(message),
             start_allowed: false,
-            start_state: "provider_missing".into(),
+            start_state: "provider_not_implemented".into(),
         }
     }
 
@@ -614,7 +613,7 @@ impl WakeWordProvider for LocalWakeWordProvider {
             )
         } else {
             WakeWordProviderResult::ProviderMissing(
-                "Wake-word model found, but local inference runtime is not implemented yet.".into(),
+                "Local wake-word model found, but runtime inference is not implemented yet.".into(),
             )
         }
     }
@@ -967,7 +966,7 @@ fn run_microphone_thread(
 fn listening_message(provider: &str) -> &'static str {
     match provider {
         "mic-test" => "Mic test is active. No wake-word model is running.",
-        "mock" => "Mock wake-word provider is active. Detection is simulated for dev testing.",
+        "mock" => "Mock wake-word detection is active for development only.",
         _ => "Local wake word listener is active.",
     }
 }
@@ -1054,6 +1053,7 @@ fn handle_wake_word_detected(
         log(format!("could not emit wake-word-detected event: {err}"));
     }
 
+    // TODO: Wire this event to the existing voice-capture flow once there is a safe shared helper.
     log(format!(
         "wake word detected; provider={provider}, phrase={}, score={score:.3}",
         settings.wake_word_phrase

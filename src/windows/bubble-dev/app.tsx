@@ -43,6 +43,7 @@ type WakeWordStatusName =
   | "permission_error"
   | "provider_missing"
   | "model_missing"
+  | "provider_not_implemented"
   | "error";
 
 type WakeWordSettings = {
@@ -1350,7 +1351,8 @@ function DevWindow() {
         .statusPill.no_input_device .statusDot,
         .statusPill.permission_error .statusDot,
         .statusPill.provider_missing .statusDot,
-        .statusPill.model_missing .statusDot {
+        .statusPill.model_missing .statusDot,
+        .statusPill.provider_not_implemented .statusDot {
           background: #ffd166;
         }
 
@@ -1949,7 +1951,7 @@ function DevWindow() {
                 {wakeWordStatus.provider === "mic-test" &&
                   "Mic test is active. No wake-word model is running."}
                 {wakeWordStatus.provider === "mock" &&
-                  "Mock wake-word provider is active. Detection is simulated for dev testing."}
+                  "Mock wake-word detection is active for development only."}
                 {(wakeWordStatus.provider === "local-openwakeword" ||
                   wakeWordStatus.provider === "local-wakeword") &&
                   wakeWordStatus.model_missing &&
@@ -1958,7 +1960,7 @@ function DevWindow() {
                   wakeWordStatus.provider === "local-wakeword") &&
                   !wakeWordStatus.model_missing &&
                   wakeWordModelStatus.model_exists &&
-                  "Wake-word model found."}
+                  "Local wake-word model found, but runtime inference is not implemented yet."}
                 {wakeWordStatus.state === "detected" && " Wake word detected."}
                 {wakeWordStatus.state === "no_input_device" &&
                   "No microphone input device is available."}
