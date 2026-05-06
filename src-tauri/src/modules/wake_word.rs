@@ -1,6 +1,7 @@
 use chrono::Utc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Mutex, OnceLock};
@@ -19,6 +20,9 @@ const FRAME_QUEUE_CAPACITY: usize = 8;
 const MOCK_DETECTION_COOLDOWN_MS: u64 = 2_000;
 const DETECTED_STATE_MS: u64 = 1_500;
 const WAKE_WORD_MODEL_EXTENSIONS: [&str; 4] = ["onnx", "tflite", "bin", "json"];
+const DEFAULT_WAKE_WORD_SAMPLE_RATE: u32 = 16_000;
+const DEFAULT_WAKE_WORD_FRAME_MS: u32 = 80;
+const DEFAULT_WAKE_WORD_THRESHOLD: f32 = 0.5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WakeWordSettings {
@@ -59,6 +63,12 @@ pub struct WakeWordStatus {
     pub provider_state: String,
     pub model_path: Option<String>,
     pub model_missing: bool,
+    pub runtime_state: String,
+    pub manifest_path: Option<String>,
+    pub manifest_valid: bool,
+    pub missing_files: Vec<String>,
+    pub sample_rate: Option<u32>,
+    pub threshold: Option<f32>,
     pub detection_count: u64,
     pub last_detected_at: Option<String>,
     pub last_detection_score: Option<f32>,
@@ -73,9 +83,44 @@ pub struct WakeWordModelStatus {
     pub resolved_model_path: Option<String>,
     pub model_exists: bool,
     pub model_missing: bool,
+    pub manifest_path: Option<String>,
+    pub manifest_valid: bool,
+    pub missing_files: Vec<String>,
+    pub runtime: Option<String>,
+    pub phrase: Option<String>,
+    pub sample_rate: Option<u32>,
+    pub threshold: Option<f32>,
     pub discovered_models: Vec<String>,
     pub search_paths: Vec<String>,
     pub provider: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WakeWordBundleManifest {
+    id: Option<String>,
+    provider: Option<String>,
+    phrase: Option<String>,
+    runtime: Option<String>,
+    #[serde(rename = "sampleRate")]
+    sample_rate: Option<u32>,
+    #[serde(rename = "frameMs")]
+    frame_ms: Option<u32>,
+    threshold: Option<f32>,
+    models: WakeWordBundleModels,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WakeWordBundleModels {
+    melspectrogram: Option<String>,
+    embedding: Option<String>,
+    classifier: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct WakeWordModelBundle {
+    manifest_path: PathBuf,
+    manifest: WakeWordBundleManifest,
+    missing_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,10 +135,16 @@ struct WakeWordDetectedEvent {
 #[derive(Debug, Clone)]
 struct WakeWordProviderAvailability {
     provider_state: String,
+    runtime_state: String,
     provider_ready: bool,
     provider_configured: bool,
     model_path: Option<String>,
     model_missing: bool,
+    manifest_path: Option<String>,
+    manifest_valid: bool,
+    missing_files: Vec<String>,
+    sample_rate: Option<u32>,
+    threshold: Option<f32>,
     message: String,
     last_error: Option<String>,
     start_allowed: bool,
@@ -105,12 +156,20 @@ enum WakeWordProviderResult {
     Detected { score: f32, phrase: String },
     ModelMissing(String),
     ProviderMissing(String),
+    RuntimeMissing(String),
+    InvalidModelBundle(String),
     Error(String),
 }
 
 trait WakeWordProvider: Send {
     fn name(&self) -> &'static str;
     fn is_available(&self) -> WakeWordProviderAvailability;
+    fn target_sample_rate(&self) -> u32 {
+        DEFAULT_WAKE_WORD_SAMPLE_RATE
+    }
+    fn frame_ms(&self) -> u32 {
+        DEFAULT_WAKE_WORD_FRAME_MS
+    }
     fn process_audio_frame(&mut self, frame: &[f32], sample_rate: u32) -> WakeWordProviderResult;
 }
 
@@ -131,6 +190,22 @@ struct MockWakeWordProvider {
 struct LocalWakeWordProvider {
     provider_name: &'static str,
     model_status: WakeWordModelStatus,
+}
+
+struct OnnxWakeWordRuntime;
+
+impl OnnxWakeWordRuntime {
+    fn load(_bundle: &WakeWordModelBundle) -> Result<Self, String> {
+        Err(
+            "ONNX Runtime integration is not linked yet. Install a local openWakeWord ONNX runtime bundle before enabling real inference."
+                .into(),
+        )
+    }
+
+    #[allow(dead_code)]
+    fn run_inference_frame(&mut self, _frame: &[f32]) -> Result<f32, String> {
+        Err("ONNX wake-word inference is not available in this build.".into())
+    }
 }
 
 static WAKE_WORD_STATUS: OnceLock<Mutex<WakeWordStatus>> = OnceLock::new();
@@ -220,6 +295,12 @@ fn base_status(settings: &WakeWordSettings) -> WakeWordStatus {
         provider_state: availability.provider_state,
         model_path: availability.model_path,
         model_missing: availability.model_missing,
+        runtime_state: availability.runtime_state,
+        manifest_path: availability.manifest_path,
+        manifest_valid: availability.manifest_valid,
+        missing_files: availability.missing_files,
+        sample_rate: availability.sample_rate,
+        threshold: availability.threshold,
         detection_count: 0,
         last_detected_at: None,
         last_detection_score: None,
@@ -275,6 +356,12 @@ fn apply_settings_to_status(status: &mut WakeWordStatus, settings: &WakeWordSett
     status.provider_state = availability.provider_state;
     status.model_path = availability.model_path;
     status.model_missing = availability.model_missing;
+    status.runtime_state = availability.runtime_state;
+    status.manifest_path = availability.manifest_path;
+    status.manifest_valid = availability.manifest_valid;
+    status.missing_files = availability.missing_files;
+    status.sample_rate = availability.sample_rate;
+    status.threshold = availability.threshold;
     status.provider_ready = availability.provider_ready;
     status.provider_error = availability.last_error;
 }
@@ -341,6 +428,30 @@ fn is_supported_model_file(path: &Path) -> bool {
             .unwrap_or(false)
 }
 
+fn manifest_path_for_bundle(path: &Path) -> Option<PathBuf> {
+    if path.is_dir() {
+        let manifest_path = path.join("manifest.json");
+        if manifest_path.is_file() {
+            return Some(manifest_path);
+        }
+    }
+
+    if path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("manifest.json"))
+        .unwrap_or(false)
+    {
+        return Some(path.to_path_buf());
+    }
+
+    None
+}
+
+fn is_model_candidate(path: &Path) -> bool {
+    is_supported_model_file(path) || manifest_path_for_bundle(path).is_some()
+}
+
 fn discover_wake_word_model_paths() -> Vec<PathBuf> {
     let mut models = Vec::new();
 
@@ -349,15 +460,18 @@ fn discover_wake_word_model_paths() -> Vec<PathBuf> {
             continue;
         };
 
+        let mut search_path_models = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
-            if is_supported_model_file(&path) {
-                models.push(path);
+            if is_model_candidate(&path) {
+                search_path_models.push(path);
             }
         }
+
+        search_path_models.sort();
+        models.extend(search_path_models);
     }
 
-    models.sort();
     models.dedup();
     models
 }
@@ -387,6 +501,49 @@ fn resolve_configured_model_path(raw_path: &str, search_paths: &[PathBuf]) -> Op
     Some(candidate)
 }
 
+fn load_model_bundle(path: &Path) -> Result<WakeWordModelBundle, String> {
+    let manifest_path = manifest_path_for_bundle(path).ok_or_else(|| {
+        "Local wake-word model bundle is invalid: manifest.json is missing.".to_string()
+    })?;
+    let manifest_text = fs::read_to_string(&manifest_path)
+        .map_err(|err| format!("Could not read wake-word manifest: {err}"))?;
+    let manifest = serde_json::from_str::<WakeWordBundleManifest>(&manifest_text)
+        .map_err(|err| format!("Wake-word manifest is invalid JSON: {err}"))?;
+    let root_path = manifest_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| path.to_path_buf());
+    let mut missing_files = Vec::new();
+
+    for (label, file_name) in [
+        ("melspectrogram", manifest.models.melspectrogram.as_deref()),
+        ("embedding", manifest.models.embedding.as_deref()),
+        ("classifier", manifest.models.classifier.as_deref()),
+    ] {
+        match file_name {
+            Some(file_name) if !file_name.trim().is_empty() => {
+                if !root_path.join(file_name).is_file() {
+                    missing_files.push(format!("{label}: {file_name}"));
+                }
+            }
+            _ => missing_files.push(format!("{label}: missing from manifest")),
+        }
+    }
+
+    Ok(WakeWordModelBundle {
+        manifest_path,
+        manifest,
+        missing_files,
+    })
+}
+
+fn model_bundle_for_status(status: &WakeWordModelStatus) -> Option<WakeWordModelBundle> {
+    status
+        .resolved_model_path
+        .as_deref()
+        .and_then(|path| load_model_bundle(Path::new(path)).ok())
+}
+
 fn model_status_for_settings(settings: &WakeWordSettings) -> WakeWordModelStatus {
     let search_paths = wake_word_model_search_paths();
     let discovered_paths = discover_wake_word_model_paths();
@@ -396,17 +553,100 @@ fn model_status_for_settings(settings: &WakeWordSettings) -> WakeWordModelStatus
         .and_then(|raw| resolve_configured_model_path(raw, &search_paths))
         .or_else(|| discovered_paths.first().cloned());
 
+    let bundle = resolved_path
+        .as_deref()
+        .and_then(|path| load_model_bundle(path).ok());
+    let manifest_path = bundle
+        .as_ref()
+        .map(|bundle| path_string(&bundle.manifest_path))
+        .or_else(|| {
+            resolved_path
+                .as_deref()
+                .and_then(manifest_path_for_bundle)
+                .as_deref()
+                .map(path_string)
+        });
+    let missing_files = bundle
+        .as_ref()
+        .map(|bundle| bundle.missing_files.clone())
+        .unwrap_or_else(|| {
+            if resolved_path
+                .as_deref()
+                .map(|path| path.exists() && !manifest_path_for_bundle(path).is_some())
+                .unwrap_or(false)
+                && is_local_provider(&settings.wake_word_provider)
+            {
+                vec!["manifest.json".into()]
+            } else if manifest_path.is_some() && bundle.is_none() {
+                vec!["manifest.json: invalid or unreadable".into()]
+            } else {
+                Vec::new()
+            }
+        });
+    let manifest_valid = bundle
+        .as_ref()
+        .map(|bundle| bundle.missing_files.is_empty())
+        .unwrap_or(false);
     let model_exists = resolved_path
         .as_deref()
-        .map(is_supported_model_file)
+        .map(|path| {
+            if manifest_path_for_bundle(path).is_some() {
+                manifest_valid
+            } else {
+                is_supported_model_file(path)
+            }
+        })
         .unwrap_or(false);
-    let model_missing = is_local_provider(&settings.wake_word_provider) && !model_exists;
+    let model_missing = is_local_provider(&settings.wake_word_provider)
+        && resolved_path
+            .as_deref()
+            .map(|path| !path.exists())
+            .unwrap_or(true);
+    let runtime = bundle
+        .as_ref()
+        .and_then(|bundle| bundle.manifest.runtime.clone())
+        .or_else(|| {
+            resolved_path.as_deref().and_then(|path| {
+                path.extension()
+                    .and_then(|value| value.to_str())
+                    .map(|value| value.to_lowercase())
+            })
+        });
+    let _manifest_id = bundle
+        .as_ref()
+        .and_then(|bundle| bundle.manifest.id.clone());
+    let _manifest_provider = bundle
+        .as_ref()
+        .and_then(|bundle| bundle.manifest.provider.clone());
+    let phrase = bundle
+        .as_ref()
+        .and_then(|bundle| bundle.manifest.phrase.clone())
+        .or_else(|| Some(settings.wake_word_phrase.clone()));
+    let sample_rate = bundle
+        .as_ref()
+        .and_then(|bundle| bundle.manifest.sample_rate)
+        .or(Some(DEFAULT_WAKE_WORD_SAMPLE_RATE));
+    let threshold = bundle
+        .as_ref()
+        .and_then(|bundle| bundle.manifest.threshold)
+        .or(Some(
+            settings
+                .wake_word_sensitivity
+                .max(DEFAULT_WAKE_WORD_THRESHOLD),
+        ));
 
     WakeWordModelStatus {
         configured_model_path: settings.wake_word_model_path.clone(),
         resolved_model_path: resolved_path.as_deref().map(path_string),
         model_exists,
         model_missing,
+        manifest_path,
+        manifest_valid,
+        missing_files,
+        runtime,
+        phrase,
+        sample_rate,
+        threshold,
         discovered_models: discovered_paths
             .iter()
             .map(|path| path_string(path))
@@ -446,10 +686,16 @@ impl WakeWordProvider for MicTestProvider {
     fn is_available(&self) -> WakeWordProviderAvailability {
         WakeWordProviderAvailability {
             provider_state: "mic_test_active".into(),
+            runtime_state: "not_required".into(),
             provider_ready: true,
             provider_configured: true,
             model_path: None,
             model_missing: false,
+            manifest_path: None,
+            manifest_valid: false,
+            missing_files: Vec::new(),
+            sample_rate: Some(DEFAULT_WAKE_WORD_SAMPLE_RATE),
+            threshold: None,
             message: "Mic test is active. No wake-word model is running.".into(),
             last_error: None,
             start_allowed: true,
@@ -483,10 +729,16 @@ impl WakeWordProvider for MockWakeWordProvider {
     fn is_available(&self) -> WakeWordProviderAvailability {
         WakeWordProviderAvailability {
             provider_state: "mock_active".into(),
+            runtime_state: "mock".into(),
             provider_ready: true,
             provider_configured: true,
             model_path: None,
             model_missing: false,
+            manifest_path: None,
+            manifest_valid: false,
+            missing_files: Vec::new(),
+            sample_rate: Some(DEFAULT_WAKE_WORD_SAMPLE_RATE),
+            threshold: Some(self.threshold),
             message: "Mock wake-word detection is active for development only.".into(),
             last_error: None,
             start_allowed: true,
@@ -546,6 +798,13 @@ impl LocalWakeWordProvider {
                 resolved_model_path: None,
                 model_exists: false,
                 model_missing: false,
+                manifest_path: None,
+                manifest_valid: false,
+                missing_files: Vec::new(),
+                runtime: None,
+                phrase: None,
+                sample_rate: None,
+                threshold: None,
                 discovered_models: Vec::new(),
                 search_paths: wake_word_model_search_paths()
                     .iter()
@@ -567,10 +826,16 @@ impl WakeWordProvider for LocalWakeWordProvider {
             let message = "Wake word provider not configured yet.".to_string();
             return WakeWordProviderAvailability {
                 provider_state: "provider_missing".into(),
+                runtime_state: "not_configured".into(),
                 provider_ready: false,
                 provider_configured: false,
                 model_path: None,
                 model_missing: false,
+                manifest_path: None,
+                manifest_valid: false,
+                missing_files: Vec::new(),
+                sample_rate: None,
+                threshold: None,
                 message: message.clone(),
                 last_error: Some(message),
                 start_allowed: false,
@@ -583,10 +848,16 @@ impl WakeWordProvider for LocalWakeWordProvider {
                 "Local wake-word provider selected, but no model is installed.".to_string();
             return WakeWordProviderAvailability {
                 provider_state: "model_missing".into(),
+                runtime_state: "model_missing".into(),
                 provider_ready: false,
                 provider_configured: false,
                 model_path: self.model_status.resolved_model_path.clone(),
                 model_missing: true,
+                manifest_path: self.model_status.manifest_path.clone(),
+                manifest_valid: self.model_status.manifest_valid,
+                missing_files: self.model_status.missing_files.clone(),
+                sample_rate: self.model_status.sample_rate,
+                threshold: self.model_status.threshold,
                 message: message.clone(),
                 last_error: Some(message),
                 start_allowed: false,
@@ -594,30 +865,81 @@ impl WakeWordProvider for LocalWakeWordProvider {
             };
         }
 
-        let message = "Local wake-word model found, but runtime inference is not implemented yet."
-            .to_string();
+        if !self.model_status.manifest_valid || !self.model_status.missing_files.is_empty() {
+            let message = if self.model_status.missing_files.is_empty() {
+                "Local wake-word model bundle is invalid.".to_string()
+            } else {
+                format!(
+                    "Local wake-word model bundle is invalid. Missing files: {}",
+                    self.model_status.missing_files.join(", ")
+                )
+            };
+            return WakeWordProviderAvailability {
+                provider_state: "invalid_model_bundle".into(),
+                runtime_state: "invalid_model_bundle".into(),
+                provider_ready: false,
+                provider_configured: false,
+                model_path: self.model_status.resolved_model_path.clone(),
+                model_missing: false,
+                manifest_path: self.model_status.manifest_path.clone(),
+                manifest_valid: self.model_status.manifest_valid,
+                missing_files: self.model_status.missing_files.clone(),
+                sample_rate: self.model_status.sample_rate,
+                threshold: self.model_status.threshold,
+                message: message.clone(),
+                last_error: Some(message),
+                start_allowed: false,
+                start_state: "invalid_model_bundle".into(),
+            };
+        }
+
+        let runtime_load_error = model_bundle_for_status(&self.model_status)
+            .and_then(|bundle| OnnxWakeWordRuntime::load(&bundle).err())
+            .unwrap_or_else(|| "Local wake-word runtime is missing or could not be loaded.".into());
+        let message = runtime_load_error;
         WakeWordProviderAvailability {
-            provider_state: "model_found_runtime_not_implemented".into(),
+            provider_state: "runtime_missing".into(),
+            runtime_state: "runtime_missing".into(),
             provider_ready: false,
-            provider_configured: false,
+            provider_configured: true,
             model_path: self.model_status.resolved_model_path.clone(),
             model_missing: false,
+            manifest_path: self.model_status.manifest_path.clone(),
+            manifest_valid: self.model_status.manifest_valid,
+            missing_files: self.model_status.missing_files.clone(),
+            sample_rate: self.model_status.sample_rate,
+            threshold: self.model_status.threshold,
             message: message.clone(),
             last_error: Some(message),
             start_allowed: false,
-            start_state: "provider_not_implemented".into(),
+            start_state: "runtime_missing".into(),
         }
     }
 
+    fn target_sample_rate(&self) -> u32 {
+        self.model_status
+            .sample_rate
+            .unwrap_or(DEFAULT_WAKE_WORD_SAMPLE_RATE)
+    }
+
+    fn frame_ms(&self) -> u32 {
+        model_bundle_for_status(&self.model_status)
+            .and_then(|bundle| bundle.manifest.frame_ms)
+            .unwrap_or(DEFAULT_WAKE_WORD_FRAME_MS)
+    }
+
     fn process_audio_frame(&mut self, _frame: &[f32], _sample_rate: u32) -> WakeWordProviderResult {
-        // TODO: Plug in a free local openWakeWord-compatible inference backend here.
         if self.model_status.model_missing {
             WakeWordProviderResult::ModelMissing(
                 "Local wake-word provider selected, but no model is installed.".into(),
             )
+        } else if !self.model_status.manifest_valid || !self.model_status.missing_files.is_empty() {
+            WakeWordProviderResult::InvalidModelBundle(
+                "Local wake-word model bundle is invalid.".into(),
+            )
         } else {
-            WakeWordProviderResult::ProviderMissing(
-                "Local wake-word model found, but runtime inference is not implemented yet.".into(),
+            WakeWordProviderResult::RuntimeMissing(
+                "Local wake-word runtime is missing or could not be loaded.".into(),
             )
         }
     }
@@ -680,6 +1002,90 @@ fn rms(samples: &[f32]) -> f32 {
         .sum::<f32>();
 
     (sum / samples.len() as f32).sqrt().clamp(0.0, 1.0)
+}
+
+struct WakeWordFrameQueue {
+    samples: VecDeque<f32>,
+    frame_samples: usize,
+}
+
+impl WakeWordFrameQueue {
+    fn new(sample_rate: u32, frame_ms: u32) -> Self {
+        let frame_samples = ((sample_rate as usize * frame_ms as usize) / 1_000).max(1);
+        Self {
+            samples: VecDeque::with_capacity(frame_samples * 2),
+            frame_samples,
+        }
+    }
+
+    fn push(&mut self, samples: Vec<f32>) {
+        self.samples.extend(samples);
+        let max_len = self.frame_samples * 8;
+        while self.samples.len() > max_len {
+            let _ = self.samples.pop_front();
+        }
+    }
+
+    fn next_frame(&mut self) -> Option<Vec<f32>> {
+        if self.samples.len() < self.frame_samples {
+            return None;
+        }
+
+        Some(self.samples.drain(..self.frame_samples).collect())
+    }
+}
+
+fn normalize_audio_frame(
+    samples: &[f32],
+    source_sample_rate: u32,
+    source_channels: u16,
+    target_sample_rate: u32,
+) -> Vec<f32> {
+    if samples.is_empty() || source_sample_rate == 0 || target_sample_rate == 0 {
+        return Vec::new();
+    }
+
+    let channels = usize::from(source_channels.max(1));
+    let mono = if channels == 1 {
+        samples
+            .iter()
+            .map(|sample| sample.clamp(-1.0, 1.0))
+            .collect::<Vec<_>>()
+    } else {
+        samples
+            .chunks(channels)
+            .map(|chunk| {
+                let sum = chunk
+                    .iter()
+                    .map(|sample| sample.clamp(-1.0, 1.0))
+                    .sum::<f32>();
+                (sum / chunk.len() as f32).clamp(-1.0, 1.0)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    if source_sample_rate == target_sample_rate {
+        return mono;
+    }
+
+    let target_len =
+        ((mono.len() as u64 * target_sample_rate as u64) / source_sample_rate as u64) as usize;
+    if target_len == 0 {
+        return Vec::new();
+    }
+
+    let ratio = source_sample_rate as f32 / target_sample_rate as f32;
+    (0..target_len)
+        .map(|index| {
+            let source_pos = index as f32 * ratio;
+            let low = source_pos.floor() as usize;
+            let high = (low + 1).min(mono.len().saturating_sub(1));
+            let frac = source_pos - low as f32;
+            let low_value = mono.get(low).copied().unwrap_or(0.0);
+            let high_value = mono.get(high).copied().unwrap_or(low_value);
+            (low_value + (high_value - low_value) * frac).clamp(-1.0, 1.0)
+        })
+        .collect()
 }
 
 fn record_audio_chunk_f32(samples: &[f32], frame_tx: &mpsc::SyncSender<Vec<f32>>) {
@@ -908,6 +1314,7 @@ fn run_microphone_thread(
     let sample_format = supported_config.sample_format();
     let stream_config = supported_config.config();
     let sample_rate = stream_config.sample_rate.0;
+    let channels = stream_config.channels;
     let (frame_tx, frame_rx) = mpsc::sync_channel::<Vec<f32>>(FRAME_QUEUE_CAPACITY);
     let stream = match build_stream(&device, &stream_config, sample_format, frame_tx.clone()) {
         Ok(stream) => stream,
@@ -933,7 +1340,9 @@ fn run_microphone_thread(
     let detection_settings = settings.clone();
     let provider_thread = thread::Builder::new()
         .name("openblob-wake-word-provider".into())
-        .spawn(move || run_provider_worker(app, detection_settings, sample_rate, frame_rx));
+        .spawn(move || {
+            run_provider_worker(app, detection_settings, sample_rate, channels, frame_rx)
+        });
 
     let mut status = status_for_state_with_settings(
         &settings,
@@ -949,7 +1358,7 @@ fn run_microphone_thread(
     let _ = ready_tx.send(status);
 
     log(format!(
-        "mic listener started; provider={}, device={device_name}, sample_rate={sample_rate}",
+        "mic listener started; provider={}, device={device_name}, sample_rate={sample_rate}, channels={channels}",
         settings.wake_word_provider
     ));
 
@@ -979,32 +1388,50 @@ fn run_provider_worker(
     app: tauri::AppHandle,
     settings: WakeWordSettings,
     sample_rate: u32,
+    channels: u16,
     frame_rx: mpsc::Receiver<Vec<f32>>,
 ) {
     let mut provider = make_provider(&settings);
     let provider_name = provider.name().to_string();
+    let target_sample_rate = provider.target_sample_rate();
+    let frame_ms = provider.frame_ms();
+    let mut queue = WakeWordFrameQueue::new(target_sample_rate, frame_ms);
 
     log(format!(
-        "provider worker started; provider={provider_name}, sample_rate={sample_rate}"
+        "provider worker started; provider={provider_name}, sample_rate={sample_rate}, channels={channels}, target_sample_rate={target_sample_rate}, frame_ms={frame_ms}"
     ));
 
-    for frame in frame_rx {
-        match provider.process_audio_frame(&frame, sample_rate) {
-            WakeWordProviderResult::NoMatch => {}
-            WakeWordProviderResult::Detected { score, phrase } => {
-                handle_wake_word_detected(&app, &settings, &provider_name, phrase, score);
-            }
-            WakeWordProviderResult::ModelMissing(message) => {
-                set_runtime_error_state(&settings, "model_missing", message);
-                break;
-            }
-            WakeWordProviderResult::ProviderMissing(message) => {
-                set_runtime_error_state(&settings, "provider_missing", message);
-                break;
-            }
-            WakeWordProviderResult::Error(message) => {
-                set_runtime_error_state(&settings, "error", message);
-                break;
+    for input_frame in frame_rx {
+        let normalized =
+            normalize_audio_frame(&input_frame, sample_rate, channels, target_sample_rate);
+        queue.push(normalized);
+
+        while let Some(frame) = queue.next_frame() {
+            match provider.process_audio_frame(&frame, target_sample_rate) {
+                WakeWordProviderResult::NoMatch => {}
+                WakeWordProviderResult::Detected { score, phrase } => {
+                    handle_wake_word_detected(&app, &settings, &provider_name, phrase, score);
+                }
+                WakeWordProviderResult::ModelMissing(message) => {
+                    set_runtime_error_state(&settings, "model_missing", message);
+                    return;
+                }
+                WakeWordProviderResult::ProviderMissing(message) => {
+                    set_runtime_error_state(&settings, "provider_missing", message);
+                    return;
+                }
+                WakeWordProviderResult::RuntimeMissing(message) => {
+                    set_runtime_error_state(&settings, "runtime_missing", message);
+                    return;
+                }
+                WakeWordProviderResult::InvalidModelBundle(message) => {
+                    set_runtime_error_state(&settings, "invalid_model_bundle", message);
+                    return;
+                }
+                WakeWordProviderResult::Error(message) => {
+                    set_runtime_error_state(&settings, "error", message);
+                    return;
+                }
             }
         }
     }
@@ -1258,9 +1685,18 @@ pub fn set_wake_word_model_path(path: Option<String>) -> Result<WakeWordModelSta
     let status = model_status_for_settings(&settings);
 
     if let Ok(mut current) = status_store().lock() {
+        let availability = provider_availability(&settings);
         current.model_path = status.resolved_model_path.clone();
         current.model_missing = status.model_missing;
-        current.provider_state = provider_availability(&settings).provider_state;
+        current.manifest_path = status.manifest_path.clone();
+        current.manifest_valid = status.manifest_valid;
+        current.missing_files = status.missing_files.clone();
+        current.sample_rate = status.sample_rate;
+        current.threshold = status.threshold;
+        current.provider_state = availability.provider_state;
+        current.runtime_state = availability.runtime_state;
+        current.provider_ready = availability.provider_ready;
+        current.provider_error = availability.last_error;
     }
 
     Ok(status)
