@@ -124,6 +124,8 @@ pub struct CompanionConfig {
     pub wake_word_sensitivity: f32,
     #[serde(default = "default_wake_word_provider")]
     pub wake_word_provider: String,
+    #[serde(default)]
+    pub wake_word_model_path: Option<String>,
     pub appearance: AppearanceConfig,
     pub behavior: BehaviorConfig,
     pub privacy: PrivacyConfig,
@@ -147,6 +149,7 @@ impl Default for CompanionConfig {
             wake_word_phrase: default_wake_word_phrase(),
             wake_word_sensitivity: default_wake_word_sensitivity(),
             wake_word_provider: default_wake_word_provider(),
+            wake_word_model_path: None,
             appearance: AppearanceConfig::default(),
             behavior: BehaviorConfig::default(),
             privacy: PrivacyConfig::default(),
@@ -199,6 +202,7 @@ impl CompanionConfig {
             normalize_wake_word_phrase(&self.wake_word_phrase, DEFAULT_WAKE_WORD_PHRASE);
         self.wake_word_sensitivity = self.wake_word_sensitivity.clamp(0.0, 1.0);
         self.wake_word_provider = normalize_wake_word_provider(&self.wake_word_provider);
+        self.wake_word_model_path = normalize_optional_path(self.wake_word_model_path);
 
         self
     }
@@ -330,10 +334,23 @@ fn normalize_wake_word_phrase(input: &str, fallback: &str) -> String {
 
 pub fn normalize_wake_word_provider(input: &str) -> String {
     match input.trim().to_lowercase().as_str() {
-        "porcupine" => "porcupine".into(),
+        "local-openwakeword" | "local_openwakeword" | "openwakeword" | "open-wakeword"
+        | "porcupine" => "local-openwakeword".into(),
+        "local-wakeword" | "local_wakeword" | "local" | "wakeword" => "local-wakeword".into(),
         "mic-test" | "mictest" | "mic_test" | "dev-mic-test" => "mic-test".into(),
         "mock" => "mock".into(),
         "disabled" => "disabled".into(),
         _ => DEFAULT_WAKE_WORD_PROVIDER.into(),
     }
+}
+
+fn normalize_optional_path(input: Option<String>) -> Option<String> {
+    input.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
