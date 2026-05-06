@@ -27,6 +27,16 @@ fn contains_locale_words(normalized: &str, words: &[String], threshold: f32) -> 
     fuzzy_has_any_strings(&toks, words, threshold)
 }
 
+fn contains_service_alias(normalized: &str, words: &[String]) -> bool {
+    let toks = tokens(normalized);
+    toks.iter().any(|token| {
+        words.iter().any(|word| {
+            let word = word.trim();
+            *token == word || (token.len() >= 4 && jaro_winkler(token, word) >= 0.90)
+        })
+    })
+}
+
 fn strip_first_prefix_str(input: &str, prefixes: &[String]) -> String {
     let trimmed = input.trim();
 
@@ -112,8 +122,8 @@ fn trim_search_service_suffix(mut text: String, service_words: &[String]) -> Str
 fn parse_explicit_search_command(normalized: &str) -> Option<CompanionAction> {
     let locale = command_locale();
 
-    let has_google = contains_locale_words(normalized, &locale.google_words, 0.86);
-    let has_youtube = contains_locale_words(normalized, &locale.youtube_words, 0.86);
+    let has_google = contains_service_alias(normalized, &locale.google_words);
+    let has_youtube = contains_service_alias(normalized, &locale.youtube_words);
     let has_search = contains_locale_words(normalized, &locale.search_words, 0.86)
         || contains_locale_words(normalized, &locale.find_words, 0.86);
 
@@ -456,6 +466,10 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
         IntentKind::MediaPrev => CompanionAction::MediaPrev,
 
         IntentKind::GoogleSearch => {
+            if !contains_service_alias(&normalized, &locale.google_words) {
+                return CompanionAction::None;
+            }
+
             let query = trim_search_service_suffix(
                 extract_search_query(
                     &normalized,
@@ -475,6 +489,10 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
         }
 
         IntentKind::YouTubeSearch => {
+            if !contains_service_alias(&normalized, &locale.youtube_words) {
+                return CompanionAction::None;
+            }
+
             let query = trim_search_service_suffix(
                 extract_search_query(
                     &normalized,
@@ -638,7 +656,13 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
             location: extract_weather_location(&normalized),
         },
 
-        IntentKind::ExplainSelection => CompanionAction::ExplainSelection,
+        IntentKind::ExplainSelection => {
+            if is_explicit_selection_explain(&normalized) {
+                CompanionAction::ExplainSelection
+            } else {
+                CompanionAction::None
+            }
+        }
         IntentKind::TakeScreenshot => CompanionAction::TakeScreenshot,
         IntentKind::CoinFlip => CompanionAction::CoinFlip,
         IntentKind::RollDice => CompanionAction::RollDice,
@@ -670,6 +694,22 @@ fn is_use_active_window_command(normalized: &str) -> bool {
             | "verwende dieses fenster"
             | "steuere dieses fenster"
     )
+}
+
+fn is_explicit_selection_explain(normalized: &str) -> bool {
+    [
+        "selection",
+        "selected",
+        "selected text",
+        "markierten",
+        "auswahl",
+        "screenshot",
+        "screen",
+        "bildschirm",
+        "snip",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
 }
 
 fn extract_followup_play_query(normalized: &str, play_words: &[String]) -> Option<String> {
@@ -941,5 +981,33 @@ mod tests {
             CompanionAction::UseActiveWindow => {}
             other => panic!("unexpected action: {other:?}"),
         }
+    }
+
+    #[test]
+    fn normal_chat_messages_do_not_become_actions() {
+        init_locale();
+
+        for input in [
+            "how are you?",
+            "what do you think about this?",
+            "explain this to me",
+            "can you summarize that?",
+        ] {
+            let action = parse_voice_command_with_context(input, "OpenBlob", "", "companion");
+            assert!(
+                matches!(action, CompanionAction::None),
+                "expected normal chat for '{input}', got {action:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_selection_explain_stays_action() {
+        init_locale();
+
+        assert!(matches!(
+            parse_voice_command("explain selected text"),
+            CompanionAction::ExplainSelection
+        ));
     }
 }

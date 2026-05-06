@@ -3,10 +3,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::time::Duration;
 
-use crate::modules::i18n::replies::{reply, reply_with};
 use crate::modules::context::resolve_active_context;
+use crate::modules::i18n::replies::{reply, reply_with};
 use crate::modules::memory::context::{
-    build_memory_context_for_query_and_context, ActiveMemoryContext,
+    build_memory_context_for_query_and_context_async, ActiveMemoryContext,
 };
 use crate::modules::profile::companion_config::load_or_create_companion_config;
 use crate::modules::profile::user_profile::load_or_create_user_profile;
@@ -30,6 +30,12 @@ struct OllamaMessage {
 
 fn default_text_model() -> String {
     "llama3.1:8b".to_string()
+}
+
+fn debug_log(message: impl AsRef<str>) {
+    if std::env::var_os("RUST_BACKTRACE").is_some() {
+        println!("[openblob] {}", message.as_ref());
+    }
 }
 
 fn normalized_language(preferred_language: &str) -> &str {
@@ -246,7 +252,19 @@ pub async fn ask_ollama(
         }
     };
 
-    let chosen_model = model.unwrap_or_else(default_text_model);
+    let chosen_model = model
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            if config.chat_model.trim().is_empty() {
+                default_text_model()
+            } else {
+                config.chat_model.trim().to_string()
+            }
+        });
+    debug_log(format!(
+        "Chat request start; mode={mode}; model={chosen_model}"
+    ));
 
     let mut system = system_prompt(&mode, &blob_name, &owner_name, &preferred_language);
 
@@ -263,12 +281,19 @@ pub async fn ask_ollama(
             context_domain: Some(active.domain),
         };
 
-        if let Ok(memory_context) = build_memory_context_for_query_and_context(
+        match build_memory_context_for_query_and_context_async(
             Some(memory_query),
             Some(active_context),
             Some(config.memory.prompt_context_limit),
-        ) {
-            system = append_memory_context(system, &memory_context.memory);
+        )
+        .await
+        {
+            Ok(memory_context) => {
+                system = append_memory_context(system, &memory_context.memory);
+            }
+            Err(err) => {
+                eprintln!("[openblob] Memory context skipped for chat: {err}");
+            }
         }
     }
 
@@ -316,6 +341,11 @@ pub async fn ask_ollama(
         .json::<OllamaChatResponse>()
         .await
         .map_err(|e| reply_with("ollama_response_read_failed", &[("error", e.to_string())]))?;
+
+    debug_log(format!(
+        "Chat request end; mode={mode}; model={}",
+        parsed.model
+    ));
 
     Ok(OllamaTextResult {
         content: parsed.message.content.trim().to_string(),

@@ -1,12 +1,13 @@
 use device_query::{DeviceQuery, DeviceState};
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
-use tauri::{Emitter, Manager};
-use window_vibrancy::{apply_blur, NSVisualEffectMaterial};
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
+use tauri::{Emitter, Manager};
+use window_vibrancy::{apply_blur, NSVisualEffectMaterial};
 
-static TRANSCRIPT_RUNTIME: Lazy<Mutex<Option<modules::transcript::runtime::TranscriptRuntimeHandle>>> =
-    Lazy::new(|| Mutex::new(None));
+static TRANSCRIPT_RUNTIME: Lazy<
+    Mutex<Option<modules::transcript::runtime::TranscriptRuntimeHandle>>,
+> = Lazy::new(|| Mutex::new(None));
 
 mod core;
 mod modules {
@@ -26,16 +27,15 @@ mod modules {
     pub mod storage;
     pub mod streaming;
     pub mod system;
+    pub mod transcript;
     pub mod tts;
     pub mod voice;
     pub mod windows_discovery;
-    pub mod transcript;
 }
 
 use crate::core::app::run_command_pipeline;
 use crate::modules::memory::context::{
-    build_memory_context_for_query_and_context,
-    ActiveMemoryContext,
+    build_memory_context_for_query_and_context_async, ActiveMemoryContext,
 };
 use crate::modules::memory::embeddings::backfill_missing_event_embeddings;
 use crate::modules::memory::episodic_memory::{append_episode, EpisodicMemoryEntry};
@@ -44,33 +44,24 @@ use crate::modules::memory::events::{
 };
 use crate::modules::memory::import::{import_legacy_episodic_memory, import_legacy_semantic_facts};
 use crate::modules::memory::management::{
-    export_memory_json,
-    forget_memory as forget_memory_store,
-    wipe_memory as wipe_memory_store,
+    export_memory_json, forget_memory as forget_memory_store, wipe_memory as wipe_memory_store,
     MemoryMutationReport,
 };
-use crate::modules::memory::reflection::{reflect_memory as reflect_memory_store, ReflectiveSummary};
+use crate::modules::memory::reflection::{
+    reflect_memory as reflect_memory_store, ReflectiveSummary,
+};
 use crate::modules::memory::retention::apply_memory_retention as apply_memory_retention_store;
 use crate::modules::memory::writer::{
-    clear_memory_private_mode as clear_memory_private_mode_store,
-    enable_memory_private_mode,
-    enqueue_memory_event,
-    memory_private_mode_until,
-    start_memory_writer,
+    clear_memory_private_mode as clear_memory_private_mode_store, enable_memory_private_mode,
+    enqueue_memory_event, memory_private_mode_until, start_memory_writer,
 };
 use modules::companion::bonding::load_or_create_bonding_state;
 use modules::companion::personality::{load_or_create_personality_state, load_personality_state};
 use modules::context::{is_internal_companion_app, resolve_active_context};
 use modules::memory::semantic_memory::load_or_create_semantic_memory;
-use modules::profile::companion_config::{
-    load_or_create_companion_config,
-    save_companion_config,
-};
+use modules::profile::companion_config::{load_or_create_companion_config, save_companion_config};
 use modules::profile::onboarding_state::load_or_create_onboarding_state;
-use modules::profile::user_profile::{
-    load_or_create_user_profile,
-    save_user_profile,
-};
+use modules::profile::user_profile::{load_or_create_user_profile, save_user_profile};
 
 fn initialize_companion_persistence() -> Result<(), String> {
     let config = load_or_create_companion_config()?;
@@ -181,8 +172,8 @@ fn get_transcript_status() -> Result<modules::transcript::types::TranscriptStatu
 }
 
 #[tauri::command]
-fn get_current_transcript(
-) -> Result<Option<modules::transcript::types::TranscriptSession>, String> {
+fn get_current_transcript() -> Result<Option<modules::transcript::types::TranscriptSession>, String>
+{
     modules::transcript::session::get_active_session()
 }
 
@@ -196,8 +187,7 @@ fn save_current_transcript() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn summarize_current_transcript(
-) -> Result<modules::transcript::types::TranscriptSummary, String> {
+fn summarize_current_transcript() -> Result<modules::transcript::types::TranscriptSummary, String> {
     let session = modules::transcript::session::get_active_session()?
         .ok_or_else(|| "No active transcript session".to_string())?;
 
@@ -306,13 +296,13 @@ fn apply_memory_retention() -> Result<MemoryMutationReport, String> {
 }
 
 #[tauri::command]
-fn reflect_memory(scope: String) -> Result<ReflectiveSummary, String> {
-    reflect_memory_store(&scope)
+async fn reflect_memory(scope: String) -> Result<ReflectiveSummary, String> {
+    reflect_memory_store(&scope).await
 }
 
 #[tauri::command]
-fn backfill_memory_embeddings(limit: Option<usize>) -> Result<usize, String> {
-    backfill_missing_event_embeddings(limit.unwrap_or(100).clamp(1, 1_000))
+async fn backfill_memory_embeddings(limit: Option<usize>) -> Result<usize, String> {
+    backfill_missing_event_embeddings(limit.unwrap_or(100).clamp(1, 1_000)).await
 }
 
 #[tauri::command]
@@ -466,11 +456,7 @@ fn get_identity() -> Result<(String, String, String), String> {
 }
 
 #[tauri::command]
-fn update_identity(
-    blob_name: String,
-    owner_name: String,
-    language: String,
-) -> Result<(), String> {
+fn update_identity(blob_name: String, owner_name: String, language: String) -> Result<(), String> {
     let mut config = load_or_create_companion_config()?;
     let mut profile = load_or_create_user_profile()?;
 
@@ -614,8 +600,7 @@ pub fn run() {
                     let shortcut_str = shortcut.to_string().replace(' ', "").to_lowercase();
                     println!("global shortcut pressed: {}", shortcut_str);
 
-                    let is_toggle =
-                        shortcut_str == "control+space" || shortcut_str == "ctrl+space";
+                    let is_toggle = shortcut_str == "control+space" || shortcut_str == "ctrl+space";
 
                     let is_voice = shortcut_str == "alt+keym" || shortcut_str == "alt+m";
                     let is_private_memory = shortcut_str == "control+shift+keym"
@@ -641,7 +626,11 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            use axum::{extract::{Query, State}, routing::{get, post}, Json, Router};
+            use axum::{
+                extract::{Query, State},
+                routing::{get, post},
+                Json, Router,
+            };
             use serde::{Deserialize, Serialize};
             use serde_json::{json, Value};
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -731,10 +720,29 @@ pub fn run() {
 
                 match run_command_pipeline(&state.app, &input, &ctx).await {
                     Ok(pipeline) => {
-                        let result_msg = pipeline
+                        let mut result_msg = pipeline
                             .result
                             .map(|r| r.message)
                             .unwrap_or_else(|| "NO_ACTION".to_string());
+                        let action_taken = result_msg != "NO_ACTION";
+
+                        if !action_taken {
+                            match crate::core::legacy::ollama_text_runtime::ask_ollama(
+                                "chat".to_string(),
+                                input.clone(),
+                                Some(input.clone()),
+                                None,
+                            )
+                            .await
+                            {
+                                Ok(answer) => {
+                                    result_msg = answer.content;
+                                }
+                                Err(err) => {
+                                    result_msg = format!("ERROR: {}", err);
+                                }
+                            }
+                        }
 
                         // Episode speichern
                         if result_msg != "NO_ACTION" {
@@ -763,7 +771,7 @@ pub fn run() {
                         }
 
                         Json(CommandResponse {
-                            action_taken: result_msg != "NO_ACTION",
+                            action_taken,
                             result: result_msg,
                         })
                     }
@@ -786,11 +794,13 @@ pub fn run() {
                     None
                 };
 
-                match build_memory_context_for_query_and_context(
+                match build_memory_context_for_query_and_context_async(
                     query.q.as_deref(),
                     active_context,
                     query.limit,
-                ) {
+                )
+                .await
+                {
                     Ok(context) => Json(MemoryContextResponse {
                         memory: context.memory,
                         event_count: context.event_count,
@@ -820,7 +830,9 @@ pub fn run() {
                 let requested_tier = payload.privacy_tier.as_deref().map(PrivacyTier::from_str);
                 let privacy_tier = match requested_tier {
                     Some(PrivacyTier::Transient) => PrivacyTier::Transient,
-                    Some(PrivacyTier::MetadataOnly) if configured_tier != PrivacyTier::Transient => {
+                    Some(PrivacyTier::MetadataOnly)
+                        if configured_tier != PrivacyTier::Transient =>
+                    {
                         PrivacyTier::MetadataOnly
                     }
                     Some(PrivacyTier::Full) if configured_tier == PrivacyTier::Full => {
@@ -852,7 +864,10 @@ pub fn run() {
                 let result = enqueue_memory_event(event);
 
                 Json(MemoryEventResponse {
-                    queued: matches!(result, crate::modules::memory::writer::EnqueueMemoryEventResult::Queued),
+                    queued: matches!(
+                        result,
+                        crate::modules::memory::writer::EnqueueMemoryEventResult::Queued
+                    ),
                     result: format!("{result:?}"),
                 })
             }
@@ -923,17 +938,17 @@ pub fn run() {
                 eprintln!("Failed to start memory writer: {err}");
             }
 
-            tauri::async_runtime::spawn_blocking(|| {
-                if let Err(err) = reflect_memory_store("session") {
+            tauri::async_runtime::spawn(async {
+                if let Err(err) = reflect_memory_store("session").await {
                     eprintln!("Failed to refresh session memory reflection: {err}");
                 }
-                if let Err(err) = reflect_memory_store("daily") {
+                if let Err(err) = reflect_memory_store("daily").await {
                     eprintln!("Failed to refresh daily memory reflection: {err}");
                 }
-                if let Err(err) = reflect_memory_store("weekly") {
+                if let Err(err) = reflect_memory_store("weekly").await {
                     eprintln!("Failed to refresh weekly memory reflection: {err}");
                 }
-                if let Err(err) = backfill_missing_event_embeddings(20) {
+                if let Err(err) = backfill_missing_event_embeddings(20).await {
                     eprintln!("Failed to backfill memory embeddings: {err}");
                 }
             });

@@ -1,13 +1,17 @@
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
-use reqwest::blocking::Client;
+use reqwest::Client;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::modules::memory::sqlite_store::open_memory_database;
+#[cfg(not(test))]
+use crate::modules::profile::companion_config::{
+    load_or_create_companion_config, DEFAULT_CHAT_MODEL,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReflectiveSummary {
@@ -30,28 +34,81 @@ struct OllamaMessage {
     content: String,
 }
 
-pub fn reflect_memory(scope: &str) -> Result<ReflectiveSummary, String> {
+pub async fn reflect_memory(scope: &str) -> Result<ReflectiveSummary, String> {
+    let scope = normalize_scope(scope);
+    let (period_start, period_end) = period_for_scope(scope);
+    let source_text = {
+        let conn = open_memory_database()?;
+        load_reflection_source(&conn, &period_start, &period_end, 60)?
+    };
+
+    let (summary, source) = if source_text.trim().is_empty() {
+        (
+            "No notable memory activity in this period.".to_string(),
+            "deterministic".to_string(),
+        )
+    } else {
+        match summarize_with_ollama(scope, &source_text).await {
+            Ok(summary) if !summary.trim().is_empty() => (summary, "ollama".to_string()),
+            Err(err) => {
+                eprintln!("[openblob] Memory reflection fell back to deterministic summary: {err}");
+                (
+                    fallback_summary(scope, &source_text),
+                    "deterministic".to_string(),
+                )
+            }
+            _ => (
+                fallback_summary(scope, &source_text),
+                "deterministic".to_string(),
+            ),
+        }
+    };
+
     let conn = open_memory_database()?;
-    reflect_memory_with_connection(&conn, scope)
+    insert_reflective_summary_for_period(&conn, scope, period_start, period_end, summary, source)
 }
 
 pub fn reflect_memory_with_connection(
     conn: &Connection,
     scope: &str,
 ) -> Result<ReflectiveSummary, String> {
+    reflect_memory_with_connection_inner(conn, scope, None)
+}
+
+fn reflect_memory_with_connection_inner(
+    conn: &Connection,
+    scope: &str,
+    ollama_summary: Option<String>,
+) -> Result<ReflectiveSummary, String> {
     let scope = normalize_scope(scope);
     let (period_start, period_end) = period_for_scope(scope);
     let source_text = load_reflection_source(conn, &period_start, &period_end, 60)?;
 
     let (summary, source) = if source_text.trim().is_empty() {
-        ("No notable memory activity in this period.".to_string(), "deterministic".to_string())
+        (
+            "No notable memory activity in this period.".to_string(),
+            "deterministic".to_string(),
+        )
+    } else if let Some(summary) = ollama_summary.filter(|summary| !summary.trim().is_empty()) {
+        (summary, "ollama".to_string())
     } else {
-        match summarize_with_ollama(scope, &source_text) {
-            Ok(summary) if !summary.trim().is_empty() => (summary, "ollama".to_string()),
-            _ => (fallback_summary(scope, &source_text), "deterministic".to_string()),
-        }
+        (
+            fallback_summary(scope, &source_text),
+            "deterministic".to_string(),
+        )
     };
 
+    insert_reflective_summary_for_period(conn, scope, period_start, period_end, summary, source)
+}
+
+fn insert_reflective_summary_for_period(
+    conn: &Connection,
+    scope: &str,
+    period_start: String,
+    period_end: String,
+    summary: String,
+    source: String,
+) -> Result<ReflectiveSummary, String> {
     let summary = ReflectiveSummary {
         id: format!("summary_{}", Uuid::now_v7()),
         scope: scope.to_string(),
@@ -173,7 +230,14 @@ fn load_reflection_source(
     Ok(lines.join("\n"))
 }
 
-fn summarize_with_ollama(scope: &str, source_text: &str) -> Result<String, String> {
+async fn summarize_with_ollama(scope: &str, source_text: &str) -> Result<String, String> {
+    #[cfg(not(test))]
+    let model = load_or_create_companion_config()
+        .map(|config| config.chat_model)
+        .unwrap_or_else(|_| DEFAULT_CHAT_MODEL.into());
+    #[cfg(test)]
+    let model = "llama3.1:8b".to_string();
+
     let client = Client::builder()
         .timeout(Duration::from_secs(12))
         .build()
@@ -186,7 +250,7 @@ fn summarize_with_ollama(scope: &str, source_text: &str) -> Result<String, Strin
     let response = client
         .post("http://127.0.0.1:11434/api/chat")
         .json(&json!({
-            "model": "llama3.1:8b",
+            "model": model,
             "stream": false,
             "keep_alive": "10m",
             "messages": [
@@ -195,14 +259,19 @@ fn summarize_with_ollama(scope: &str, source_text: &str) -> Result<String, Strin
             ]
         }))
         .send()
+        .await
         .map_err(|e| format!("Could not call Ollama reflection: {e}"))?;
 
     if !response.status().is_success() {
-        return Err(format!("Ollama reflection failed with {}", response.status()));
+        return Err(format!(
+            "Ollama reflection failed with {}",
+            response.status()
+        ));
     }
 
     let parsed = response
         .json::<OllamaChatResponse>()
+        .await
         .map_err(|e| format!("Could not decode Ollama reflection response: {e}"))?;
 
     Ok(parsed.message.content.trim().to_string())
@@ -220,11 +289,14 @@ fn fallback_summary(scope: &str, source_text: &str) -> String {
         return "No notable memory activity in this period.".into();
     }
 
-    lines.insert(0, match scope {
-        "weekly" => "This week:",
-        "daily" => "Today:",
-        _ => "This session:",
-    });
+    lines.insert(
+        0,
+        match scope {
+            "weekly" => "This week:",
+            "daily" => "Today:",
+            _ => "This session:",
+        },
+    );
 
     lines.join("\n")
 }
@@ -252,7 +324,9 @@ fn period_for_scope(scope: &str) -> (String, String) {
 mod tests {
     use super::*;
     use crate::modules::memory::events::{MemoryEvent, MemoryEventKind, PrivacyTier};
-    use crate::modules::memory::sqlite_store::{insert_memory_event, open_memory_database_in_memory};
+    use crate::modules::memory::sqlite_store::{
+        insert_memory_event, open_memory_database_in_memory,
+    };
 
     #[test]
     fn stores_deterministic_summary_when_source_is_empty() {
