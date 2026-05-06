@@ -2,9 +2,10 @@ use super::extract::*;
 use super::intents::best_intent;
 use super::media::parse_media_command;
 use super::normalize::{normalize, tokens};
-use super::utilities::parse_utility_command;
 use super::types::{CompanionAction, IntentKind};
+use super::utilities::parse_utility_command;
 use crate::modules::i18n::command_locale::command_locale;
+use crate::modules::session_memory;
 use strsim::jaro_winkler;
 
 fn matches_any(input: &str, phrases: &[String]) -> bool {
@@ -16,9 +17,9 @@ fn equals_any(input: &str, phrases: &[String]) -> bool {
 }
 
 fn fuzzy_has_any_strings(tokens: &[&str], words: &[String], threshold: f32) -> bool {
-    tokens.iter().any(|t| {
-        words.iter().any(|w| jaro_winkler(t, w) >= threshold as f64)
-    })
+    tokens
+        .iter()
+        .any(|t| words.iter().any(|w| jaro_winkler(t, w) >= threshold as f64))
 }
 
 fn contains_locale_words(normalized: &str, words: &[String], threshold: f32) -> bool {
@@ -145,18 +146,18 @@ fn parse_explicit_search_command(normalized: &str) -> Option<CompanionAction> {
     if has_youtube && has_search {
         let mut prefixes = Vec::new();
 
-    for search_word in &locale.search_words {
-        for youtube_word in &locale.youtube_words {
-            prefixes.push(format!("{search_word} {youtube_word} "));
-            prefixes.push(format!("{youtube_word} {search_word} "));
-            prefixes.push(format!("{search_word} on {youtube_word} "));
-            prefixes.push(format!("{search_word} auf {youtube_word} "));
-            prefixes.push(format!("{search_word} auf {youtube_word} nach "));
-            prefixes.push(format!("{search_word} on {youtube_word} for "));
-            prefixes.push(format!("{search_word} {youtube_word} nach "));
-            prefixes.push(format!("{search_word} {youtube_word} for "));
+        for search_word in &locale.search_words {
+            for youtube_word in &locale.youtube_words {
+                prefixes.push(format!("{search_word} {youtube_word} "));
+                prefixes.push(format!("{youtube_word} {search_word} "));
+                prefixes.push(format!("{search_word} on {youtube_word} "));
+                prefixes.push(format!("{search_word} auf {youtube_word} "));
+                prefixes.push(format!("{search_word} auf {youtube_word} nach "));
+                prefixes.push(format!("{search_word} on {youtube_word} for "));
+                prefixes.push(format!("{search_word} {youtube_word} nach "));
+                prefixes.push(format!("{search_word} {youtube_word} for "));
+            }
         }
-    }
 
         let query = trim_search_service_suffix(
             strip_first_prefix_str(normalized, &prefixes),
@@ -241,6 +242,10 @@ pub fn parse_voice_command_with_context(
         return CompanionAction::TakeScreenshot;
     }
 
+    if is_use_active_window_command(&normalized) {
+        return CompanionAction::UseActiveWindow;
+    }
+
     let app = app_name.to_lowercase();
     let title = window_title.to_lowercase();
     let dom = domain.to_lowercase();
@@ -255,6 +260,11 @@ pub fn parse_voice_command_with_context(
         || title.contains("google")
         || title.contains("youtube");
 
+    if let Some(action) = active_controlled_followup_action(input, &normalized, &locale.play_words)
+    {
+        return action;
+    }
+
     let parsed = parse_voice_command(input);
 
     if !matches!(parsed, CompanionAction::None) {
@@ -262,6 +272,10 @@ pub fn parse_voice_command_with_context(
     }
 
     if on_youtube {
+        if let Some(query) = extract_followup_play_query(&normalized, &locale.play_words) {
+            return CompanionAction::YouTubePlayTitle { title: query };
+        }
+
         let has_play = contains_locale_words(&normalized, &locale.play_words, 0.84);
         let has_pause = contains_locale_words(&normalized, &locale.pause_words, 0.84);
 
@@ -390,6 +404,10 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
         return action;
     }
 
+    if is_use_active_window_command(&normalized) {
+        return CompanionAction::UseActiveWindow;
+    }
+
     match normalized.trim() {
         "insert my email" | "paste my email" => {
             return CompanionAction::InsertSnippet {
@@ -442,7 +460,9 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
                 extract_search_query(
                     &normalized,
                     &toks,
-                    &["google", "googel", "gogle", "search", "suche", "such", "find"],
+                    &[
+                        "google", "googel", "gogle", "search", "suche", "such", "find",
+                    ],
                 ),
                 &locale.google_words,
             );
@@ -452,14 +472,17 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
             } else {
                 CompanionAction::GoogleSearch { query }
             }
-        },
+        }
 
         IntentKind::YouTubeSearch => {
             let query = trim_search_service_suffix(
                 extract_search_query(
                     &normalized,
                     &toks,
-                    &["youtube", "youtub", "jutube", "jutub", "yt", "search", "suche", "such", "find"],
+                    &[
+                        "youtube", "youtub", "jutube", "jutub", "yt", "search", "suche", "such",
+                        "find",
+                    ],
                 ),
                 &locale.youtube_words,
             );
@@ -469,7 +492,7 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
             } else {
                 CompanionAction::YouTubeSearch { query }
             }
-        },
+        }
 
         IntentKind::YouTubePlayTitle => {
             let mut title = extract_quoted_text(input).unwrap_or_else(|| normalized.clone());
@@ -487,7 +510,10 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
 
         IntentKind::OpenApp => {
             let (target, prefer_browser) = extract_open_target(&normalized, &toks);
-            CompanionAction::OpenApp { target, prefer_browser }
+            CompanionAction::OpenApp {
+                target,
+                prefer_browser,
+            }
         }
 
         IntentKind::Save => CompanionAction::Save,
@@ -513,8 +539,11 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
 
         IntentKind::BrowserTypeText => {
             let text = extract_quoted_text(input).unwrap_or_else(|| {
-                extract_after_command(&normalized, &["tippe ", "type ", "schreibe ", "enter text "])
-                    .unwrap_or_default()
+                extract_after_command(
+                    &normalized,
+                    &["tippe ", "type ", "schreibe ", "enter text "],
+                )
+                .unwrap_or_default()
             });
 
             if text.is_empty() {
@@ -583,7 +612,10 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
                 } else if raw.contains('.') && !raw.contains(' ') {
                     format!("https://{}", raw)
                 } else {
-                    format!("https://www.google.com/search?q={}", urlencoding::encode(&raw))
+                    format!(
+                        "https://www.google.com/search?q={}",
+                        urlencoding::encode(&raw)
+                    )
                 };
 
                 CompanionAction::BrowserOpenUrl {
@@ -624,13 +656,153 @@ pub fn parse_voice_command(input: &str) -> CompanionAction {
     }
 }
 
+fn is_use_active_window_command(normalized: &str) -> bool {
+    matches!(
+        normalized.trim(),
+        "use this window"
+            | "use this app"
+            | "control this window"
+            | "control this app"
+            | "use current window"
+            | "use current app"
+            | "nimm dieses fenster"
+            | "nutze dieses fenster"
+            | "verwende dieses fenster"
+            | "steuere dieses fenster"
+    )
+}
+
+fn extract_followup_play_query(normalized: &str, play_words: &[String]) -> Option<String> {
+    let mut prefixes: Vec<String> = play_words
+        .iter()
+        .map(|word| word.trim().to_string())
+        .filter(|word| !word.is_empty())
+        .collect();
+
+    for fallback in ["play", "spiele", "spiel", "abspielen"] {
+        if !prefixes.iter().any(|word| word == fallback) {
+            prefixes.push(fallback.to_string());
+        }
+    }
+
+    for prefix in prefixes {
+        if let Some(rest) = normalized.strip_prefix(&format!("{prefix} ")) {
+            let cleaned = rest
+                .trim()
+                .trim_start_matches("song ")
+                .trim_start_matches("track ")
+                .trim_start_matches("video ")
+                .trim()
+                .to_string();
+
+            if !cleaned.is_empty() {
+                return Some(cleaned);
+            }
+        }
+    }
+
+    None
+}
+
+fn is_standalone_play_command(normalized: &str, play_words: &[String]) -> bool {
+    let normalized = normalized.trim();
+    play_words.iter().any(|word| normalized == word.trim())
+        || matches!(normalized, "play" | "spiele" | "spiel" | "abspielen")
+}
+
+fn has_explicit_service_target(normalized: &str) -> bool {
+    let service_words = [
+        "youtube", "yt", "youtub", "jutube", "spotify", "spotfy", "steam", "steem", "stim",
+    ];
+
+    for service in service_words {
+        if normalized.starts_with(&format!("{service} ")) {
+            return true;
+        }
+
+        for phrase in [
+            format!(" on {service}"),
+            format!(" auf {service}"),
+            format!(" in {service}"),
+            format!(" im {service}"),
+            format!("search {service} "),
+            format!("suche {service} "),
+            format!("find {service} "),
+            format!("finde {service} "),
+            format!("{service} search"),
+            format!("{service} suche"),
+        ] {
+            if normalized.contains(&phrase) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn active_controlled_followup_action(
+    input: &str,
+    normalized: &str,
+    play_words: &[String],
+) -> Option<CompanionAction> {
+    if has_explicit_service_target(normalized) {
+        return None;
+    }
+
+    let target = session_memory::active_controlled_target()?;
+    let service = target.service.trim().to_lowercase();
+
+    if let Some(query) = extract_followup_play_query(normalized, play_words) {
+        return match service.as_str() {
+            "youtube" => Some(CompanionAction::YouTubePlayTitle { title: query }),
+            "spotify" | "steam" => Some(CompanionAction::PlayOnService { service, query }),
+            _ if matches!(
+                target.kind,
+                session_memory::ControlledTargetKind::MediaService
+            ) =>
+            {
+                Some(CompanionAction::MediaPlayPause)
+            }
+            _ => None,
+        };
+    }
+
+    if is_standalone_play_command(normalized, play_words) {
+        return match service.as_str() {
+            "youtube" => Some(CompanionAction::YouTubePlay),
+            "spotify" | "steam" => Some(CompanionAction::MediaPlayPause),
+            _ => None,
+        };
+    }
+
+    if let Some(query) = extract_generic_search_query(input) {
+        let query = query.trim().to_string();
+        if query.is_empty() {
+            return None;
+        }
+
+        return match service.as_str() {
+            "youtube" => Some(CompanionAction::YouTubeSearch { query }),
+            "spotify" | "steam" => Some(CompanionAction::PlayOnService { service, query }),
+            "google" => Some(CompanionAction::GoogleSearch { query }),
+            _ if target.kind.is_browser_like() => Some(CompanionAction::GoogleSearch { query }),
+            _ => None,
+        };
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::modules::i18n::command_locale::init_command_locale;
+    use crate::modules::session_memory;
 
     fn init_locale() {
         let _ = init_command_locale("en");
+        session_memory::clear_active_controlled_target();
     }
 
     #[test]
@@ -698,6 +870,75 @@ mod tests {
                 assert_eq!(service, "steam");
                 assert_eq!(query, "elden ring");
             }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn controlled_youtube_context_routes_targetless_play() {
+        init_locale();
+        session_memory::set_controlled_web_service(
+            "youtube",
+            "https://www.youtube.com",
+            "YouTube",
+            "test",
+        );
+
+        match parse_voice_command_with_context("play thriller", "OpenBlob", "", "companion") {
+            CompanionAction::YouTubePlayTitle { title } => assert_eq!(title, "thriller"),
+            other => panic!("unexpected action: {other:?}"),
+        }
+
+        match parse_voice_command_with_context("search for thriller", "OpenBlob", "", "companion") {
+            CompanionAction::YouTubeSearch { query } => assert_eq!(query, "thriller"),
+            other => panic!("unexpected action: {other:?}"),
+        }
+
+        match parse_voice_command_with_context(
+            "play steam deck review",
+            "OpenBlob",
+            "",
+            "companion",
+        ) {
+            CompanionAction::YouTubePlayTitle { title } => assert_eq!(title, "steam deck review"),
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn controlled_spotify_context_routes_targetless_play() {
+        init_locale();
+        session_memory::set_controlled_media_service("spotify", "spotify", "test");
+
+        match parse_voice_command_with_context("play thriller", "OpenBlob", "", "companion") {
+            CompanionAction::PlayOnService { service, query } => {
+                assert_eq!(service, "spotify");
+                assert_eq!(query, "thriller");
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn passive_focus_does_not_override_controlled_session() {
+        init_locale();
+        session_memory::set_controlled_media_service("spotify", "spotify", "test");
+
+        match parse_voice_command_with_context("play thriller", "YouTube", "YouTube", "browser") {
+            CompanionAction::PlayOnService { service, query } => {
+                assert_eq!(service, "spotify");
+                assert_eq!(query, "thriller");
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn use_active_window_can_be_selected_explicitly() {
+        init_locale();
+
+        match parse_voice_command("use this window") {
+            CompanionAction::UseActiveWindow => {}
             other => panic!("unexpected action: {other:?}"),
         }
     }

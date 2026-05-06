@@ -425,7 +425,7 @@ async fn youtube_search_and_play(query: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn youtube_play_title(title: String) -> Result<String, String> {
-    crate::core::legacy::browser_runtime::youtube_play_best_match(title).await
+    crate::core::legacy::browser_runtime::youtube_search_and_play(title).await
 }
 
 #[tauri::command]

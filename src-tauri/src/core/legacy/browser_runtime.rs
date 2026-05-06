@@ -187,26 +187,83 @@ async fn open_or_navigate_debug_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn controlled_web_service_home(target: &str) -> Option<(&'static str, &'static str)> {
+    match target.trim().to_lowercase().as_str() {
+        "youtube" | "yt" => Some(("youtube", "https://www.youtube.com")),
+        "google" => Some(("google", "https://www.google.com")),
+        "gmail" | "googlemail" => Some(("gmail", "https://mail.google.com")),
+        "github" | "git hub" => Some(("github", "https://github.com")),
+        "reddit" => Some(("reddit", "https://www.reddit.com")),
+        "twitch" => Some(("twitch", "https://www.twitch.tv")),
+        _ => None,
+    }
+}
+
+fn set_controlled_browser(url: &str, command: &str) {
+    session_memory::set_controlled_browser(url, "", command);
+}
+
+fn set_controlled_web_service(service: &str, url: &str, command: &str) {
+    session_memory::set_controlled_web_service(service, url, service, command);
+}
+
+pub async fn open_controlled_web_service(target: &str) -> Result<String, String> {
+    let (service, url) = controlled_web_service_home(target)
+        .ok_or_else(|| format!("Unknown web service '{}'.", target))?;
+
+    open_or_navigate_debug_url(url).await?;
+    set_controlled_web_service(service, url, "open_web_service");
+
+    Ok(reply_with(
+        "open_app_opening_browser",
+        &[("target", target.to_string())],
+    ))
+}
+
 pub async fn browser_new_tab_with_url(url: String) -> Result<String, String> {
     if ensure_debug_browser().await.is_ok() {
         browser_automations::new_tab(&url).await?;
+        set_controlled_browser(&url, "browser_new_tab_with_url");
         return Ok(reply("browser_new_tab_opened"));
     }
 
     open_url_normal_browser(&url, true, false)?;
+    set_controlled_browser(&url, "browser_new_tab_with_url");
     Ok(reply("browser_new_tab_opened"))
 }
 
 pub async fn youtube_search_and_play(query: String) -> Result<String, String> {
     ensure_debug_browser().await?;
+    set_controlled_web_service(
+        "youtube",
+        "https://www.youtube.com",
+        "youtube_search_and_play",
+    );
     browser_automations::youtube_search(&query, false).await?;
+    session_memory::set_browser_context(
+        &format!(
+            "https://www.youtube.com/results?search_query={}",
+            urlencoding::encode(&query)
+        ),
+        "YouTube",
+        "youtube_results",
+    );
     tokio::time::sleep(Duration::from_millis(1500)).await;
-    browser_automations::youtube_play_best_match(&query).await
+    let reply = browser_automations::youtube_play_best_match(&query).await;
+    session_memory::touch_active_controlled_target("youtube_play_best_match");
+    reply
 }
 
 pub async fn youtube_play_best_match(title: String) -> Result<String, String> {
     ensure_debug_browser().await?;
-    browser_automations::youtube_play_best_match(&title).await
+    set_controlled_web_service(
+        "youtube",
+        "https://www.youtube.com",
+        "youtube_play_best_match",
+    );
+    let reply = browser_automations::youtube_play_best_match(&title).await;
+    session_memory::touch_active_controlled_target("youtube_play_best_match");
+    reply
 }
 
 pub async fn browser_close_tab_by_index(index: usize) -> Result<String, String> {
@@ -243,11 +300,13 @@ pub async fn browser_open_url(
 
             if new_window {
                 browser_automations::new_tab(&url).await?;
+                set_controlled_browser(&url, "browser_open_url");
                 return Ok(reply("browser_url_opened_new_window"));
             }
 
             if new_tab {
                 browser_automations::new_tab(&url).await?;
+                set_controlled_browser(&url, "browser_open_url");
                 return Ok(reply("browser_url_opened_new_tab"));
             }
 
@@ -255,10 +314,12 @@ pub async fn browser_open_url(
                 browser_automations::new_tab(&url).await?;
             }
 
+            set_controlled_browser(&url, "browser_open_url");
             Ok(reply("browser_url_opened"))
         }
         Err(_) => {
             open_url_normal_browser(&url, new_window || new_tab, incognito)?;
+            set_controlled_browser(&url, "browser_open_url");
             if new_window {
                 Ok(reply("browser_url_opened_new_window"))
             } else if new_tab {
@@ -279,54 +340,74 @@ pub async fn browser_get_context() -> Result<browser_automations::BrowserContext
 
 pub async fn browser_back() -> Result<String, String> {
     ensure_debug_browser().await?;
-    browser_automations::navigate_back().await
+    let reply = browser_automations::navigate_back().await;
+    session_memory::touch_active_controlled_target("browser_back");
+    reply
 }
 
 pub async fn browser_forward() -> Result<String, String> {
     ensure_debug_browser().await?;
-    browser_automations::navigate_forward().await
+    let reply = browser_automations::navigate_forward().await;
+    session_memory::touch_active_controlled_target("browser_forward");
+    reply
 }
 
 pub async fn browser_scroll_down() -> Result<String, String> {
     ensure_debug_browser().await?;
-    browser_automations::scroll_by(700).await
+    let reply = browser_automations::scroll_by(700).await;
+    session_memory::touch_active_controlled_target("browser_scroll_down");
+    reply
 }
 
 pub async fn browser_scroll_up() -> Result<String, String> {
     ensure_debug_browser().await?;
-    browser_automations::scroll_by(-700).await
+    let reply = browser_automations::scroll_by(-700).await;
+    session_memory::touch_active_controlled_target("browser_scroll_up");
+    reply
 }
 
 pub async fn browser_type_text(text: String) -> Result<String, String> {
     ensure_debug_browser().await?;
     session_memory::set_last_search_query(&text);
-    browser_automations::type_in_best_input(&text).await
+    let reply = browser_automations::type_in_best_input(&text).await;
+    session_memory::touch_active_controlled_target("browser_type_text");
+    reply
 }
 
 pub async fn browser_submit() -> Result<String, String> {
     ensure_debug_browser().await?;
-    browser_automations::submit_best_form().await
+    let reply = browser_automations::submit_best_form().await;
+    session_memory::touch_active_controlled_target("browser_submit");
+    reply
 }
 
 pub async fn browser_click_best_match(text: String) -> Result<String, String> {
     ensure_debug_browser().await?;
     session_memory::set_last_clicked_label(&text);
-    browser_automations::click_best_match(&text).await
+    let reply = browser_automations::click_best_match(&text).await;
+    session_memory::touch_active_controlled_target("browser_click_best_match");
+    reply
 }
 
 pub async fn browser_click_link_by_text(text: String, new_tab: bool) -> Result<String, String> {
     ensure_debug_browser().await?;
-    browser_automations::click_link_by_text(&text, new_tab).await
+    let reply = browser_automations::click_link_by_text(&text, new_tab).await;
+    session_memory::touch_active_controlled_target("browser_click_link_by_text");
+    reply
 }
 
 pub async fn browser_click_first_result() -> Result<String, String> {
     ensure_debug_browser().await?;
-    browser_automations::click_nth_result(0).await
+    let reply = browser_automations::click_nth_result(0).await;
+    session_memory::touch_active_controlled_target("browser_click_first_result");
+    reply
 }
 
 pub async fn browser_click_nth_result(index: usize) -> Result<String, String> {
     ensure_debug_browser().await?;
-    browser_automations::click_nth_result(index).await
+    let reply = browser_automations::click_nth_result(index).await;
+    session_memory::touch_active_controlled_target("browser_click_nth_result");
+    reply
 }
 
 pub async fn google_search(query: &str) -> Result<String, String> {
@@ -336,6 +417,7 @@ pub async fn google_search(query: &str) -> Result<String, String> {
     );
 
     open_or_navigate_debug_url(&url).await?;
+    set_controlled_web_service("google", &url, "google_search");
 
     Ok(reply_with(
         "browser_google_search",
@@ -350,6 +432,7 @@ pub async fn youtube_search(query: &str) -> Result<String, String> {
     );
 
     open_or_navigate_debug_url(&url).await?;
+    set_controlled_web_service("youtube", &url, "youtube_search");
 
     Ok(reply_with(
         "browser_youtube_search",
@@ -363,11 +446,15 @@ pub async fn youtube_play_title(title: &str) -> Result<String, String> {
 
 pub async fn new_tab() -> Result<String, String> {
     if ensure_debug_browser().await.is_ok() {
-        browser_automations::new_tab("https://www.google.com").await?;
+        let url = "https://www.google.com";
+        browser_automations::new_tab(url).await?;
+        set_controlled_web_service("google", url, "new_tab");
         return Ok(reply("browser_new_tab_opened"));
     }
 
-    open_url_normal_browser("https://www.google.com", true, false)?;
+    let url = "https://www.google.com";
+    open_url_normal_browser(url, true, false)?;
+    set_controlled_web_service("google", url, "new_tab");
     Ok(reply("browser_new_tab_opened"))
 }
 
@@ -380,10 +467,14 @@ pub async fn close_active_tab() -> Result<String, String> {
 
 pub async fn new_window() -> Result<String, String> {
     if ensure_debug_browser().await.is_ok() {
-        browser_automations::new_tab("https://www.google.com").await?;
+        let url = "https://www.google.com";
+        browser_automations::new_tab(url).await?;
+        set_controlled_web_service("google", url, "new_window");
         return Ok(reply("browser_new_tab_opened"));
     }
 
-    open_url_normal_browser("https://www.google.com", true, false)?;
+    let url = "https://www.google.com";
+    open_url_normal_browser(url, true, false)?;
+    set_controlled_web_service("google", url, "new_window");
     Ok(reply("browser_new_tab_opened"))
 }

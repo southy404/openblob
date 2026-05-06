@@ -241,10 +241,7 @@ fn open_known_local_target(target: &str) -> Result<bool, String> {
     Ok(opened)
 }
 
-pub fn open_app_target(
-    target: &str,
-    prefer_browser: bool,
-) -> Result<String, String> {
+pub fn open_app_target(target: &str, prefer_browser: bool) -> Result<String, String> {
     let normalized = clean_app_target(target);
 
     if prefer_browser {
@@ -458,6 +455,18 @@ pub fn get_last_external_app() -> String {
 }
 
 pub fn ensure_external_focus(preferred_app: &str) -> Result<String, String> {
+    if let Some(target) = crate::modules::session_memory::active_controlled_target() {
+        if matches!(
+            target.kind,
+            crate::modules::session_memory::ControlledTargetKind::App
+                | crate::modules::session_memory::ControlledTargetKind::MediaService
+        ) && !target.app_name.trim().is_empty()
+        {
+            focus_app_window(&target.app_name)?;
+            return Ok(target.app_name);
+        }
+    }
+
     if !is_internal_companion_app(preferred_app) {
         remember_external_app(preferred_app);
         focus_app_window(preferred_app)?;

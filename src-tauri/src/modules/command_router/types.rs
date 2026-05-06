@@ -74,6 +74,7 @@ pub enum CompanionAction {
     BrowserSubmit,
     BrowserClickBestMatch { text: String },
     BrowserContext,
+    UseActiveWindow,
     YouTubePlay,
     YouTubePause,
     YouTubeSkipAd,
