@@ -29,6 +29,17 @@ impl MemoryEventKind {
             Self::ConnectorMessage => "connector_message",
         }
     }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "chat_turn" => Self::ChatTurn,
+            "snip" => Self::Snip,
+            "browser_visit" => Self::BrowserVisit,
+            "transcript_segment" => Self::TranscriptSegment,
+            "connector_message" => Self::ConnectorMessage,
+            _ => Self::Command,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -40,6 +40,7 @@ pub fn forget_memory(query: &str) -> Result<MemoryMutationReport, String> {
 
 pub fn wipe_memory_with_connection(conn: &Connection) -> Result<MemoryMutationReport, String> {
     let embeddings = delete_all(conn, "memory_embeddings")?;
+    let _ = delete_all_optional(conn, "memory_embedding_vec");
     let _ = delete_all(conn, "memory_events_fts")?;
     let summaries = delete_all(conn, "memory_summaries")?;
     let facts = delete_all(conn, "memory_facts")?;
@@ -212,6 +213,7 @@ fn delete_events_by_ids(conn: &Connection, ids: &[String]) -> Result<usize, Stri
     for id in ids {
         conn.execute("DELETE FROM memory_embeddings WHERE target_id = ?1", [id])
             .map_err(|e| format!("Could not delete event embedding '{id}': {e}"))?;
+        let _ = conn.execute("DELETE FROM memory_embedding_vec WHERE target_id = ?1", [id]);
         conn.execute("DELETE FROM memory_events_fts WHERE event_id = ?1", [id])
             .map_err(|e| format!("Could not delete event FTS row '{id}': {e}"))?;
         count += conn
@@ -223,6 +225,14 @@ fn delete_events_by_ids(conn: &Connection, ids: &[String]) -> Result<usize, Stri
 }
 
 fn delete_orphan_embeddings(conn: &Connection) -> Result<usize, String> {
+    let _ = conn.execute(
+        r#"
+        DELETE FROM memory_embedding_vec
+        WHERE target_id NOT IN (SELECT id FROM memory_events)
+        "#,
+        [],
+    );
+
     conn.execute(
         r#"
         DELETE FROM memory_embeddings
@@ -237,6 +247,10 @@ fn delete_orphan_embeddings(conn: &Connection) -> Result<usize, String> {
 fn delete_all(conn: &Connection, table: &str) -> Result<usize, String> {
     conn.execute(&format!("DELETE FROM {table}"), [])
         .map_err(|e| format!("Could not wipe {table}: {e}"))
+}
+
+fn delete_all_optional(conn: &Connection, table: &str) -> usize {
+    conn.execute(&format!("DELETE FROM {table}"), []).unwrap_or(0)
 }
 
 #[cfg(test)]

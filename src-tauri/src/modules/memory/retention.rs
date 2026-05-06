@@ -48,6 +48,13 @@ pub fn apply_memory_retention_with_connection(
             [],
         )
         .map_err(|e| format!("Could not delete expired memory embeddings: {e}"))?;
+    let _ = conn.execute(
+        r#"
+        DELETE FROM memory_embedding_vec
+        WHERE target_id NOT IN (SELECT id FROM memory_events)
+        "#,
+        [],
+    );
 
     Ok(MemoryMutationReport {
         events,
@@ -129,6 +136,7 @@ fn delete_event_ids(conn: &rusqlite::Connection, ids: &[String]) -> Result<usize
     for id in ids {
         conn.execute("DELETE FROM memory_embeddings WHERE target_id = ?1", [id])
             .map_err(|e| format!("Could not delete retained embedding '{id}': {e}"))?;
+        let _ = conn.execute("DELETE FROM memory_embedding_vec WHERE target_id = ?1", [id]);
         conn.execute("DELETE FROM memory_events_fts WHERE event_id = ?1", [id])
             .map_err(|e| format!("Could not delete retained FTS row '{id}': {e}"))?;
         count += conn

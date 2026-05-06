@@ -4,7 +4,10 @@ use serde_json::json;
 use std::time::Duration;
 
 use crate::modules::i18n::replies::{reply, reply_with};
-use crate::modules::memory::context::build_memory_context_for_query;
+use crate::modules::context::resolve_active_context;
+use crate::modules::memory::context::{
+    build_memory_context_for_query_and_context, ActiveMemoryContext,
+};
 use crate::modules::profile::companion_config::load_or_create_companion_config;
 use crate::modules::profile::user_profile::load_or_create_user_profile;
 
@@ -254,9 +257,17 @@ pub async fn ask_ollama(
             .filter(|value| !value.is_empty())
             .unwrap_or(trimmed);
 
-        if let Ok(memory_context) =
-            build_memory_context_for_query(Some(memory_query), Some(config.memory.prompt_context_limit))
-        {
+        let active = resolve_active_context();
+        let active_context = ActiveMemoryContext {
+            app_name: Some(active.app_name),
+            context_domain: Some(active.domain),
+        };
+
+        if let Ok(memory_context) = build_memory_context_for_query_and_context(
+            Some(memory_query),
+            Some(active_context),
+            Some(config.memory.prompt_context_limit),
+        ) {
             system = append_memory_context(system, &memory_context.memory);
         }
     }

@@ -1,17 +1,21 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::OnceLock;
 use std::thread;
 
+use chrono::{DateTime, Duration, Utc};
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 
 use crate::modules::memory::events::{MemoryEvent, PrivacyTier};
 use crate::modules::memory::embeddings::try_embed_event;
+use crate::modules::memory::extraction::extract_and_store_facts_for_event;
 use crate::modules::memory::sqlite_store::{insert_memory_event, open_memory_database_at};
 use crate::modules::storage::paths::memory_database_path;
 
 pub const DEFAULT_MEMORY_EVENT_QUEUE_CAPACITY: usize = 256;
 
 static MEMORY_WRITER: OnceLock<MemoryWriterHandle> = OnceLock::new();
+static PRIVATE_MODE_UNTIL_TS: AtomicI64 = AtomicI64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnqueueMemoryEventResult {
@@ -33,6 +37,10 @@ impl MemoryWriterHandle {
     }
 
     pub fn enqueue(&self, event: MemoryEvent) -> EnqueueMemoryEventResult {
+        if is_memory_private_mode_active() {
+            return EnqueueMemoryEventResult::SkippedTransient;
+        }
+
         if event.privacy_tier == PrivacyTier::Transient {
             return EnqueueMemoryEventResult::SkippedTransient;
         }
@@ -70,6 +78,33 @@ pub fn enqueue_memory_event(event: MemoryEvent) -> EnqueueMemoryEventResult {
     }
 }
 
+pub fn enable_memory_private_mode(minutes: u32) -> String {
+    let minutes = minutes.clamp(1, 24 * 60) as i64;
+    let until = Utc::now() + Duration::minutes(minutes);
+    PRIVATE_MODE_UNTIL_TS.store(until.timestamp(), Ordering::Relaxed);
+    until.to_rfc3339()
+}
+
+pub fn clear_memory_private_mode() {
+    PRIVATE_MODE_UNTIL_TS.store(0, Ordering::Relaxed);
+}
+
+pub fn memory_private_mode_until() -> Option<String> {
+    let timestamp = PRIVATE_MODE_UNTIL_TS.load(Ordering::Relaxed);
+    if timestamp <= Utc::now().timestamp() {
+        if timestamp != 0 {
+            clear_memory_private_mode();
+        }
+        return None;
+    }
+
+    DateTime::<Utc>::from_timestamp(timestamp, 0).map(|value| value.to_rfc3339())
+}
+
+pub fn is_memory_private_mode_active() -> bool {
+    memory_private_mode_until().is_some()
+}
+
 fn run_memory_writer_at_path(receiver: Receiver<MemoryEvent>, db_path: PathBuf) {
     let conn = match open_memory_database_at(db_path.as_path()) {
         Ok(conn) => conn,
@@ -85,6 +120,9 @@ fn run_memory_writer_at_path(receiver: Receiver<MemoryEvent>, db_path: PathBuf) 
         }
         if let Err(err) = try_embed_event(&conn, &event) {
             eprintln!("[openblob] Memory writer skipped embedding: {err}");
+        }
+        if let Err(err) = extract_and_store_facts_for_event(&conn, &event) {
+            eprintln!("[openblob] Memory writer skipped semantic extraction: {err}");
         }
     }
 }

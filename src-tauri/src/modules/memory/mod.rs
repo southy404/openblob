@@ -2,6 +2,7 @@ pub mod context;
 pub mod embeddings;
 pub mod episodic_memory;
 pub mod events;
+pub mod extraction;
 pub mod facts;
 pub mod import;
 pub mod management;
