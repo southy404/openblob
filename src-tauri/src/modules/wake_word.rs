@@ -1,6 +1,7 @@
 use chrono::Utc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ort::session::Session;
+use ort::value::{Tensor, TensorElementType, ValueType};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs;
@@ -136,34 +137,6 @@ struct WakeWordModelBundle {
     validation_errors: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct WakeWordBundleManifest {
-    id: Option<String>,
-    provider: Option<String>,
-    phrase: Option<String>,
-    runtime: Option<String>,
-    #[serde(rename = "sampleRate")]
-    sample_rate: Option<u32>,
-    #[serde(rename = "frameMs")]
-    frame_ms: Option<u32>,
-    threshold: Option<f32>,
-    models: WakeWordBundleModels,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct WakeWordBundleModels {
-    melspectrogram: Option<String>,
-    embedding: Option<String>,
-    classifier: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct WakeWordModelBundle {
-    manifest_path: PathBuf,
-    manifest: WakeWordBundleManifest,
-    missing_files: Vec<String>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WakeWordDetectedEvent {
@@ -204,6 +177,7 @@ enum WakeWordProviderResult {
     RuntimeMissing(String),
     InvalidModelBundle(String),
     PipelineIncomplete(String),
+    UnsupportedModelShape(String),
     Error(String),
 }
 
@@ -244,6 +218,7 @@ struct OnnxSession {
     session: Session,
     input_shape: Option<String>,
     output_shape: Option<String>,
+    input_dims: Vec<i64>,
 }
 
 struct OnnxWakeWordRuntime {
@@ -251,6 +226,7 @@ struct OnnxWakeWordRuntime {
     melspectrogram: Option<OnnxSession>,
     embedding: Option<OnnxSession>,
     classifier: OnnxSession,
+    classifier_window: VecDeque<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -266,6 +242,8 @@ enum WakeWordRuntimeError {
     UnsupportedRuntime(String),
     InvalidBundle(String),
     PipelineIncomplete(String),
+    UnsupportedModelShape(String),
+    InferenceFailed(String),
 }
 
 impl OnnxWakeWordRuntime {
@@ -294,21 +272,44 @@ impl OnnxWakeWordRuntime {
     fn classifier_output_shape(&self) -> Option<String> {
         self.classifier.output_shape.clone()
     }
-}
 
-struct OnnxWakeWordRuntime;
+    fn classifier_input_from_features(
+        &mut self,
+        features: Vec<f32>,
+    ) -> Result<Option<Vec<f32>>, WakeWordRuntimeError> {
+        let Some(expected_len) = self.classifier.concrete_input_len() else {
+            return Ok(Some(features));
+        };
 
-impl OnnxWakeWordRuntime {
-    fn load(_bundle: &WakeWordModelBundle) -> Result<Self, String> {
-        Err(
-            "ONNX Runtime integration is not linked yet. Install a local openWakeWord ONNX runtime bundle before enabling real inference."
-                .into(),
-        )
-    }
+        if expected_len == 0 {
+            return Err(WakeWordRuntimeError::UnsupportedModelShape(
+                "Wake-word classifier has an empty input tensor shape.".into(),
+            ));
+        }
 
-    #[allow(dead_code)]
-    fn run_inference_frame(&mut self, _frame: &[f32]) -> Result<f32, String> {
-        Err("ONNX wake-word inference is not available in this build.".into())
+        if features.len() == expected_len {
+            self.classifier_window.clear();
+            return Ok(Some(features));
+        }
+
+        if features.len() > expected_len {
+            return Err(WakeWordRuntimeError::UnsupportedModelShape(format!(
+                "Wake-word classifier input shape {:?} expects {expected_len} values, but the upstream feature stage produced {}.",
+                self.classifier.input_dims,
+                features.len()
+            )));
+        }
+
+        self.classifier_window.extend(features);
+        while self.classifier_window.len() > expected_len {
+            let _ = self.classifier_window.pop_front();
+        }
+
+        if self.classifier_window.len() < expected_len {
+            return Ok(None);
+        }
+
+        Ok(Some(self.classifier_window.iter().copied().collect()))
     }
 }
 
@@ -673,6 +674,348 @@ fn load_model_bundle(path: &Path) -> Result<WakeWordModelBundle, String> {
         manifest,
         missing_files,
         validation_errors,
+    })
+}
+
+fn resolve_onnx_runtime_path(bundle: &WakeWordModelBundle) -> Option<PathBuf> {
+    std::env::var_os(ONNX_RUNTIME_PATH_ENV)
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .or_else(|| {
+            let candidates = [
+                bundle.bundle_dir.join("onnxruntime.dll"),
+                bundle.bundle_dir.join("runtime").join("onnxruntime.dll"),
+            ];
+            candidates.into_iter().find(|path| path.is_file())
+        })
+}
+
+fn ensure_onnx_runtime_loaded(
+    bundle: &WakeWordModelBundle,
+) -> Result<PathBuf, WakeWordRuntimeError> {
+    static ONNX_RUNTIME_INIT: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+
+    ONNX_RUNTIME_INIT
+        .get_or_init(|| {
+            let runtime_path = resolve_onnx_runtime_path(bundle).ok_or_else(|| {
+                format!(
+                    "Local wake-word runtime is missing or could not be loaded. Set {ONNX_RUNTIME_PATH_ENV} to onnxruntime.dll."
+                )
+            })?;
+            ort::init_from(&runtime_path)
+                .map_err(|err| format!("Could not load ONNX Runtime from {}: {err}", runtime_path.display()))?
+                .commit();
+            Ok(runtime_path)
+        })
+        .clone()
+        .map_err(WakeWordRuntimeError::RuntimeMissing)
+}
+
+fn tensor_dims(dtype: &ValueType, label: &str) -> Result<Vec<i64>, WakeWordRuntimeError> {
+    match dtype {
+        ValueType::Tensor { ty, shape, .. } if *ty == TensorElementType::Float32 => {
+            Ok(shape.iter().copied().collect())
+        }
+        ValueType::Tensor { ty, .. } => Err(WakeWordRuntimeError::UnsupportedModelShape(format!(
+            "{label} must be a float32 tensor, got {ty:?}."
+        ))),
+        other => Err(WakeWordRuntimeError::UnsupportedModelShape(format!(
+            "{label} must be a tensor, got {other:?}."
+        ))),
+    }
+}
+
+fn concrete_tensor_len(dims: &[i64]) -> Option<usize> {
+    dims.iter().try_fold(1usize, |acc, dim| {
+        if *dim <= 0 {
+            None
+        } else {
+            acc.checked_mul(*dim as usize)
+        }
+    })
+}
+
+fn resolve_tensor_input_shape(
+    dims: &[i64],
+    input_len: usize,
+    label: &str,
+) -> Result<Vec<i64>, WakeWordRuntimeError> {
+    if input_len == 0 {
+        return Err(WakeWordRuntimeError::UnsupportedModelShape(format!(
+            "{label} received an empty input frame."
+        )));
+    }
+
+    if dims.is_empty() {
+        if input_len == 1 {
+            return Ok(Vec::new());
+        }
+
+        return Err(WakeWordRuntimeError::UnsupportedModelShape(format!(
+            "{label} expects a scalar tensor, but received {input_len} samples."
+        )));
+    }
+
+    let mut shape = dims.to_vec();
+    let dynamic_indices = shape
+        .iter()
+        .enumerate()
+        .filter_map(|(index, dim)| (*dim <= 0).then_some(index))
+        .collect::<Vec<_>>();
+    let known_product = shape
+        .iter()
+        .filter(|dim| **dim > 0)
+        .try_fold(1usize, |acc, dim| acc.checked_mul(*dim as usize))
+        .ok_or_else(|| {
+            WakeWordRuntimeError::UnsupportedModelShape(format!(
+                "{label} input shape has dimensions too large to resolve: {dims:?}."
+            ))
+        })?;
+
+    if dynamic_indices.is_empty() {
+        if known_product == input_len {
+            return Ok(shape);
+        }
+
+        return Err(WakeWordRuntimeError::UnsupportedModelShape(format!(
+            "{label} input shape {dims:?} expects {known_product} values, got {input_len}."
+        )));
+    }
+
+    if known_product == 0 || input_len % known_product != 0 {
+        return Err(WakeWordRuntimeError::UnsupportedModelShape(format!(
+            "{label} input shape {dims:?} cannot be resolved for {input_len} values."
+        )));
+    }
+
+    let inferred = input_len / known_product;
+    if inferred == 0 {
+        return Err(WakeWordRuntimeError::UnsupportedModelShape(format!(
+            "{label} input shape {dims:?} resolved to an empty dynamic dimension."
+        )));
+    }
+
+    for (offset, index) in dynamic_indices.iter().enumerate() {
+        shape[*index] = if offset == 0 { inferred as i64 } else { 1 };
+    }
+
+    let resolved_product = shape
+        .iter()
+        .try_fold(1usize, |acc, dim| acc.checked_mul(*dim as usize))
+        .ok_or_else(|| {
+            WakeWordRuntimeError::UnsupportedModelShape(format!(
+                "{label} resolved input shape is too large: {shape:?}."
+            ))
+        })?;
+    if resolved_product != input_len {
+        return Err(WakeWordRuntimeError::UnsupportedModelShape(format!(
+            "{label} resolved input shape {shape:?} expects {resolved_product} values, got {input_len}."
+        )));
+    }
+
+    Ok(shape)
+}
+
+fn load_onnx_session(path: &Path) -> Result<OnnxSession, WakeWordRuntimeError> {
+    let session = Session::builder()
+        .map_err(|err| {
+            WakeWordRuntimeError::RuntimeLoadFailed(format!(
+                "Could not create ONNX session builder: {err}"
+            ))
+        })?
+        .commit_from_file(path)
+        .map_err(|err| {
+            WakeWordRuntimeError::RuntimeLoadFailed(format!(
+                "Could not load ONNX model {}: {err}",
+                path.display()
+            ))
+        })?;
+    let input = session.inputs().first().ok_or_else(|| {
+        WakeWordRuntimeError::UnsupportedModelShape(format!(
+            "ONNX model {} has no inputs.",
+            path.display()
+        ))
+    })?;
+    let output = session.outputs().first().ok_or_else(|| {
+        WakeWordRuntimeError::UnsupportedModelShape(format!(
+            "ONNX model {} has no outputs.",
+            path.display()
+        ))
+    })?;
+    let input_dims = tensor_dims(input.dtype(), "wake-word ONNX input")?;
+    let input_shape = Some(format!("{}: {:?}", input.name(), input.dtype()));
+    let output_shape = Some(format!("{}: {:?}", output.name(), output.dtype()));
+
+    Ok(OnnxSession {
+        session,
+        input_shape,
+        output_shape,
+        input_dims,
+    })
+}
+
+impl OnnxSession {
+    fn concrete_input_len(&self) -> Option<usize> {
+        concrete_tensor_len(&self.input_dims)
+    }
+
+    fn run_f32(&mut self, input: &[f32], label: &str) -> Result<Vec<f32>, WakeWordRuntimeError> {
+        let shape = resolve_tensor_input_shape(&self.input_dims, input.len(), label)?;
+        let tensor =
+            Tensor::from_array((shape, input.to_vec().into_boxed_slice())).map_err(|err| {
+                WakeWordRuntimeError::InferenceFailed(format!(
+                    "Could not create ONNX tensor for {label}: {err}"
+                ))
+            })?;
+        let outputs = self.session.run(ort::inputs![tensor]).map_err(|err| {
+            WakeWordRuntimeError::InferenceFailed(format!(
+                "ONNX inference failed in {label}: {err}"
+            ))
+        })?;
+
+        if outputs.len() == 0 {
+            return Err(WakeWordRuntimeError::InferenceFailed(format!(
+                "ONNX inference in {label} returned no outputs."
+            )));
+        }
+
+        let (_, values) = outputs[0].try_extract_tensor::<f32>().map_err(|err| {
+            WakeWordRuntimeError::InferenceFailed(format!(
+                "Could not read float32 ONNX output from {label}: {err}"
+            ))
+        })?;
+
+        if values.is_empty() {
+            return Err(WakeWordRuntimeError::InferenceFailed(format!(
+                "ONNX inference in {label} returned an empty tensor."
+            )));
+        }
+
+        Ok(values.to_vec())
+    }
+}
+
+fn model_path_from_manifest(
+    bundle: &WakeWordModelBundle,
+    file_name: Option<&str>,
+) -> Result<Option<PathBuf>, WakeWordRuntimeError> {
+    file_name
+        .filter(|file_name| !file_name.trim().is_empty())
+        .map(|file_name| {
+            let path = bundle.bundle_dir.join(file_name);
+            if path.is_file() {
+                Ok(path)
+            } else {
+                Err(WakeWordRuntimeError::InvalidBundle(format!(
+                    "Wake-word model file is missing: {}",
+                    path.display()
+                )))
+            }
+        })
+        .transpose()
+}
+
+fn load_onnx_wake_word_runtime(
+    bundle: &WakeWordModelBundle,
+) -> Result<OnnxWakeWordRuntime, WakeWordRuntimeError> {
+    if !bundle.missing_files.is_empty() || !bundle.validation_errors.is_empty() {
+        let mut errors = bundle.missing_files.clone();
+        errors.extend(bundle.validation_errors.clone());
+        return Err(WakeWordRuntimeError::InvalidBundle(format!(
+            "Local wake-word model bundle is invalid. {}",
+            errors.join(", ")
+        )));
+    }
+
+    let runtime = bundle.manifest.runtime.as_deref().unwrap_or("onnx");
+    if !runtime.eq_ignore_ascii_case("onnx") {
+        return Err(WakeWordRuntimeError::UnsupportedRuntime(format!(
+            "Unsupported wake-word runtime: {runtime}"
+        )));
+    }
+
+    let runtime_path = ensure_onnx_runtime_loaded(bundle)?;
+    log(format!(
+        "loading ONNX wake-word bundle; manifest={}, runtime={}",
+        bundle.manifest_path.display(),
+        runtime_path.display()
+    ));
+
+    let melspectrogram =
+        model_path_from_manifest(bundle, bundle.manifest.models.melspectrogram.as_deref())?
+            .map(|path| load_onnx_session(&path))
+            .transpose()?;
+    let embedding = model_path_from_manifest(bundle, bundle.manifest.models.embedding.as_deref())?
+        .map(|path| load_onnx_session(&path))
+        .transpose()?;
+    let classifier_path =
+        model_path_from_manifest(bundle, bundle.manifest.models.classifier.as_deref())?
+            .ok_or_else(|| {
+                WakeWordRuntimeError::InvalidBundle("Wake-word classifier model is missing.".into())
+            })?;
+    let classifier = load_onnx_session(&classifier_path)?;
+
+    Ok(OnnxWakeWordRuntime {
+        manifest: bundle.manifest.clone(),
+        melspectrogram,
+        embedding,
+        classifier,
+        classifier_window: VecDeque::new(),
+    })
+}
+
+fn run_wake_word_inference(
+    runtime: &mut OnnxWakeWordRuntime,
+    frame: &[f32],
+    sample_rate: u32,
+) -> Result<WakeWordInferenceResult, WakeWordRuntimeError> {
+    let phrase = runtime
+        .manifest
+        .phrase
+        .clone()
+        .unwrap_or_else(default_wake_word_phrase);
+
+    if sample_rate != DEFAULT_WAKE_WORD_SAMPLE_RATE {
+        return Err(WakeWordRuntimeError::UnsupportedModelShape(format!(
+            "Local wake-word provider expects {DEFAULT_WAKE_WORD_SAMPLE_RATE} Hz audio, got {sample_rate} Hz."
+        )));
+    }
+
+    if frame.is_empty() {
+        return Ok(WakeWordInferenceResult { score: 0.0, phrase });
+    }
+
+    let mut features = frame.to_vec();
+    if let Some(melspectrogram) = runtime.melspectrogram.as_mut() {
+        features = melspectrogram.run_f32(&features, "melspectrogram")?;
+    }
+    if let Some(embedding) = runtime.embedding.as_mut() {
+        features = embedding.run_f32(&features, "embedding")?;
+    }
+
+    let classifier_input = runtime.classifier_input_from_features(features)?;
+    let Some(classifier_input) = classifier_input else {
+        return Ok(WakeWordInferenceResult { score: 0.0, phrase });
+    };
+
+    let scores = runtime
+        .classifier
+        .run_f32(&classifier_input, "wake-word classifier")?;
+    let score = scores
+        .iter()
+        .copied()
+        .filter(|score| score.is_finite())
+        .fold(f32::NEG_INFINITY, f32::max);
+
+    if !score.is_finite() {
+        return Err(WakeWordRuntimeError::InferenceFailed(
+            "Wake-word classifier returned no finite score.".into(),
+        ));
+    }
+
+    Ok(WakeWordInferenceResult {
+        score: score.clamp(0.0, 1.0),
+        phrase,
     })
 }
 
@@ -1097,12 +1440,8 @@ impl WakeWordProvider for MockWakeWordProvider {
         }
 
         let now = Instant::now();
-        let cooldown_ready = self
-            .last_detection
-            .map(|last| {
-                now.duration_since(last) >= StdDuration::from_millis(MOCK_DETECTION_COOLDOWN_MS)
-            })
-            .unwrap_or(true);
+        let cooldown_ready =
+            detection_cooldown_ready(self.last_detection, now, MOCK_DETECTION_COOLDOWN_MS);
 
         if level >= self.threshold && cooldown_ready {
             self.last_detection = Some(now);
@@ -1356,6 +1695,14 @@ impl WakeWordProvider for LocalWakeWordProvider {
                         self.runtime_error = Some(message.clone());
                         return WakeWordProviderResult::PipelineIncomplete(message);
                     }
+                    Err(WakeWordRuntimeError::UnsupportedModelShape(message)) => {
+                        self.runtime_error = Some(message.clone());
+                        return WakeWordProviderResult::UnsupportedModelShape(message);
+                    }
+                    Err(WakeWordRuntimeError::InferenceFailed(message)) => {
+                        self.runtime_error = Some(message.clone());
+                        return WakeWordProviderResult::Error(message);
+                    }
                 }
             }
 
@@ -1384,6 +1731,14 @@ impl WakeWordProvider for LocalWakeWordProvider {
                 Err(WakeWordRuntimeError::PipelineIncomplete(message)) => {
                     self.runtime_error = Some(message.clone());
                     WakeWordProviderResult::PipelineIncomplete(message)
+                }
+                Err(WakeWordRuntimeError::UnsupportedModelShape(message)) => {
+                    self.runtime_error = Some(message.clone());
+                    WakeWordProviderResult::UnsupportedModelShape(message)
+                }
+                Err(WakeWordRuntimeError::InferenceFailed(message)) => {
+                    self.runtime_error = Some(message.clone());
+                    WakeWordProviderResult::Error(message)
                 }
                 Err(WakeWordRuntimeError::RuntimeMissing(message))
                 | Err(WakeWordRuntimeError::RuntimeLoadFailed(message)) => {
@@ -1457,6 +1812,16 @@ fn rms(samples: &[f32]) -> f32 {
         .sum::<f32>();
 
     (sum / samples.len() as f32).sqrt().clamp(0.0, 1.0)
+}
+
+fn detection_cooldown_ready(
+    last_detection: Option<Instant>,
+    now: Instant,
+    cooldown_ms: u64,
+) -> bool {
+    last_detection
+        .map(|last| now.duration_since(last) >= StdDuration::from_millis(cooldown_ms))
+        .unwrap_or(true)
 }
 
 struct WakeWordFrameQueue {
@@ -1851,6 +2216,7 @@ fn run_provider_worker(
     let target_sample_rate = provider.target_sample_rate();
     let frame_ms = provider.frame_ms();
     let mut queue = WakeWordFrameQueue::new(target_sample_rate, frame_ms);
+    let mut last_detection_at: Option<Instant> = None;
 
     log(format!(
         "provider worker started; provider={provider_name}, sample_rate={sample_rate}, channels={channels}, target_sample_rate={target_sample_rate}, frame_ms={frame_ms}"
@@ -1865,7 +2231,16 @@ fn run_provider_worker(
             match provider.process_audio_frame(&frame, target_sample_rate) {
                 WakeWordProviderResult::NoMatch => {}
                 WakeWordProviderResult::Detected { score, phrase } => {
-                    handle_wake_word_detected(&app, &settings, &provider_name, phrase, score);
+                    let now = Instant::now();
+                    if detection_cooldown_ready(last_detection_at, now, MOCK_DETECTION_COOLDOWN_MS)
+                    {
+                        last_detection_at = Some(now);
+                        handle_wake_word_detected(&app, &settings, &provider_name, phrase, score);
+                    } else {
+                        log(format!(
+                            "wake detection ignored during cooldown; provider={provider_name}"
+                        ));
+                    }
                 }
                 WakeWordProviderResult::ModelMissing(message) => {
                     set_runtime_error_state(&settings, "model_missing", message);
@@ -1889,6 +2264,10 @@ fn run_provider_worker(
                         "model_loaded_runtime_pipeline_incomplete",
                         message,
                     );
+                    return;
+                }
+                WakeWordProviderResult::UnsupportedModelShape(message) => {
+                    set_runtime_error_state(&settings, "unsupported_model_shape", message);
                     return;
                 }
                 WakeWordProviderResult::Error(message) => {
@@ -1931,7 +2310,7 @@ fn update_runtime_loaded_status(model_status: &WakeWordModelStatus, runtime: &On
 
 fn handle_wake_word_detected(
     app: &tauri::AppHandle,
-    settings: &WakeWordSettings,
+    _settings: &WakeWordSettings,
     provider: &str,
     phrase: String,
     score: f32,
@@ -1965,12 +2344,13 @@ fn handle_wake_word_detected(
 
     if let Err(err) = app.emit("wake-word-detected", event) {
         log(format!("could not emit wake-word-detected event: {err}"));
+    } else {
+        log("wake-word-detected event emitted");
     }
 
-    // TODO: Wire this event to the existing voice-capture flow once there is a safe shared helper.
     log(format!(
         "wake word detected; provider={provider}, phrase={}, score={score:.3}",
-        settings.wake_word_phrase
+        phrase
     ));
     schedule_detected_reset();
 }
@@ -1991,11 +2371,20 @@ fn schedule_detected_reset() {
                 guard.message = listening_message(&guard.provider).into();
                 guard.detected = false;
                 guard.listening = true;
-                guard.provider_state = if guard.provider == "mock" {
-                    "mock_active".into()
-                } else {
-                    "mic_test_active".into()
-                };
+                guard.provider_state = match guard.provider.as_str() {
+                    "mic-test" => "mic_test_active",
+                    "mock" => "mock_active",
+                    "local-openwakeword" | "local-wakeword" => "model_loaded",
+                    _ => "listening",
+                }
+                .into();
+                guard.runtime_state = match guard.provider.as_str() {
+                    "local-openwakeword" | "local-wakeword" => "model_loaded",
+                    "mock" => "mock",
+                    "mic-test" => "not_required",
+                    _ => "listening",
+                }
+                .into();
             }
         });
 }
@@ -2280,5 +2669,53 @@ mod tests {
         assert_eq!(availability.start_state, "model_missing");
         assert!(availability.model_missing);
         assert!(!availability.start_allowed);
+    }
+
+    #[test]
+    fn resolve_tensor_input_shape_accepts_exact_static_shape() {
+        let shape = resolve_tensor_input_shape(&[1, 1280], 1280, "test").unwrap();
+        assert_eq!(shape, vec![1, 1280]);
+    }
+
+    #[test]
+    fn resolve_tensor_input_shape_fills_single_dynamic_dimension() {
+        let shape = resolve_tensor_input_shape(&[1, -1, 32, 1], 2496, "test").unwrap();
+        assert_eq!(shape, vec![1, 78, 32, 1]);
+    }
+
+    #[test]
+    fn resolve_tensor_input_shape_rejects_incompatible_static_shape() {
+        let err = resolve_tensor_input_shape(&[1, 1600], 1280, "test").unwrap_err();
+        assert!(matches!(
+            err,
+            WakeWordRuntimeError::UnsupportedModelShape(_)
+        ));
+    }
+
+    #[test]
+    fn detection_cooldown_blocks_recent_detection() {
+        let now = Instant::now();
+        let recent = now
+            .checked_sub(StdDuration::from_millis(MOCK_DETECTION_COOLDOWN_MS / 2))
+            .unwrap();
+        let old = now
+            .checked_sub(StdDuration::from_millis(MOCK_DETECTION_COOLDOWN_MS + 1))
+            .unwrap();
+
+        assert!(detection_cooldown_ready(
+            None,
+            now,
+            MOCK_DETECTION_COOLDOWN_MS
+        ));
+        assert!(!detection_cooldown_ready(
+            Some(recent),
+            now,
+            MOCK_DETECTION_COOLDOWN_MS
+        ));
+        assert!(detection_cooldown_ready(
+            Some(old),
+            now,
+            MOCK_DETECTION_COOLDOWN_MS
+        ));
     }
 }

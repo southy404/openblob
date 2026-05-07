@@ -47,6 +47,7 @@ type WakeWordStatusName =
   | "runtime_missing"
   | "runtime_load_failed"
   | "model_loaded_runtime_pipeline_incomplete"
+  | "unsupported_model_shape"
   | "provider_not_implemented"
   | "error";
 
@@ -1169,6 +1170,21 @@ function DevWindow() {
     }));
   };
 
+  const wakeWordProviderCanTriggerVoice =
+    wakeWordStatus.provider === "mock" ||
+    wakeWordStatus.provider === "local-openwakeword" ||
+    wakeWordStatus.provider === "local-wakeword";
+  const wakeToVoiceBlockReason = !wakeWordSettings.wake_word_auto_listen_enabled
+    ? "Wake-to-voice is disabled. Detection will not start voice input."
+    : !wakeWordSettings.wake_word_enabled || !wakeWordStatus.enabled
+      ? "Wake word is disabled."
+      : !wakeWordStatus.listening
+        ? "Wake listener is not active."
+        : !wakeWordProviderCanTriggerVoice
+          ? "Selected provider does not trigger voice input."
+          : null;
+  const wakeToVoiceArmed = wakeToVoiceBlockReason == null;
+
   return (
     <>
       <style>{`
@@ -2073,6 +2089,9 @@ function DevWindow() {
                   "Mic test is active. No wake-word model is running."}
                 {wakeWordStatus.provider === "mock" &&
                   "Mock wake-word detection is active for development only."}
+                {wakeWordSettings.wake_word_auto_listen_enabled
+                  ? " Wake-to-voice is enabled."
+                  : " Wake-to-voice is disabled. Detection will not start voice input."}
                 {(wakeWordStatus.provider === "local-openwakeword" ||
                   wakeWordStatus.provider === "local-wakeword") &&
                   wakeWordStatus.model_missing &&
@@ -2096,6 +2115,10 @@ function DevWindow() {
                   wakeWordStatus.state ===
                     "model_loaded_runtime_pipeline_incomplete" &&
                   "Local wake-word inference pipeline is not complete yet."}
+                {(wakeWordStatus.provider === "local-openwakeword" ||
+                  wakeWordStatus.provider === "local-wakeword") &&
+                  wakeWordStatus.state === "unsupported_model_shape" &&
+                  "Local wake-word model shape is not supported yet."}
                 {wakeWordStatus.state === "detected" && " Wake word detected."}
                 {wakeWordStatus.state === "no_input_device" &&
                   "No microphone input device is available."}
@@ -2183,9 +2206,9 @@ function DevWindow() {
                 <div className="wakeMetric">
                   <div className="metricLabel">{t.wakeWordAutoListenStatus}</div>
                   <div className="metricValue">
-                    {wakeWordSettings.wake_word_auto_listen_enabled
-                      ? "enabled"
-                      : "disabled"}
+                    {wakeToVoiceArmed
+                      ? "armed - voice can start from wake word"
+                      : `blocked - ${wakeToVoiceBlockReason}`}
                   </div>
                 </div>
 

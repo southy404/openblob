@@ -28,6 +28,9 @@ type WakeWordSettings = {
 type WakeWordStatus = {
   state: string;
   listening: boolean;
+  enabled?: boolean;
+  provider?: string;
+  detected?: boolean;
 };
 
 type OllamaResult = {
@@ -90,6 +93,12 @@ type BubbleTexts = {
   alreadyListening: string;
   wakeWordDetected: string;
   iHeardYou: string;
+  wakeToVoiceDisabled: string;
+  wakeEventIgnoredBusy: string;
+  wakeEventIgnoredListening: string;
+  wakeEventIgnoredStale: string;
+  wakeEventIgnoredProvider: string;
+  voiceStartedFromWakeWord: string;
   voiceError: (msg: string) => string;
   microphoneError: (msg: string) => string;
   chattingWithModel: (model: string) => string;
@@ -133,6 +142,14 @@ const BLOB_SIGNALS: BlobSignal[] = [
   "alert",
 ];
 
+const WAKE_TO_VOICE_COOLDOWN_MS = 2_000;
+const WAKE_EVENT_MAX_AGE_MS = 10_000;
+const WAKE_EVENT_ALLOWED_PROVIDERS = new Set([
+  "mock",
+  "local-openwakeword",
+  "local-wakeword",
+]);
+
 const BUBBLE_TEXTS: Record<UiLang, BubbleTexts> = {
   en: {
     ready: "Ready.",
@@ -154,6 +171,12 @@ const BUBBLE_TEXTS: Record<UiLang, BubbleTexts> = {
     alreadyListening: "Already listening.",
     wakeWordDetected: "Wake word detected.",
     iHeardYou: "I heard you.",
+    wakeToVoiceDisabled: "Wake-to-voice is disabled.",
+    wakeEventIgnoredBusy: "Wake event ignored because OpenBlob is busy.",
+    wakeEventIgnoredListening: "Wake event ignored because voice input is already active.",
+    wakeEventIgnoredStale: "Wake event ignored because it is stale.",
+    wakeEventIgnoredProvider: "Wake event ignored for this provider.",
+    voiceStartedFromWakeWord: "Voice input started from wake word.",
     voiceError: (msg) => `Voice error: ${msg}`,
     microphoneError: (msg) => `Microphone error: ${msg}`,
     chattingWithModel: (model) => `Chatting with ${model}`,
@@ -195,6 +218,13 @@ const BUBBLE_TEXTS: Record<UiLang, BubbleTexts> = {
     alreadyListening: "Ich hoere schon zu.",
     wakeWordDetected: "Wake word erkannt.",
     iHeardYou: "Ja?",
+    wakeToVoiceDisabled: "Wake-to-Voice ist deaktiviert.",
+    wakeEventIgnoredBusy: "Wake-Event ignoriert, weil OpenBlob beschaeftigt ist.",
+    wakeEventIgnoredListening:
+      "Wake-Event ignoriert, weil die Spracheingabe schon aktiv ist.",
+    wakeEventIgnoredStale: "Wake-Event ignoriert, weil es zu alt ist.",
+    wakeEventIgnoredProvider: "Wake-Event fuer diesen Provider ignoriert.",
+    voiceStartedFromWakeWord: "Spracheingabe vom Wake Word gestartet.",
     voiceError: (msg) => `Sprachfehler: ${msg}`,
     microphoneError: (msg) => `Mikrofonfehler: ${msg}`,
     chattingWithModel: (model) => `Chatte mit ${model}`,
@@ -391,6 +421,7 @@ function BubbleApp() {
   const listeningRef = useRef(listening);
   const busyRef = useRef(false);
   const phaseRef = useRef<BlobPhase>("idle");
+  const lastWakeEventKeyRef = useRef("");
   const lastWakeVoiceAtRef = useRef(0);
 
   const t = BUBBLE_TEXTS[uiLang];
@@ -997,7 +1028,44 @@ function BubbleApp() {
 
       unlistenWakeWord = await listen<WakeWordDetectedPayload>(
         "wake-word-detected",
-        async () => {
+        async (event) => {
+          const payload = event.payload;
+          const provider = payload.provider?.trim().toLowerCase() ?? "";
+          const eventKey = `${provider}:${payload.detectedAt}:${payload.score}`;
+          const now = Date.now();
+          const eventTime = Date.parse(payload.detectedAt);
+          const eventAge = Number.isFinite(eventTime) ? now - eventTime : 0;
+
+          console.info("[openblob:wake-word] frontend received wake event", {
+            provider,
+            detectedAt: payload.detectedAt,
+            score: payload.score,
+          });
+
+          if (eventKey === lastWakeEventKeyRef.current) {
+            console.info("[openblob:wake-word] duplicate wake event ignored");
+            return;
+          }
+          lastWakeEventKeyRef.current = eventKey;
+
+          if (
+            !WAKE_EVENT_ALLOWED_PROVIDERS.has(provider) ||
+            !Number.isFinite(payload.score)
+          ) {
+            setHint(t.wakeEventIgnoredProvider);
+            console.info("[openblob:wake-word] wake event ignored: provider");
+            return;
+          }
+
+          if (
+            Number.isFinite(eventTime) &&
+            (eventAge > WAKE_EVENT_MAX_AGE_MS || eventAge < -2_000)
+          ) {
+            setHint(t.wakeEventIgnoredStale);
+            console.info("[openblob:wake-word] wake event ignored: stale");
+            return;
+          }
+
           await fadeInAndShow();
           setHint(t.wakeWordDetected);
           await showSubtitle(t.iHeardYou, 1800);
@@ -1009,20 +1077,21 @@ function BubbleApp() {
             }
           }, 900);
 
-          const now = Date.now();
-
-          if (now - lastWakeVoiceAtRef.current < 2000) {
+          if (now - lastWakeVoiceAtRef.current < WAKE_TO_VOICE_COOLDOWN_MS) {
             setHint(t.alreadyListening);
+            console.info("[openblob:wake-word] wake event ignored: cooldown");
             return;
           }
 
           if (listeningRef.current) {
-            setHint(t.alreadyListening);
+            setHint(t.wakeEventIgnoredListening);
+            console.info("[openblob:wake-word] wake event ignored: listening");
             return;
           }
 
-          if (busyRef.current) {
-            setHint(t.processing);
+          if (busyRef.current || phaseRef.current === "thinking" || phaseRef.current === "executing" || phaseRef.current === "transcript") {
+            setHint(t.wakeEventIgnoredBusy);
+            console.info("[openblob:wake-word] wake event ignored: busy");
             return;
           }
 
@@ -1044,16 +1113,35 @@ function BubbleApp() {
           if (
             !settings.wake_word_enabled ||
             !settings.wake_word_auto_listen_enabled ||
+            status.enabled === false ||
             (status.state !== "listening" && status.state !== "detected") ||
-            !status.listening
+            !status.listening ||
+            (status.provider &&
+              status.provider !== "mock" &&
+              status.provider !== "local-openwakeword" &&
+              status.provider !== "local-wakeword")
           ) {
+            setHint(
+              settings.wake_word_auto_listen_enabled
+                ? t.wakeEventIgnoredBusy
+                : t.wakeToVoiceDisabled
+            );
+            console.info("[openblob:wake-word] wake event ignored: not armed", {
+              enabled: settings.wake_word_enabled,
+              autoListen: settings.wake_word_auto_listen_enabled,
+              status,
+            });
             return;
           }
 
           lastWakeVoiceAtRef.current = now;
           setHint(t.iHeardYou);
           await sleep(180);
-          await startVoiceInput("wake-word");
+          const started = await startVoiceInput("wake-word");
+          if (started) {
+            setHint(t.voiceStartedFromWakeWord);
+            console.info("[openblob:wake-word] voice input started from wake event");
+          }
         }
       );
     };
