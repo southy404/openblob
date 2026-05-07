@@ -353,9 +353,11 @@ Wake-word support is local-first and disabled by default. The manual `ALT + M` v
 - `mic-test` checks the local microphone pipeline only.
 - `mock` simulates wake detection for development.
 - `local-openwakeword` is the real local provider path: users manually install an openWakeWord-style ONNX bundle under `%APPDATA%/OpenBlob/voice/models/wake-word/`.
+- ONNX Runtime can be selected in Dev settings, provided through `OPENBLOB_ONNX_RUNTIME_PATH`, placed next to the bundle, or placed under `%APPDATA%/OpenBlob/voice/runtime/onnxruntime/`.
+- The Dev / Wake Word panel can verify the local runtime and model bundle, open the install folders, and save explicit local paths without starting the microphone.
 - Wake-to-voice is opt-in and starts the existing voice input flow only after a `wake-word-detected` event.
 
-No cloud wake provider, paid API key, automatic model download, or raw audio file recording is required.
+No cloud wake provider, paid API key, automatic model download, or raw audio file recording is required. The Dev UI has explicit download buttons as a safe boundary, but automatic downloads are not configured yet.
 
 Example hands-free flow:
 
@@ -521,14 +523,16 @@ Current status:
 - local microphone availability detection is supported
 - `mic-test` / `mock` provider modes can start a local listener
 - dev UI can show listener state, selected input device, chunks seen, last audio timestamp, and input level
+- dev UI can verify local ONNX Runtime and model bundle installation, open AppData install folders, and save selected local paths
 - openWakeWord-style ONNX bundles can be discovered and ONNX sessions can be loaded when a local runtime is configured
 - compatible bundles run through the local mel-spectrogram -> embedding -> classifier path and emit `wake-word-detected` on threshold match
 - unsupported model shapes and runtime failures are surfaced explicitly without fake detections
+- downloads are not automatic; model and runtime assets are user-provided for now, and pretrained model licenses must be checked before redistribution or commercial use
 
 Planned next steps:
 
 - broaden local openWakeWord model compatibility and add test fixture bundles
-- wake phrase management through the dev/settings UI
+- optional, explicit asset downloads with checksums and versioned folders
 - consent-first onboarding for microphone access
 - better visual feedback while listening
 - broader microphone permission/onboarding UX
