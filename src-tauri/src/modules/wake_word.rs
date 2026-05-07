@@ -1,5 +1,6 @@
 use chrono::Utc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use ort::session::Session;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs;
@@ -23,6 +24,7 @@ const WAKE_WORD_MODEL_EXTENSIONS: [&str; 4] = ["onnx", "tflite", "bin", "json"];
 const DEFAULT_WAKE_WORD_SAMPLE_RATE: u32 = 16_000;
 const DEFAULT_WAKE_WORD_FRAME_MS: u32 = 80;
 const DEFAULT_WAKE_WORD_THRESHOLD: f32 = 0.5;
+const ONNX_RUNTIME_PATH_ENV: &str = "OPENBLOB_ONNX_RUNTIME_PATH";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WakeWordSettings {
@@ -75,6 +77,10 @@ pub struct WakeWordStatus {
     pub wake_phrase_matched: Option<String>,
     pub provider_ready: bool,
     pub provider_error: Option<String>,
+    pub loaded_model_count: u32,
+    pub classifier_input_shape: Option<String>,
+    pub classifier_output_shape: Option<String>,
+    pub runtime_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +99,11 @@ pub struct WakeWordModelStatus {
     pub discovered_models: Vec<String>,
     pub search_paths: Vec<String>,
     pub provider: String,
+    pub runtime_state: String,
+    pub loaded_model_count: u32,
+    pub classifier_input_shape: Option<String>,
+    pub classifier_output_shape: Option<String>,
+    pub runtime_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -118,9 +129,11 @@ struct WakeWordBundleModels {
 
 #[derive(Debug, Clone)]
 struct WakeWordModelBundle {
+    bundle_dir: PathBuf,
     manifest_path: PathBuf,
     manifest: WakeWordBundleManifest,
     missing_files: Vec<String>,
+    validation_errors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -149,6 +162,10 @@ struct WakeWordProviderAvailability {
     last_error: Option<String>,
     start_allowed: bool,
     start_state: String,
+    loaded_model_count: u32,
+    classifier_input_shape: Option<String>,
+    classifier_output_shape: Option<String>,
+    runtime_error: Option<String>,
 }
 
 enum WakeWordProviderResult {
@@ -158,6 +175,7 @@ enum WakeWordProviderResult {
     ProviderMissing(String),
     RuntimeMissing(String),
     InvalidModelBundle(String),
+    PipelineIncomplete(String),
     Error(String),
 }
 
@@ -190,21 +208,63 @@ struct MockWakeWordProvider {
 struct LocalWakeWordProvider {
     provider_name: &'static str,
     model_status: WakeWordModelStatus,
+    runtime: Option<OnnxWakeWordRuntime>,
+    runtime_error: Option<String>,
 }
 
-struct OnnxWakeWordRuntime;
+struct OnnxSession {
+    session: Session,
+    input_shape: Option<String>,
+    output_shape: Option<String>,
+}
+
+struct OnnxWakeWordRuntime {
+    manifest: WakeWordBundleManifest,
+    melspectrogram: Option<OnnxSession>,
+    embedding: Option<OnnxSession>,
+    classifier: OnnxSession,
+}
+
+#[derive(Debug, Clone)]
+struct WakeWordInferenceResult {
+    score: f32,
+    phrase: String,
+}
+
+#[derive(Debug, Clone)]
+enum WakeWordRuntimeError {
+    RuntimeMissing(String),
+    RuntimeLoadFailed(String),
+    UnsupportedRuntime(String),
+    InvalidBundle(String),
+    PipelineIncomplete(String),
+}
 
 impl OnnxWakeWordRuntime {
-    fn load(_bundle: &WakeWordModelBundle) -> Result<Self, String> {
-        Err(
-            "ONNX Runtime integration is not linked yet. Install a local openWakeWord ONNX runtime bundle before enabling real inference."
-                .into(),
-        )
+    fn load(bundle: &WakeWordModelBundle) -> Result<Self, WakeWordRuntimeError> {
+        load_onnx_wake_word_runtime(bundle)
     }
 
     #[allow(dead_code)]
-    fn run_inference_frame(&mut self, _frame: &[f32]) -> Result<f32, String> {
-        Err("ONNX wake-word inference is not available in this build.".into())
+    fn run_inference_frame(
+        &mut self,
+        frame: &[f32],
+        sample_rate: u32,
+    ) -> Result<WakeWordInferenceResult, WakeWordRuntimeError> {
+        run_wake_word_inference(self, frame, sample_rate)
+    }
+
+    fn loaded_model_count(&self) -> u32 {
+        1 + if self.melspectrogram.is_some() { 1 } else { 0 }
+            + if self.embedding.is_some() { 1 } else { 0 }
+    }
+
+    fn classifier_input_shape(&self) -> Option<String> {
+        self.classifier.input_shape.clone()
+    }
+
+    fn classifier_output_shape(&self) -> Option<String> {
+        self.classifier.output_shape.clone()
     }
 }
 
@@ -307,6 +367,10 @@ fn base_status(settings: &WakeWordSettings) -> WakeWordStatus {
         wake_phrase_matched: None,
         provider_ready: availability.provider_ready,
         provider_error: availability.last_error,
+        loaded_model_count: availability.loaded_model_count,
+        classifier_input_shape: availability.classifier_input_shape,
+        classifier_output_shape: availability.classifier_output_shape,
+        runtime_error: availability.runtime_error,
     }
 }
 
@@ -364,6 +428,10 @@ fn apply_settings_to_status(status: &mut WakeWordStatus, settings: &WakeWordSett
     status.threshold = availability.threshold;
     status.provider_ready = availability.provider_ready;
     status.provider_error = availability.last_error;
+    status.loaded_model_count = availability.loaded_model_count;
+    status.classifier_input_shape = availability.classifier_input_shape;
+    status.classifier_output_shape = availability.classifier_output_shape;
+    status.runtime_error = availability.runtime_error;
 }
 
 fn set_status(status: WakeWordStatus) -> Result<WakeWordStatus, String> {
@@ -514,6 +582,7 @@ fn load_model_bundle(path: &Path) -> Result<WakeWordModelBundle, String> {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| path.to_path_buf());
     let mut missing_files = Vec::new();
+    let mut validation_errors = Vec::new();
 
     for (label, file_name) in [
         ("melspectrogram", manifest.models.melspectrogram.as_deref()),
@@ -530,11 +599,185 @@ fn load_model_bundle(path: &Path) -> Result<WakeWordModelBundle, String> {
         }
     }
 
+    let runtime = manifest.runtime.as_deref().unwrap_or("onnx");
+    if !runtime.eq_ignore_ascii_case("onnx") {
+        validation_errors.push(format!("runtime: unsupported runtime '{runtime}'"));
+    }
+
+    if manifest
+        .sample_rate
+        .unwrap_or(DEFAULT_WAKE_WORD_SAMPLE_RATE)
+        != DEFAULT_WAKE_WORD_SAMPLE_RATE
+    {
+        validation_errors.push(format!(
+            "sampleRate: expected {DEFAULT_WAKE_WORD_SAMPLE_RATE} Hz for the current local provider"
+        ));
+    }
+
+    if manifest.frame_ms.unwrap_or(DEFAULT_WAKE_WORD_FRAME_MS) == 0 {
+        validation_errors.push("frameMs: must be greater than 0".into());
+    }
+
+    let threshold = manifest.threshold.unwrap_or(DEFAULT_WAKE_WORD_THRESHOLD);
+    if !(0.0..=1.0).contains(&threshold) {
+        validation_errors.push("threshold: must be between 0.0 and 1.0".into());
+    }
+
     Ok(WakeWordModelBundle {
+        bundle_dir: root_path,
         manifest_path,
         manifest,
         missing_files,
+        validation_errors,
     })
+}
+
+fn resolve_onnx_runtime_path(bundle: &WakeWordModelBundle) -> Option<PathBuf> {
+    std::env::var_os(ONNX_RUNTIME_PATH_ENV)
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .or_else(|| {
+            let candidates = [
+                bundle.bundle_dir.join("onnxruntime.dll"),
+                bundle.bundle_dir.join("runtime").join("onnxruntime.dll"),
+            ];
+            candidates.into_iter().find(|path| path.is_file())
+        })
+}
+
+fn ensure_onnx_runtime_loaded(
+    bundle: &WakeWordModelBundle,
+) -> Result<PathBuf, WakeWordRuntimeError> {
+    static ONNX_RUNTIME_INIT: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+
+    ONNX_RUNTIME_INIT
+        .get_or_init(|| {
+            let runtime_path = resolve_onnx_runtime_path(bundle).ok_or_else(|| {
+                format!(
+                    "Local wake-word runtime is missing or could not be loaded. Set {ONNX_RUNTIME_PATH_ENV} to onnxruntime.dll."
+                )
+            })?;
+            ort::init_from(&runtime_path)
+                .map_err(|err| format!("Could not load ONNX Runtime from {}: {err}", runtime_path.display()))?
+                .commit();
+            Ok(runtime_path)
+        })
+        .clone()
+        .map_err(WakeWordRuntimeError::RuntimeMissing)
+}
+
+fn load_onnx_session(path: &Path) -> Result<OnnxSession, WakeWordRuntimeError> {
+    let session = Session::builder()
+        .map_err(|err| {
+            WakeWordRuntimeError::RuntimeLoadFailed(format!(
+                "Could not create ONNX session builder: {err}"
+            ))
+        })?
+        .commit_from_file(path)
+        .map_err(|err| {
+            WakeWordRuntimeError::RuntimeLoadFailed(format!(
+                "Could not load ONNX model {}: {err}",
+                path.display()
+            ))
+        })?;
+    let input_shape = session
+        .inputs()
+        .first()
+        .map(|input| format!("{}: {:?}", input.name(), input.dtype()));
+    let output_shape = session
+        .outputs()
+        .first()
+        .map(|output| format!("{}: {:?}", output.name(), output.dtype()));
+
+    Ok(OnnxSession {
+        session,
+        input_shape,
+        output_shape,
+    })
+}
+
+fn model_path_from_manifest(
+    bundle: &WakeWordModelBundle,
+    file_name: Option<&str>,
+) -> Result<Option<PathBuf>, WakeWordRuntimeError> {
+    file_name
+        .filter(|file_name| !file_name.trim().is_empty())
+        .map(|file_name| {
+            let path = bundle.bundle_dir.join(file_name);
+            if path.is_file() {
+                Ok(path)
+            } else {
+                Err(WakeWordRuntimeError::InvalidBundle(format!(
+                    "Wake-word model file is missing: {}",
+                    path.display()
+                )))
+            }
+        })
+        .transpose()
+}
+
+fn load_onnx_wake_word_runtime(
+    bundle: &WakeWordModelBundle,
+) -> Result<OnnxWakeWordRuntime, WakeWordRuntimeError> {
+    if !bundle.missing_files.is_empty() || !bundle.validation_errors.is_empty() {
+        let mut errors = bundle.missing_files.clone();
+        errors.extend(bundle.validation_errors.clone());
+        return Err(WakeWordRuntimeError::InvalidBundle(format!(
+            "Local wake-word model bundle is invalid. {}",
+            errors.join(", ")
+        )));
+    }
+
+    let runtime = bundle.manifest.runtime.as_deref().unwrap_or("onnx");
+    if !runtime.eq_ignore_ascii_case("onnx") {
+        return Err(WakeWordRuntimeError::UnsupportedRuntime(format!(
+            "Unsupported wake-word runtime: {runtime}"
+        )));
+    }
+
+    let runtime_path = ensure_onnx_runtime_loaded(bundle)?;
+    log(format!(
+        "loading ONNX wake-word bundle; manifest={}, runtime={}",
+        bundle.manifest_path.display(),
+        runtime_path.display()
+    ));
+
+    let melspectrogram =
+        model_path_from_manifest(bundle, bundle.manifest.models.melspectrogram.as_deref())?
+            .map(|path| load_onnx_session(&path))
+            .transpose()?;
+    let embedding = model_path_from_manifest(bundle, bundle.manifest.models.embedding.as_deref())?
+        .map(|path| load_onnx_session(&path))
+        .transpose()?;
+    let classifier_path =
+        model_path_from_manifest(bundle, bundle.manifest.models.classifier.as_deref())?
+            .ok_or_else(|| {
+                WakeWordRuntimeError::InvalidBundle("Wake-word classifier model is missing.".into())
+            })?;
+    let classifier = load_onnx_session(&classifier_path)?;
+
+    Ok(OnnxWakeWordRuntime {
+        manifest: bundle.manifest.clone(),
+        melspectrogram,
+        embedding,
+        classifier,
+    })
+}
+
+fn run_wake_word_inference(
+    runtime: &mut OnnxWakeWordRuntime,
+    _frame: &[f32],
+    _sample_rate: u32,
+) -> Result<WakeWordInferenceResult, WakeWordRuntimeError> {
+    let phrase = runtime
+        .manifest
+        .phrase
+        .clone()
+        .unwrap_or_else(default_wake_word_phrase);
+    let _classifier_inputs = runtime.classifier.session.inputs().len();
+    Err(WakeWordRuntimeError::PipelineIncomplete(format!(
+        "Local wake-word inference pipeline is not complete yet. Loaded ONNX bundle for '{phrase}', but the openWakeWord mel/embedding/classifier chaining is not wired."
+    )))
 }
 
 fn model_bundle_for_status(status: &WakeWordModelStatus) -> Option<WakeWordModelBundle> {
@@ -542,6 +785,10 @@ fn model_bundle_for_status(status: &WakeWordModelStatus) -> Option<WakeWordModel
         .resolved_model_path
         .as_deref()
         .and_then(|path| load_model_bundle(Path::new(path)).ok())
+}
+
+fn model_bundle_for_path(path: Option<&Path>) -> Option<WakeWordModelBundle> {
+    path.and_then(|path| load_model_bundle(path).ok())
 }
 
 fn model_status_for_settings(settings: &WakeWordSettings) -> WakeWordModelStatus {
@@ -568,7 +815,11 @@ fn model_status_for_settings(settings: &WakeWordSettings) -> WakeWordModelStatus
         });
     let missing_files = bundle
         .as_ref()
-        .map(|bundle| bundle.missing_files.clone())
+        .map(|bundle| {
+            let mut errors = bundle.missing_files.clone();
+            errors.extend(bundle.validation_errors.clone());
+            errors
+        })
         .unwrap_or_else(|| {
             if resolved_path
                 .as_deref()
@@ -585,7 +836,7 @@ fn model_status_for_settings(settings: &WakeWordSettings) -> WakeWordModelStatus
         });
     let manifest_valid = bundle
         .as_ref()
-        .map(|bundle| bundle.missing_files.is_empty())
+        .map(|bundle| bundle.missing_files.is_empty() && bundle.validation_errors.is_empty())
         .unwrap_or(false);
     let model_exists = resolved_path
         .as_deref()
@@ -634,6 +885,36 @@ fn model_status_for_settings(settings: &WakeWordSettings) -> WakeWordModelStatus
                 .wake_word_sensitivity
                 .max(DEFAULT_WAKE_WORD_THRESHOLD),
         ));
+    let runtime_state = if model_missing {
+        "model_missing".to_string()
+    } else if !manifest_valid && is_local_provider(&settings.wake_word_provider) {
+        "invalid_model_bundle".to_string()
+    } else if runtime
+        .as_deref()
+        .map(|value| value.eq_ignore_ascii_case("onnx"))
+        .unwrap_or(false)
+    {
+        model_bundle_for_path(resolved_path.as_deref())
+            .and_then(|bundle| resolve_onnx_runtime_path(&bundle))
+            .map(|_| "runtime_configured".to_string())
+            .unwrap_or_else(|| "runtime_missing".to_string())
+    } else {
+        "unsupported_runtime".to_string()
+    };
+    let runtime_error = if runtime_state == "runtime_missing"
+        && is_local_provider(&settings.wake_word_provider)
+        && manifest_valid
+    {
+        Some(format!(
+            "Local wake-word runtime is missing or could not be loaded. Set {ONNX_RUNTIME_PATH_ENV} to onnxruntime.dll."
+        ))
+    } else if runtime_state == "unsupported_runtime" {
+        runtime
+            .as_ref()
+            .map(|runtime| format!("Unsupported wake-word runtime: {runtime}"))
+    } else {
+        None
+    };
 
     WakeWordModelStatus {
         configured_model_path: settings.wake_word_model_path.clone(),
@@ -653,6 +934,11 @@ fn model_status_for_settings(settings: &WakeWordSettings) -> WakeWordModelStatus
             .collect(),
         search_paths: search_paths.iter().map(|path| path_string(path)).collect(),
         provider: settings.wake_word_provider.clone(),
+        runtime_state,
+        loaded_model_count: 0,
+        classifier_input_shape: None,
+        classifier_output_shape: None,
+        runtime_error,
     }
 }
 
@@ -700,6 +986,10 @@ impl WakeWordProvider for MicTestProvider {
             last_error: None,
             start_allowed: true,
             start_state: "listening".into(),
+            loaded_model_count: 0,
+            classifier_input_shape: None,
+            classifier_output_shape: None,
+            runtime_error: None,
         }
     }
 
@@ -743,6 +1033,10 @@ impl WakeWordProvider for MockWakeWordProvider {
             last_error: None,
             start_allowed: true,
             start_state: "listening".into(),
+            loaded_model_count: 0,
+            classifier_input_shape: None,
+            classifier_output_shape: None,
+            runtime_error: None,
         }
     }
 
@@ -783,6 +1077,8 @@ impl LocalWakeWordProvider {
         Self {
             provider_name,
             model_status,
+            runtime: None,
+            runtime_error: None,
         }
     }
 
@@ -811,7 +1107,14 @@ impl LocalWakeWordProvider {
                     .map(|path| path_string(path))
                     .collect(),
                 provider,
+                runtime_state: "not_configured".into(),
+                loaded_model_count: 0,
+                classifier_input_shape: None,
+                classifier_output_shape: None,
+                runtime_error: None,
             },
+            runtime: None,
+            runtime_error: None,
         }
     }
 }
@@ -837,9 +1140,13 @@ impl WakeWordProvider for LocalWakeWordProvider {
                 sample_rate: None,
                 threshold: None,
                 message: message.clone(),
-                last_error: Some(message),
+                last_error: Some(message.clone()),
                 start_allowed: false,
                 start_state: "provider_missing".into(),
+                loaded_model_count: 0,
+                classifier_input_shape: None,
+                classifier_output_shape: None,
+                runtime_error: Some(message),
             };
         }
 
@@ -859,9 +1166,13 @@ impl WakeWordProvider for LocalWakeWordProvider {
                 sample_rate: self.model_status.sample_rate,
                 threshold: self.model_status.threshold,
                 message: message.clone(),
-                last_error: Some(message),
+                last_error: Some(message.clone()),
                 start_allowed: false,
                 start_state: "model_missing".into(),
+                loaded_model_count: self.model_status.loaded_model_count,
+                classifier_input_shape: self.model_status.classifier_input_shape.clone(),
+                classifier_output_shape: self.model_status.classifier_output_shape.clone(),
+                runtime_error: Some(message),
             };
         }
 
@@ -887,20 +1198,52 @@ impl WakeWordProvider for LocalWakeWordProvider {
                 sample_rate: self.model_status.sample_rate,
                 threshold: self.model_status.threshold,
                 message: message.clone(),
-                last_error: Some(message),
+                last_error: Some(message.clone()),
                 start_allowed: false,
                 start_state: "invalid_model_bundle".into(),
+                loaded_model_count: self.model_status.loaded_model_count,
+                classifier_input_shape: self.model_status.classifier_input_shape.clone(),
+                classifier_output_shape: self.model_status.classifier_output_shape.clone(),
+                runtime_error: Some(message),
             };
         }
 
-        let runtime_load_error = model_bundle_for_status(&self.model_status)
-            .and_then(|bundle| OnnxWakeWordRuntime::load(&bundle).err())
-            .unwrap_or_else(|| "Local wake-word runtime is missing or could not be loaded.".into());
-        let message = runtime_load_error;
+        let runtime_path = model_bundle_for_status(&self.model_status)
+            .and_then(|bundle| resolve_onnx_runtime_path(&bundle));
+        if runtime_path.is_none() {
+            let message = format!(
+                "Local wake-word runtime is missing or could not be loaded. Set {ONNX_RUNTIME_PATH_ENV} to onnxruntime.dll."
+            );
+            return WakeWordProviderAvailability {
+                provider_state: "runtime_missing".into(),
+                runtime_state: "runtime_missing".into(),
+                provider_ready: false,
+                provider_configured: true,
+                model_path: self.model_status.resolved_model_path.clone(),
+                model_missing: false,
+                manifest_path: self.model_status.manifest_path.clone(),
+                manifest_valid: self.model_status.manifest_valid,
+                missing_files: self.model_status.missing_files.clone(),
+                sample_rate: self.model_status.sample_rate,
+                threshold: self.model_status.threshold,
+                message: message.clone(),
+                last_error: Some(message.clone()),
+                start_allowed: false,
+                start_state: "runtime_missing".into(),
+                loaded_model_count: self.model_status.loaded_model_count,
+                classifier_input_shape: self.model_status.classifier_input_shape.clone(),
+                classifier_output_shape: self.model_status.classifier_output_shape.clone(),
+                runtime_error: Some(message),
+            };
+        }
+
+        let message =
+            "Local wake-word model bundle is ready; ONNX runtime will load when listening starts."
+                .to_string();
         WakeWordProviderAvailability {
-            provider_state: "runtime_missing".into(),
-            runtime_state: "runtime_missing".into(),
-            provider_ready: false,
+            provider_state: "runtime_configured".into(),
+            runtime_state: self.model_status.runtime_state.clone(),
+            provider_ready: true,
             provider_configured: true,
             model_path: self.model_status.resolved_model_path.clone(),
             model_missing: false,
@@ -910,9 +1253,13 @@ impl WakeWordProvider for LocalWakeWordProvider {
             sample_rate: self.model_status.sample_rate,
             threshold: self.model_status.threshold,
             message: message.clone(),
-            last_error: Some(message),
-            start_allowed: false,
-            start_state: "runtime_missing".into(),
+            last_error: None,
+            start_allowed: true,
+            start_state: "listening".into(),
+            loaded_model_count: self.model_status.loaded_model_count,
+            classifier_input_shape: self.model_status.classifier_input_shape.clone(),
+            classifier_output_shape: self.model_status.classifier_output_shape.clone(),
+            runtime_error: None,
         }
     }
 
@@ -928,7 +1275,7 @@ impl WakeWordProvider for LocalWakeWordProvider {
             .unwrap_or(DEFAULT_WAKE_WORD_FRAME_MS)
     }
 
-    fn process_audio_frame(&mut self, _frame: &[f32], _sample_rate: u32) -> WakeWordProviderResult {
+    fn process_audio_frame(&mut self, frame: &[f32], sample_rate: u32) -> WakeWordProviderResult {
         if self.model_status.model_missing {
             WakeWordProviderResult::ModelMissing(
                 "Local wake-word provider selected, but no model is installed.".into(),
@@ -938,9 +1285,73 @@ impl WakeWordProvider for LocalWakeWordProvider {
                 "Local wake-word model bundle is invalid.".into(),
             )
         } else {
-            WakeWordProviderResult::RuntimeMissing(
-                "Local wake-word runtime is missing or could not be loaded.".into(),
-            )
+            let Some(bundle) = model_bundle_for_status(&self.model_status) else {
+                return WakeWordProviderResult::InvalidModelBundle(
+                    "Local wake-word model bundle is invalid.".into(),
+                );
+            };
+
+            if self.runtime.is_none() {
+                match OnnxWakeWordRuntime::load(&bundle) {
+                    Ok(runtime) => {
+                        update_runtime_loaded_status(&self.model_status, &runtime);
+                        self.runtime = Some(runtime);
+                        self.runtime_error = None;
+                    }
+                    Err(WakeWordRuntimeError::RuntimeMissing(message))
+                    | Err(WakeWordRuntimeError::RuntimeLoadFailed(message)) => {
+                        self.runtime_error = Some(message.clone());
+                        return WakeWordProviderResult::RuntimeMissing(message);
+                    }
+                    Err(WakeWordRuntimeError::UnsupportedRuntime(message))
+                    | Err(WakeWordRuntimeError::InvalidBundle(message)) => {
+                        self.runtime_error = Some(message.clone());
+                        return WakeWordProviderResult::InvalidModelBundle(message);
+                    }
+                    Err(WakeWordRuntimeError::PipelineIncomplete(message)) => {
+                        self.runtime_error = Some(message.clone());
+                        return WakeWordProviderResult::PipelineIncomplete(message);
+                    }
+                }
+            }
+
+            let Some(runtime) = self.runtime.as_mut() else {
+                return WakeWordProviderResult::RuntimeMissing(
+                    "Local wake-word runtime is missing or could not be loaded.".into(),
+                );
+            };
+
+            match runtime.run_inference_frame(frame, sample_rate) {
+                Ok(result) => {
+                    let threshold = runtime
+                        .manifest
+                        .threshold
+                        .or(self.model_status.threshold)
+                        .unwrap_or(DEFAULT_WAKE_WORD_THRESHOLD);
+                    if result.score >= threshold {
+                        WakeWordProviderResult::Detected {
+                            score: result.score,
+                            phrase: result.phrase,
+                        }
+                    } else {
+                        WakeWordProviderResult::NoMatch
+                    }
+                }
+                Err(WakeWordRuntimeError::PipelineIncomplete(message)) => {
+                    self.runtime_error = Some(message.clone());
+                    WakeWordProviderResult::PipelineIncomplete(message)
+                }
+                Err(WakeWordRuntimeError::RuntimeMissing(message))
+                | Err(WakeWordRuntimeError::RuntimeLoadFailed(message)) => {
+                    self.runtime_error = Some(message.clone());
+                    WakeWordProviderResult::RuntimeMissing(message)
+                }
+                Err(WakeWordRuntimeError::UnsupportedRuntime(message))
+                | Err(WakeWordRuntimeError::InvalidBundle(message)) => {
+                    self.runtime_error = Some(message.clone());
+                    WakeWordProviderResult::InvalidModelBundle(message)
+                }
+            }
         }
     }
 }
@@ -1428,6 +1839,14 @@ fn run_provider_worker(
                     set_runtime_error_state(&settings, "invalid_model_bundle", message);
                     return;
                 }
+                WakeWordProviderResult::PipelineIncomplete(message) => {
+                    set_runtime_error_state(
+                        &settings,
+                        "model_loaded_runtime_pipeline_incomplete",
+                        message,
+                    );
+                    return;
+                }
                 WakeWordProviderResult::Error(message) => {
                     set_runtime_error_state(&settings, "error", message);
                     return;
@@ -1443,7 +1862,27 @@ fn set_runtime_error_state(settings: &WakeWordSettings, state: &str, message: St
     let mut status =
         status_for_state_with_settings(settings, state, message.clone(), Some(message));
     status.listening = false;
+    status.runtime_error = status.last_error.clone();
     let _ = set_status(status);
+}
+
+fn update_runtime_loaded_status(model_status: &WakeWordModelStatus, runtime: &OnnxWakeWordRuntime) {
+    let Ok(mut guard) = status_store().lock() else {
+        return;
+    };
+
+    guard.provider_state = "model_loaded".into();
+    guard.runtime_state = "model_loaded".into();
+    guard.provider_ready = true;
+    guard.loaded_model_count = runtime.loaded_model_count();
+    guard.classifier_input_shape = runtime.classifier_input_shape();
+    guard.classifier_output_shape = runtime.classifier_output_shape();
+    guard.runtime_error = None;
+    guard.provider_error = None;
+    guard.model_path = model_status.resolved_model_path.clone();
+    guard.manifest_path = model_status.manifest_path.clone();
+    guard.manifest_valid = model_status.manifest_valid;
+    guard.message = "Local wake-word model loaded.".into();
 }
 
 fn handle_wake_word_detected(
@@ -1697,7 +2136,105 @@ pub fn set_wake_word_model_path(path: Option<String>) -> Result<WakeWordModelSta
         current.runtime_state = availability.runtime_state;
         current.provider_ready = availability.provider_ready;
         current.provider_error = availability.last_error;
+        current.loaded_model_count = availability.loaded_model_count;
+        current.classifier_input_shape = availability.classifier_input_shape;
+        current.classifier_output_shape = availability.classifier_output_shape;
+        current.runtime_error = availability.runtime_error;
     }
 
     Ok(status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn write_manifest(dir: &Path, threshold: f32) {
+        let manifest = format!(
+            r#"{{
+  "id": "hey-openblob",
+  "provider": "local-openwakeword",
+  "phrase": "hey openblob",
+  "runtime": "onnx",
+  "sampleRate": 16000,
+  "frameMs": 80,
+  "threshold": {threshold},
+  "models": {{
+    "melspectrogram": "melspectrogram.onnx",
+    "embedding": "embedding.onnx",
+    "classifier": "hey-openblob.onnx"
+  }}
+}}"#
+        );
+        fs::write(dir.join("manifest.json"), manifest).unwrap();
+    }
+
+    #[test]
+    fn load_model_bundle_accepts_complete_manifest() {
+        let dir = tempdir().unwrap();
+        write_manifest(dir.path(), 0.5);
+        for file in ["melspectrogram.onnx", "embedding.onnx", "hey-openblob.onnx"] {
+            fs::write(dir.path().join(file), b"placeholder").unwrap();
+        }
+
+        let bundle = load_model_bundle(dir.path()).unwrap();
+
+        assert!(bundle.missing_files.is_empty());
+        assert!(bundle.validation_errors.is_empty());
+        assert_eq!(
+            bundle.manifest.sample_rate,
+            Some(DEFAULT_WAKE_WORD_SAMPLE_RATE)
+        );
+        assert_eq!(bundle.manifest.threshold, Some(0.5));
+    }
+
+    #[test]
+    fn load_model_bundle_reports_missing_model_files() {
+        let dir = tempdir().unwrap();
+        write_manifest(dir.path(), 0.5);
+
+        let bundle = load_model_bundle(dir.path()).unwrap();
+
+        assert_eq!(bundle.missing_files.len(), 3);
+        assert!(bundle
+            .missing_files
+            .iter()
+            .any(|entry| entry.contains("classifier")));
+    }
+
+    #[test]
+    fn load_model_bundle_rejects_invalid_threshold() {
+        let dir = tempdir().unwrap();
+        write_manifest(dir.path(), 1.5);
+        for file in ["melspectrogram.onnx", "embedding.onnx", "hey-openblob.onnx"] {
+            fs::write(dir.path().join(file), b"placeholder").unwrap();
+        }
+
+        let bundle = load_model_bundle(dir.path()).unwrap();
+
+        assert!(bundle
+            .validation_errors
+            .iter()
+            .any(|entry| entry.contains("threshold")));
+    }
+
+    #[test]
+    fn local_provider_reports_model_missing_for_missing_configured_path() {
+        let dir = tempdir().unwrap();
+        let settings = WakeWordSettings {
+            wake_word_enabled: true,
+            wake_word_phrase: "hey openblob".into(),
+            wake_word_sensitivity: DEFAULT_WAKE_WORD_THRESHOLD,
+            wake_word_provider: "local-openwakeword".into(),
+            wake_word_model_path: Some(path_string(&dir.path().join("missing"))),
+            wake_word_auto_listen_enabled: false,
+        };
+
+        let availability = provider_availability(&settings);
+
+        assert_eq!(availability.start_state, "model_missing");
+        assert!(availability.model_missing);
+        assert!(!availability.start_allowed);
+    }
 }
