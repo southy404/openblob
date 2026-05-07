@@ -11,6 +11,9 @@ use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 use tauri::Emitter;
+use sha2::{Digest, Sha256};
+use std::io::{Cursor, Read};
+
 
 use crate::modules::profile::companion_config::{
     default_wake_word_phrase, default_wake_word_provider, default_wake_word_sensitivity,
@@ -27,6 +30,20 @@ const DEFAULT_WAKE_WORD_SAMPLE_RATE: u32 = 16_000;
 const DEFAULT_WAKE_WORD_FRAME_MS: u32 = 80;
 const DEFAULT_WAKE_WORD_THRESHOLD: f32 = 0.5;
 const ONNX_RUNTIME_PATH_ENV: &str = "OPENBLOB_ONNX_RUNTIME_PATH";
+const ONNX_RUNTIME_VERSION: &str = "1.24.4";
+const ONNX_RUNTIME_WINDOWS_X64_URL: &str =
+    "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip";
+const ONNX_RUNTIME_WINDOWS_X64_SHA256: &str = "";
+const OPENBLOB_WAKE_WORD_BUNDLE_URL: &str = "";
+const OPENBLOB_WAKE_WORD_BUNDLE_SHA256: &str = "";
+const OPENWAKEWORD_AUDIO_FRAME_SAMPLES: usize = 1_280;
+const OPENWAKEWORD_MEL_BINS: usize = 32;
+const OPENWAKEWORD_EMBEDDING_MEL_ROWS: usize = 76;
+const OPENWAKEWORD_EMBEDDING_INPUT_LEN: usize =
+    OPENWAKEWORD_MEL_BINS * OPENWAKEWORD_EMBEDDING_MEL_ROWS;
+const LOCAL_WAKE_WORD_MIN_THRESHOLD: f32 = 0.01;
+const LOCAL_WAKE_WORD_CONFIRMATION_FRAMES: u32 = 3;
+const LOCAL_WAKE_WORD_DETECTION_COOLDOWN_MS: u64 = 3_500;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WakeWordSettings {
@@ -54,7 +71,6 @@ pub struct WakeWordStatus {
     pub enabled: bool,
     pub phrase: String,
     pub provider: String,
-    pub sensitivity: f32,
     pub listening: bool,
     pub detected: bool,
     pub provider_configured: bool,
@@ -75,6 +91,8 @@ pub struct WakeWordStatus {
     pub missing_files: Vec<String>,
     pub sample_rate: Option<u32>,
     pub threshold: Option<f32>,
+    pub sensitivity: f32,
+    pub discovered_models: Vec<String>,
     pub detection_count: u64,
     pub last_detected_at: Option<String>,
     pub last_detection_score: Option<f32>,
@@ -101,6 +119,7 @@ pub struct WakeWordModelStatus {
     pub phrase: Option<String>,
     pub sample_rate: Option<u32>,
     pub threshold: Option<f32>,
+    pub sensitivity: f32,
     pub discovered_models: Vec<String>,
     pub search_paths: Vec<String>,
     pub provider: String,
@@ -235,6 +254,8 @@ struct LocalWakeWordProvider {
     model_status: WakeWordModelStatus,
     runtime: Option<OnnxWakeWordRuntime>,
     runtime_error: Option<String>,
+    consecutive_hits: u32,
+    last_detection: Option<Instant>,
 }
 
 struct OnnxSession {
@@ -249,6 +270,7 @@ struct OnnxWakeWordRuntime {
     melspectrogram: Option<OnnxSession>,
     embedding: Option<OnnxSession>,
     classifier: OnnxSession,
+    melspectrogram_window: VecDeque<f32>,
     classifier_window: VecDeque<f32>,
 }
 
@@ -441,6 +463,10 @@ fn base_status(settings: &WakeWordSettings) -> WakeWordStatus {
         missing_files: availability.missing_files,
         sample_rate: availability.sample_rate,
         threshold: availability.threshold,
+        discovered_models: discover_wake_word_model_paths()
+            .iter()
+            .map(|path| path_string(path))
+            .collect(),
         detection_count: 0,
         last_detected_at: None,
         last_detection_score: None,
@@ -571,6 +597,18 @@ fn ensure_dir(path: &Path) -> Result<(), String> {
             path.display()
         )
     })
+}
+
+fn warn_ignored_manifest_frame_ms_once(frame_ms: u32) {
+    static WARNED: OnceLock<()> = OnceLock::new();
+
+    if frame_ms != DEFAULT_WAKE_WORD_FRAME_MS && WARNED.set(()).is_ok() {
+        log(format!(
+            "manifest frameMs={frame_ms} ignored; local openWakeWord runtime uses {}ms / {} samples internally",
+            DEFAULT_WAKE_WORD_FRAME_MS,
+            (DEFAULT_WAKE_WORD_SAMPLE_RATE as usize * DEFAULT_WAKE_WORD_FRAME_MS as usize) / 1_000
+        ));
+    }
 }
 
 fn wake_word_model_install_dir() -> Result<PathBuf, String> {
@@ -764,7 +802,10 @@ fn load_model_bundle(path: &Path) -> Result<WakeWordModelBundle, String> {
     })?;
     let manifest_text = fs::read_to_string(&manifest_path)
         .map_err(|err| format!("Could not read wake-word manifest: {err}"))?;
-    let manifest = serde_json::from_str::<WakeWordBundleManifest>(&manifest_text)
+
+    let manifest_text = manifest_text.trim_start_matches('\u{feff}');
+
+    let manifest = serde_json::from_str::<WakeWordBundleManifest>(manifest_text)
         .map_err(|err| format!("Wake-word manifest is invalid JSON: {err}"))?;
     let root_path = manifest_path
         .parent()
@@ -805,6 +846,13 @@ fn load_model_bundle(path: &Path) -> Result<WakeWordModelBundle, String> {
 
     if manifest.frame_ms.unwrap_or(DEFAULT_WAKE_WORD_FRAME_MS) == 0 {
         validation_errors.push("frameMs: must be greater than 0".into());
+    } else if manifest.frame_ms.unwrap_or(DEFAULT_WAKE_WORD_FRAME_MS) != DEFAULT_WAKE_WORD_FRAME_MS {
+        log(format!(
+            "manifest frameMs={} ignored; local openWakeWord runtime uses {}ms / {} samples internally",
+            manifest.frame_ms.unwrap_or(DEFAULT_WAKE_WORD_FRAME_MS),
+            DEFAULT_WAKE_WORD_FRAME_MS,
+            OPENWAKEWORD_AUDIO_FRAME_SAMPLES
+        ));
     }
 
     let threshold = manifest.threshold.unwrap_or(DEFAULT_WAKE_WORD_THRESHOLD);
@@ -988,6 +1036,22 @@ fn load_onnx_session(path: &Path) -> Result<OnnxSession, WakeWordRuntimeError> {
             path.display()
         ))
     })?;
+    log(format!(
+        "loaded ONNX session; path={}, inputs={}, outputs={}",
+        path.display(),
+        session
+            .inputs()
+            .iter()
+            .map(|input| format!("{}: {:?}", input.name(), input.dtype()))
+            .collect::<Vec<_>>()
+            .join(" | "),
+        session
+            .outputs()
+            .iter()
+            .map(|output| format!("{}: {:?}", output.name(), output.dtype()))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    ));
     let input_dims = tensor_dims(input.dtype(), "wake-word ONNX input")?;
     let input_shape = Some(format!("{}: {:?}", input.name(), input.dtype()));
     let output_shape = Some(format!("{}: {:?}", output.name(), output.dtype()));
@@ -1006,13 +1070,40 @@ impl OnnxSession {
     }
 
     fn run_f32(&mut self, input: &[f32], label: &str) -> Result<Vec<f32>, WakeWordRuntimeError> {
-        let shape = resolve_tensor_input_shape(&self.input_dims, input.len(), label)?;
+        let mut input_values = input.to_vec();
+
+        let shape = if label == "melspectrogram" {
+            vec![1, input_values.len() as i64]
+            } else if label == "embedding" && self.input_dims == vec![-1, 76, 32, 1] {
+                let target_len = 76 * 32;
+
+                if input_values.len() != target_len {
+                    return Err(WakeWordRuntimeError::UnsupportedModelShape(format!(
+                        "openWakeWord embedding expects {target_len} mel values (76x32), got {}. Adjust manifest frameMs.",
+                        input_values.len()
+                    )));
+                }
+
+                vec![1, 76, 32, 1]
+            } else {
+            resolve_tensor_input_shape(&self.input_dims, input_values.len(), label)?
+        };
+
+        if std::env::var_os("OPENBLOB_WAKE_WORD_DEBUG").is_some() {
+            log(format!(
+                "running ONNX; label={label}, input_len={}, shape={shape:?}, model_input_dims={:?}",
+                input_values.len(),
+                self.input_dims
+            ));
+        }
+
         let tensor =
-            Tensor::from_array((shape, input.to_vec().into_boxed_slice())).map_err(|err| {
+            Tensor::from_array((shape, input_values.into_boxed_slice())).map_err(|err| {
                 WakeWordRuntimeError::InferenceFailed(format!(
                     "Could not create ONNX tensor for {label}: {err}"
                 ))
             })?;
+
         let outputs = self.session.run(ort::inputs![tensor]).map_err(|err| {
             WakeWordRuntimeError::InferenceFailed(format!(
                 "ONNX inference failed in {label}: {err}"
@@ -1107,6 +1198,7 @@ fn load_onnx_wake_word_runtime(
         melspectrogram,
         embedding,
         classifier,
+        melspectrogram_window: VecDeque::new(),
         classifier_window: VecDeque::new(),
     })
 }
@@ -1132,11 +1224,50 @@ fn run_wake_word_inference(
         return Ok(WakeWordInferenceResult { score: 0.0, phrase });
     }
 
-    let mut features = frame.to_vec();
-    if let Some(melspectrogram) = runtime.melspectrogram.as_mut() {
-        features = melspectrogram.run_f32(&features, "melspectrogram")?;
+    if frame.len() != OPENWAKEWORD_AUDIO_FRAME_SAMPLES {
+        return Err(WakeWordRuntimeError::UnsupportedModelShape(format!(
+            "openWakeWord expects {OPENWAKEWORD_AUDIO_FRAME_SAMPLES} samples per frame at {DEFAULT_WAKE_WORD_SAMPLE_RATE} Hz, got {}.",
+            frame.len()
+        )));
     }
+
+    let mut features = frame.to_vec();
+
+    if let Some(melspectrogram) = runtime.melspectrogram.as_mut() {
+        let mel_features = melspectrogram.run_f32(&features, "melspectrogram")?;
+
+        if mel_features.len() % OPENWAKEWORD_MEL_BINS != 0 {
+            return Err(WakeWordRuntimeError::UnsupportedModelShape(format!(
+                "openWakeWord melspectrogram output length must be divisible by {OPENWAKEWORD_MEL_BINS}, got {}.",
+                mel_features.len()
+            )));
+        }
+
+        runtime.melspectrogram_window.extend(mel_features);
+
+        while runtime.melspectrogram_window.len() > OPENWAKEWORD_EMBEDDING_INPUT_LEN {
+            let _ = runtime.melspectrogram_window.pop_front();
+        }
+
+        if runtime.melspectrogram_window.len() < OPENWAKEWORD_EMBEDDING_INPUT_LEN {
+            return Ok(WakeWordInferenceResult { score: 0.0, phrase });
+        }
+
+        features = runtime
+            .melspectrogram_window
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+    }
+
     if let Some(embedding) = runtime.embedding.as_mut() {
+        if features.len() != OPENWAKEWORD_EMBEDDING_INPUT_LEN {
+            return Err(WakeWordRuntimeError::UnsupportedModelShape(format!(
+                "openWakeWord embedding expects {OPENWAKEWORD_EMBEDDING_INPUT_LEN} mel values ({OPENWAKEWORD_EMBEDDING_MEL_ROWS}x{OPENWAKEWORD_MEL_BINS}), got {}.",
+                features.len()
+            )));
+        }
+
         features = embedding.run_f32(&features, "embedding")?;
     }
 
@@ -1148,6 +1279,7 @@ fn run_wake_word_inference(
     let scores = runtime
         .classifier
         .run_f32(&classifier_input, "wake-word classifier")?;
+
     let score = scores
         .iter()
         .copied()
@@ -1160,10 +1292,20 @@ fn run_wake_word_inference(
         ));
     }
 
-    Ok(WakeWordInferenceResult {
-        score: score.clamp(0.0, 1.0),
-        phrase,
-    })
+    let score = score.clamp(0.0, 1.0);
+
+    if std::env::var_os("OPENBLOB_WAKE_WORD_DEBUG").is_some() {
+        let threshold = runtime
+            .manifest
+            .threshold
+            .unwrap_or(DEFAULT_WAKE_WORD_THRESHOLD);
+
+        log(format!(
+            "wake classifier score={score:.4}, manifest_threshold={threshold:.4}, phrase={phrase}"
+        ));
+    }
+
+Ok(WakeWordInferenceResult { score, phrase })
 }
 
 fn model_bundle_for_status(status: &WakeWordModelStatus) -> Option<WakeWordModelBundle> {
@@ -1266,11 +1408,9 @@ fn model_status_for_settings(settings: &WakeWordSettings) -> WakeWordModelStatus
     let threshold = bundle
         .as_ref()
         .and_then(|bundle| bundle.manifest.threshold)
-        .or(Some(
-            settings
-                .wake_word_sensitivity
-                .max(DEFAULT_WAKE_WORD_THRESHOLD),
-        ));
+        .or(Some(DEFAULT_WAKE_WORD_THRESHOLD));
+
+    let sensitivity = settings.wake_word_sensitivity.clamp(0.0, 1.0);
     let runtime_state = if model_missing {
         "model_missing".to_string()
     } else if !manifest_valid && is_local_provider(&settings.wake_word_provider) {
@@ -1322,6 +1462,7 @@ fn model_status_for_settings(settings: &WakeWordSettings) -> WakeWordModelStatus
         phrase,
         sample_rate,
         threshold,
+        sensitivity,
         discovered_models: discovered_paths
             .iter()
             .map(|path| path_string(path))
@@ -1469,6 +1610,8 @@ impl LocalWakeWordProvider {
             model_status,
             runtime: None,
             runtime_error: None,
+            consecutive_hits: 0,
+            last_detection: None,
         }
     }
 
@@ -1492,6 +1635,7 @@ impl LocalWakeWordProvider {
                 phrase: None,
                 sample_rate: None,
                 threshold: None,
+                sensitivity: 0.0,
                 discovered_models: Vec::new(),
                 search_paths: wake_word_model_search_paths()
                     .iter()
@@ -1502,10 +1646,12 @@ impl LocalWakeWordProvider {
                 loaded_model_count: 0,
                 classifier_input_shape: None,
                 classifier_output_shape: None,
-                runtime_error: None,
+                runtime_error: None,           
             },
             runtime: None,
             runtime_error: None,
+            consecutive_hits: 0,
+            last_detection: None,
         }
     }
 }
@@ -1662,9 +1808,17 @@ impl WakeWordProvider for LocalWakeWordProvider {
     }
 
     fn frame_ms(&self) -> u32 {
-        model_bundle_for_status(&self.model_status)
-            .and_then(|bundle| bundle.manifest.frame_ms)
-            .unwrap_or(DEFAULT_WAKE_WORD_FRAME_MS)
+        if is_local_provider(self.provider_name) {
+            if let Some(frame_ms) = model_bundle_for_status(&self.model_status)
+                .and_then(|bundle| bundle.manifest.frame_ms)
+            {
+                warn_ignored_manifest_frame_ms_once(frame_ms);
+            }
+
+            return DEFAULT_WAKE_WORD_FRAME_MS;
+        }
+
+        DEFAULT_WAKE_WORD_FRAME_MS
     }
 
     fn process_audio_frame(&mut self, frame: &[f32], sample_rate: u32) -> WakeWordProviderResult {
@@ -1722,14 +1876,53 @@ impl WakeWordProvider for LocalWakeWordProvider {
                 );
             };
 
-            match runtime.run_inference_frame(frame, sample_rate) {
-                Ok(result) => {
-                    let threshold = runtime
+        match runtime.run_inference_frame(frame, sample_rate) {
+                                Ok(result) => {
+                    let manifest_threshold = runtime
                         .manifest
                         .threshold
                         .or(self.model_status.threshold)
                         .unwrap_or(DEFAULT_WAKE_WORD_THRESHOLD);
-                    if result.score >= threshold {
+
+                    let sensitivity = self.model_status.sensitivity.clamp(0.0, 1.0);
+
+                    // Safer calibration:
+                    // sensitivity 0.0 => stricter
+                    // sensitivity 0.5 => normal
+                    // sensitivity 1.0 => easier, but never dangerously low
+                    let sensitivity_factor = 1.6 - (sensitivity * 0.6);
+                    let effective_threshold =
+                        (manifest_threshold * sensitivity_factor).clamp(LOCAL_WAKE_WORD_MIN_THRESHOLD, 1.0);
+
+                    if std::env::var_os("OPENBLOB_WAKE_WORD_DEBUG").is_some() {
+                        log(format!(
+                            "wake decision; score={:.4}, manifest_threshold={:.4}, sensitivity={:.2}, effective_threshold={:.4}, consecutive_hits={}, phrase={}",
+                            result.score,
+                            manifest_threshold,
+                            sensitivity,
+                            effective_threshold,
+                            self.consecutive_hits,
+                            result.phrase
+                        ));
+                    }
+
+                    let now = Instant::now();
+                    let cooldown_ready = detection_cooldown_ready(
+                        self.last_detection,
+                        now,
+                        LOCAL_WAKE_WORD_DETECTION_COOLDOWN_MS,
+                    );
+
+                    if result.score >= effective_threshold {
+                        self.consecutive_hits = self.consecutive_hits.saturating_add(1);
+                    } else {
+                        self.consecutive_hits = 0;
+                    }
+
+                    if self.consecutive_hits >= LOCAL_WAKE_WORD_CONFIRMATION_FRAMES && cooldown_ready {
+                        self.last_detection = Some(now);
+                        self.consecutive_hits = 0;
+
                         WakeWordProviderResult::Detected {
                             score: result.score,
                             phrase: result.phrase,
@@ -1737,7 +1930,7 @@ impl WakeWordProvider for LocalWakeWordProvider {
                     } else {
                         WakeWordProviderResult::NoMatch
                     }
-                }
+            }
                 Err(WakeWordRuntimeError::PipelineIncomplete(message)) => {
                     self.runtime_error = Some(message.clone());
                     WakeWordProviderResult::PipelineIncomplete(message)
@@ -1840,17 +2033,23 @@ struct WakeWordFrameQueue {
 }
 
 impl WakeWordFrameQueue {
-    fn new(sample_rate: u32, frame_ms: u32) -> Self {
-        let frame_samples = ((sample_rate as usize * frame_ms as usize) / 1_000).max(1);
+    fn new(sample_rate: u32, _window_ms: u32) -> Self {
+        let frame_samples = if sample_rate == DEFAULT_WAKE_WORD_SAMPLE_RATE {
+            OPENWAKEWORD_AUDIO_FRAME_SAMPLES
+        } else {
+            ((sample_rate as usize * DEFAULT_WAKE_WORD_FRAME_MS as usize) / 1_000).max(1)
+        };
+
         Self {
-            samples: VecDeque::with_capacity(frame_samples * 2),
+            samples: VecDeque::with_capacity(frame_samples * 16),
             frame_samples,
         }
     }
 
     fn push(&mut self, samples: Vec<f32>) {
         self.samples.extend(samples);
-        let max_len = self.frame_samples * 8;
+
+        let max_len = self.frame_samples * 64;
         while self.samples.len() > max_len {
             let _ = self.samples.pop_front();
         }
@@ -1861,7 +2060,16 @@ impl WakeWordFrameQueue {
             return None;
         }
 
-        Some(self.samples.drain(..self.frame_samples).collect())
+        let frame = self
+            .samples
+            .iter()
+            .take(self.frame_samples)
+            .copied()
+            .collect::<Vec<_>>();
+
+        self.samples.drain(..self.frame_samples);
+
+        Some(frame)
     }
 }
 
@@ -2242,7 +2450,7 @@ fn run_provider_worker(
                 WakeWordProviderResult::NoMatch => {}
                 WakeWordProviderResult::Detected { score, phrase } => {
                     let now = Instant::now();
-                    if detection_cooldown_ready(last_detection_at, now, MOCK_DETECTION_COOLDOWN_MS)
+                    if detection_cooldown_ready(last_detection_at, now, LOCAL_WAKE_WORD_DETECTION_COOLDOWN_MS)
                     {
                         last_detection_at = Some(now);
                         handle_wake_word_detected(&app, &settings, &provider_name, phrase, score);
@@ -2397,6 +2605,153 @@ fn schedule_detected_reset() {
                 .into();
             }
         });
+}
+
+async fn download_bytes(url: &str) -> Result<Vec<u8>, String> {
+    if url.trim().is_empty() {
+        return Err("Download URL is not configured.".into());
+    }
+
+    let response = reqwest::Client::new()
+        .get(url)
+        .header("User-Agent", "OpenBlob-WakeWord-Installer")
+        .send()
+        .await
+        .map_err(|err| format!("Download failed: {err}"))?;
+
+    let status = response.status();
+
+    if !status.is_success() {
+        return Err(format!("Download failed with HTTP status {status}."));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|err| format!("Could not read download response: {err}"))?;
+
+    Ok(bytes.to_vec())
+}
+
+fn verify_sha256(bytes: &[u8], expected_sha256: &str) -> Result<(), String> {
+    let expected = expected_sha256.trim();
+
+    if expected.is_empty() {
+        return Ok(());
+    }
+
+    let actual = format!("{:x}", Sha256::digest(bytes));
+
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(format!(
+            "SHA256 mismatch. Expected {expected}, got {actual}."
+        ));
+    }
+
+    Ok(())
+}
+
+fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        ensure_dir(parent)?;
+    }
+
+    let tmp_path = path.with_extension("tmp");
+
+    fs::write(&tmp_path, bytes).map_err(|err| {
+        format!(
+            "Could not write temporary file {}: {err}",
+            tmp_path.display()
+        )
+    })?;
+
+    fs::rename(&tmp_path, path).map_err(|err| {
+        format!(
+            "Could not move temporary file {} to {}: {err}",
+            tmp_path.display(),
+            path.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+fn extract_onnxruntime_dll_from_zip(zip_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let cursor = Cursor::new(zip_bytes);
+
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|err| format!("Could not read ONNX Runtime ZIP: {err}"))?;
+
+    for index in 0..archive.len() {
+        let mut file = archive
+            .by_index(index)
+            .map_err(|err| format!("Could not read ZIP entry {index}: {err}"))?;
+
+        let name = file.name().replace('\\', "/");
+
+        if name.ends_with("/lib/onnxruntime.dll") || name.ends_with("onnxruntime.dll") {
+            let mut dll = Vec::new();
+
+            file.read_to_end(&mut dll)
+                .map_err(|err| format!("Could not extract onnxruntime.dll: {err}"))?;
+
+            if dll.is_empty() {
+                return Err("Extracted onnxruntime.dll is empty.".into());
+            }
+
+            return Ok(dll);
+        }
+    }
+
+    Err("onnxruntime.dll was not found inside the downloaded ZIP.".into())
+}
+
+fn extract_model_bundle_zip(zip_bytes: &[u8], target_dir: &Path) -> Result<(), String> {
+    ensure_dir(target_dir)?;
+
+    let cursor = Cursor::new(zip_bytes);
+
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|err| format!("Could not read model bundle ZIP: {err}"))?;
+
+    for index in 0..archive.len() {
+        let mut file = archive
+            .by_index(index)
+            .map_err(|err| format!("Could not read ZIP entry {index}: {err}"))?;
+
+        let Some(enclosed_path) = file.enclosed_name().map(|path| path.to_path_buf()) else {
+            continue;
+        };
+
+        let out_path = target_dir.join(enclosed_path);
+
+        if file.is_dir() {
+            ensure_dir(&out_path)?;
+            continue;
+        }
+
+        if let Some(parent) = out_path.parent() {
+            ensure_dir(parent)?;
+        }
+
+        let mut bytes = Vec::new();
+
+        file.read_to_end(&mut bytes)
+            .map_err(|err| format!("Could not extract {}: {err}", file.name()))?;
+
+        write_file_atomic(&out_path, &bytes)?;
+    }
+
+    let manifest_path = target_dir.join("manifest.json");
+
+    if !manifest_path.is_file() {
+        return Err(format!(
+            "Model bundle installed, but manifest.json is missing at {}.",
+            manifest_path.display()
+        ));
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -2743,20 +3098,73 @@ pub fn open_wake_word_runtime_folder() -> Result<WakeWordInstallStatus, String> 
 }
 
 #[tauri::command]
-pub fn download_wake_word_runtime() -> Result<WakeWordInstallStatus, String> {
+pub async fn download_wake_word_runtime() -> Result<WakeWordInstallStatus, String> {
+    log(format!(
+        "runtime download started; version={ONNX_RUNTIME_VERSION}"
+    ));
+
+    let zip_bytes = download_bytes(ONNX_RUNTIME_WINDOWS_X64_URL).await?;
+    verify_sha256(&zip_bytes, ONNX_RUNTIME_WINDOWS_X64_SHA256)?;
+
+    let dll_bytes = extract_onnxruntime_dll_from_zip(&zip_bytes)?;
+    let runtime_path = default_runtime_dll_path()?;
+
+    write_file_atomic(&runtime_path, &dll_bytes)?;
+
+    let mut config = load_or_create_companion_config()?;
+    config.wake_word_runtime_path = Some(path_string(&runtime_path));
+    save_companion_config(&config)?;
+
     let settings = settings_from_config()?;
     let mut status = install_status_for_settings(&settings);
-    status.message = "Automatic ONNX Runtime download is not configured yet. Place onnxruntime.dll manually in the OpenBlob runtime folder or select it from Dev settings.".into();
-    log("runtime download requested; automatic downloads are not configured");
+
+    status.message = format!(
+        "ONNX Runtime installed successfully at {}. Microphone was not started.",
+        runtime_path.display()
+    );
+
+    log(format!(
+        "runtime download finished; installed={}",
+        runtime_path.display()
+    ));
+
     Ok(status)
 }
 
 #[tauri::command]
-pub fn download_wake_word_model_bundle() -> Result<WakeWordInstallStatus, String> {
+pub async fn download_wake_word_model_bundle() -> Result<WakeWordInstallStatus, String> {
+    if OPENBLOB_WAKE_WORD_BUNDLE_URL.trim().is_empty() {
+        return Err(
+            "Wake-word model bundle URL is not configured yet. Create an OpenBlob release asset ZIP and set OPENBLOB_WAKE_WORD_BUNDLE_URL."
+                .into(),
+        );
+    }
+
+    log("model bundle download started");
+
+    let zip_bytes = download_bytes(OPENBLOB_WAKE_WORD_BUNDLE_URL).await?;
+    verify_sha256(&zip_bytes, OPENBLOB_WAKE_WORD_BUNDLE_SHA256)?;
+
+    let model_dir = wake_word_model_install_dir()?;
+    extract_model_bundle_zip(&zip_bytes, &model_dir)?;
+
+    let mut config = load_or_create_companion_config()?;
+    config.wake_word_model_path = Some(path_string(&model_dir));
+    save_companion_config(&config)?;
+
     let settings = settings_from_config()?;
     let mut status = install_status_for_settings(&settings);
-    status.message = "Automatic wake-word model download is not configured yet. Place a local OpenWakeWord bundle manually in the OpenBlob wake-word model folder or select it from Dev settings.".into();
-    log("model bundle download requested; automatic downloads are not configured");
+
+    status.message = format!(
+        "Wake-word model bundle installed successfully at {}. Microphone was not started.",
+        model_dir.display()
+    );
+
+    log(format!(
+        "model bundle download finished; installed={}",
+        model_dir.display()
+    ));
+
     Ok(status)
 }
 
