@@ -64,7 +64,7 @@ OpenBlob is currently in an **early but ambitious stage**. The foundation exists
 - Transcript module for system-audio transcription and AI post-processing.
 - Local memory foundations and SQLite-backed memory work in progress.
 - Blob Connectors for Telegram, Discord, Slack, and Email.
-- Wake-word settings foundation and local microphone test runtime.
+- Wake-word settings, local microphone test runtime, and local ONNX wake-word runtime boundary.
 
 ---
 
@@ -241,9 +241,10 @@ OpenBlob can open apps and services, then keep them as the active controlled tar
 | `ALT + M`          | Start voice input manually |
 | Wake-word settings | Configure phrase, provider, enabled state, and sensitivity in the dev/settings UI |
 | `mic-test` provider | Starts local microphone listener for development testing |
-| `mock` provider | Local placeholder provider mode |
+| `mock` provider | Local development detection simulation |
+| `local-openwakeword` provider | Validates user-installed openWakeWord ONNX bundles and loads local ONNX sessions when runtime is configured |
 
-OpenBlob now includes the foundation for wake-word support. This is **not a real wake-word model yet**. The current system provides:
+OpenBlob now includes the foundation for wake-word support and the first local ONNX runtime boundary. This is **not a complete real wake-word detector yet**. The current system provides:
 
 - configurable wake-word settings
 - safe start/stop listener commands
@@ -253,13 +254,16 @@ OpenBlob now includes the foundation for wake-word support. This is **not a real
 - audio chunk counting
 - last audio timestamp
 - simple input level/RMS for development UI feedback
+- openWakeWord-style bundle discovery and validation
+- optional local ONNX Runtime loading through `OPENBLOB_ONNX_RUNTIME_PATH` or a runtime DLL next to the bundle
+- honest `model_loaded_runtime_pipeline_incomplete` reporting until the mel/embedding/classifier chain is fully wired
 
 Privacy behavior:
 
 - no cloud streaming
 - no raw audio storage
 - no automatic microphone startup unless explicitly enabled and started
-- no fake wake-word detection claims
+- no fake real wake-word detection claims
 - existing `ALT + M` voice shortcut remains separate and untouched
 
 ---
@@ -505,15 +509,16 @@ Current status:
 - local microphone availability detection is supported
 - `mic-test` / `mock` provider modes can start a local listener
 - dev UI can show listener state, selected input device, chunks seen, last audio timestamp, and input level
-- no actual wake-word detection model is wired yet
+- openWakeWord-style ONNX bundles can be discovered and ONNX sessions can be loaded when a local runtime is configured
+- full openWakeWord inference is still guarded as pipeline-incomplete until the mel/embedding/classifier chain is wired
 
 Planned next steps:
 
-- real wake-word provider integration, such as Porcupine or another local model
+- complete local openWakeWord inference over the loaded ONNX bundle
 - wake phrase management through the dev/settings UI
 - consent-first onboarding for microphone access
 - better visual feedback while listening
-- wake-word event bridge into the existing voice command flow
+- broader microphone permission/onboarding UX
 
 ---
 
@@ -584,8 +589,8 @@ Fun interactions and real productivity are not opposites.
 - [x] Manual voice shortcut foundation
 - [x] Wake-word settings foundation
 - [x] Local microphone test runtime
-- [ ] Real wake-word provider integration
-- [ ] Wake-word event bridge into voice command flow
+- [x] Wake-word event bridge into voice command flow
+- [ ] Complete real wake-word inference over local ONNX bundles
 - [ ] Microphone permission/onboarding UX
 - [ ] Noise handling and false-positive prevention
 - [ ] Local-only wake phrase/model configuration

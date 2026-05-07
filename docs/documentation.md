@@ -63,7 +63,7 @@ OpenBlob can currently:
 - expose a local command server for external connectors
 - receive commands from Telegram, Discord, Slack, and Email through the Python connector layer
 - support protected confirmation flows for sensitive power commands
-- provide a wake-word settings and microphone-test foundation for future hands-free voice activation
+- provide wake-word settings, microphone-test diagnostics, and a local ONNX runtime boundary for future hands-free voice activation
 
 Core design principle:
 
@@ -86,7 +86,7 @@ Recent active areas:
 - adding active controlled target context for follow-up commands
 - preventing normal chat messages from being swallowed by command routing
 - improving local memory foundations
-- adding wake-word settings and microphone-test runtime foundation
+- adding wake-word settings, microphone-test runtime foundation, and local ONNX wake-word runtime diagnostics
 - expanding dev/settings UI
 - improving contributor-friendly structure and documentation
 
@@ -95,7 +95,7 @@ Important current expectation:
 - deterministic commands should route through the command/action pipeline
 - normal conversation should fall back to the regular LLM chat path
 - voice shortcut flow (`ALT + M`) must remain unaffected by wake-word work
-- wake-word functionality is currently a **foundation**, not a real hotword detector yet
+- wake-word functionality has a local runtime boundary, but full openWakeWord inference is still guarded as pipeline-incomplete
 
 ---
 
@@ -705,11 +705,11 @@ Wake-word work must not break:
 **Config location:** `src-tauri/src/modules/profile/companion_config.rs`  
 **Dev UI:** `src/windows/bubble-dev/app.tsx`
 
-The wake-word system is currently a safe local foundation. It does **not** implement real hotword detection yet.
+The wake-word system is currently a safe local foundation with the first local ONNX runtime boundary. It can validate openWakeWord-style bundles and load local ONNX sessions when `onnxruntime.dll` is explicitly configured, but full hotword inference is still guarded as incomplete until the mel/embedding/classifier chain is wired end to end.
 
 Current goal:
 
-> Provide settings, runtime status, and local microphone-test listening infrastructure that can later feed a real wake-word provider such as Porcupine or another local detector.
+> Provide settings, runtime status, local microphone-test listening infrastructure, and a free local openWakeWord provider path that can later complete real wake-word inference without cloud services or paid providers.
 
 ### Config fields
 
@@ -718,7 +718,7 @@ Current goal:
 | `wake_word_enabled` | whether wake-word system is enabled | false |
 | `wake_word_phrase` | phrase shown/configured by user | default companion phrase |
 | `wake_word_sensitivity` | normalized sensitivity value | 0.0 - 1.0 |
-| `wake_word_provider` | selected provider | disabled / none / mic-test / mock / porcupine |
+| `wake_word_provider` | selected provider | disabled / none / mic-test / mock / local-openwakeword / local-wakeword |
 
 ### Tauri commands
 
@@ -788,7 +788,7 @@ Provider behavior:
 
 - no cloud streaming
 - no raw microphone audio storage
-- no wake-word detection pretending
+- no fake real wake-word detection claims
 - no automatic listening on app startup by default
 - no microphone opening when provider is missing
 - no panic if no microphone exists
@@ -814,9 +814,8 @@ Provider behavior:
 
 ### Remaining wake-word limitations
 
-- no real Porcupine integration yet
-- no custom trained phrase model yet
-- no automatic wake-to-command flow yet
+- full openWakeWord mel/embedding/classifier inference is still incomplete
+- no automatic model download or custom phrase training flow yet
 - no wake confirmation sound/visual yet
 - no permission onboarding UX yet
 - no device selector persistence yet
@@ -1450,7 +1449,7 @@ voice/models/wake-word/
     hey-openblob.onnx
 ```
 
-The current local provider validates the manifest, checks missing files, normalizes microphone audio to mono 16 kHz fixed windows, and reports `runtime_missing` until an ONNX inference backend is linked. It does not call cloud services, does not require paid keys, does not auto-download models, and does not store raw microphone audio.
+The current local provider validates the manifest, checks missing files, normalizes microphone audio to mono 16 kHz fixed windows, and can load local ONNX sessions when `onnxruntime.dll` is available through `OPENBLOB_ONNX_RUNTIME_PATH` or next to the bundle. The full openWakeWord mel-spectrogram -> embedding -> classifier chain still reports `model_loaded_runtime_pipeline_incomplete` until inference is wired end to end. It does not call cloud services, does not require paid keys, does not auto-download models, and does not store raw microphone audio.
 
 Wake-to-voice is controlled separately by `wake_word_auto_listen_enabled`. When enabled, the frontend reacts to `wake-word-detected` and starts the existing voice input flow; the event itself never executes commands directly.
 
@@ -1499,7 +1498,7 @@ OpenBlob is built as a local-first Windows desktop app with a Rust backend, Reac
 | Icons / UI assets | React components + local assets | Used across bubble/dev windows and overlays |
 | Text-to-speech | Piper ONNX + Kokoro experimental | Local voice output, provider selection still evolving |
 | Manual voice input | Browser/Web Speech API path + existing `ALT + M` flow | Must remain untouched while wake-word work evolves |
-| Wake-word foundation | Rust module + `cpal` mic test runtime | Local mic-test/mock provider only; no real detector yet; no cloud streaming; no raw audio storage |
+| Wake-word foundation | Rust module + `cpal` mic runtime + local ONNX boundary | mic-test/mock plus openWakeWord bundle validation/session loading; full detector pipeline still incomplete; no cloud streaming; no raw audio storage |
 | Audio input | `cpal` | Device availability, default input device, local RMS/input-level metrics for dev UI |
 | Transcript audio capture | Windows WASAPI loopback | Captures system audio for local transcript sessions |
 | Speech-to-text | Local Whisper CLI | Used by transcript pipeline for audio chunks |
@@ -1524,7 +1523,7 @@ OpenBlob is built as a local-first Windows desktop app with a Rust backend, Reac
 
 ## Important stack boundaries
 
-- **Wake word is foundation-only right now:** `mic-test`/`mock` can listen locally and report chunks/input level, but no real wake-word detection is implemented yet.
+- **Wake word is local-first but still guarded:** `mic-test`/`mock` can listen locally and report chunks/input level; `local-openwakeword` can validate bundles and load ONNX sessions, but full inference remains pipeline-incomplete until the model chain is wired.
 - **Transcript and wake word are different audio paths:** transcript uses system audio loopback; wake-word mic-test uses microphone input through `cpal`.
 - **No raw mic audio is stored:** the wake-word foundation only tracks lightweight runtime metrics like chunk count, last audio timestamp, and RMS input level.
 - **Deterministic actions should stay model-independent:** app/system/browser commands should not depend on LLM success when a safe deterministic route exists.
@@ -1582,7 +1581,7 @@ Open an issue or discussion for:
 | YouTube play | Fuzzy search-and-play needs real desktop smoke tests |
 | Spotify/Steam routing | Depends on installed apps/protocol handlers |
 | Memory embeddings | Optional model may be missing; should not block execution |
-| Wake word | Foundation only; no real detector yet |
+| Wake word | Local ONNX runtime boundary exists; full detector pipeline still incomplete |
 | Mic permissions | Needs better UX and device selection |
 | Transcript diarization | Speaker grouping is AI-estimated, not true diarization |
 | Settings UI | Growing, but not final product UX |
@@ -1611,8 +1610,8 @@ Open an issue or discussion for:
 - [x] local microphone-test runtime foundation
 - [ ] microphone permission onboarding
 - [ ] input device selector
-- [ ] real local wake-word provider integration
-- [ ] wake-to-command flow
+- [x] wake-to-voice event bridge
+- [ ] complete real local wake-word inference over openWakeWord ONNX bundles
 - [ ] wake feedback sound/animation
 - [ ] keep `ALT + M` as fallback manual voice path
 

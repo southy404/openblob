@@ -23,6 +23,7 @@ enigo = "0.2"
 device_query = "2"
 cpal = "0.15"
 hound = "3.5"
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-24"] }
 base64 = "0.22"
 tempfile ="3"
 urlencoding = "2"

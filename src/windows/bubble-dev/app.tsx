@@ -45,6 +45,8 @@ type WakeWordStatusName =
   | "model_missing"
   | "invalid_model_bundle"
   | "runtime_missing"
+  | "runtime_load_failed"
+  | "model_loaded_runtime_pipeline_incomplete"
   | "provider_not_implemented"
   | "error";
 
@@ -91,6 +93,10 @@ type WakeWordStatus = {
   wake_phrase_matched?: string | null;
   provider_ready: boolean;
   provider_error?: string | null;
+  loaded_model_count: number;
+  classifier_input_shape?: string | null;
+  classifier_output_shape?: string | null;
+  runtime_error?: string | null;
 };
 
 type WakeWordModelStatus = {
@@ -108,6 +114,11 @@ type WakeWordModelStatus = {
   discovered_models: string[];
   search_paths: string[];
   provider: WakeWordProvider;
+  runtime_state: string;
+  loaded_model_count: number;
+  classifier_input_shape?: string | null;
+  classifier_output_shape?: string | null;
+  runtime_error?: string | null;
 };
 
 type WakeWordDetectedPayload = {
@@ -765,6 +776,10 @@ function DevWindow() {
     wake_phrase_matched: null,
     provider_ready: false,
     provider_error: null,
+    loaded_model_count: 0,
+    classifier_input_shape: null,
+    classifier_output_shape: null,
+    runtime_error: null,
   });
   const [wakeWordModelStatus, setWakeWordModelStatus] =
     useState<WakeWordModelStatus>({
@@ -782,6 +797,11 @@ function DevWindow() {
       discovered_models: [],
       search_paths: [],
       provider: "none",
+      runtime_state: "not_configured",
+      loaded_model_count: 0,
+      classifier_input_shape: null,
+      classifier_output_shape: null,
+      runtime_error: null,
   });
   const [wakeWordSaving, setWakeWordSaving] = useState(false);
   const [wakeWordLastFrontendEventAt, setWakeWordLastFrontendEventAt] =
@@ -915,6 +935,10 @@ function DevWindow() {
         wake_phrase_matched: null,
         provider_ready: false,
         provider_error: String(err),
+        loaded_model_count: 0,
+        classifier_input_shape: null,
+        classifier_output_shape: null,
+        runtime_error: String(err),
       });
     }
   };
@@ -1061,6 +1085,10 @@ function DevWindow() {
         wake_phrase_matched: null,
         provider_ready: false,
         provider_error: String(err),
+        loaded_model_count: 0,
+        classifier_input_shape: null,
+        classifier_output_shape: null,
+        runtime_error: String(err),
       });
     } finally {
       setWakeWordSaving(false);
@@ -2063,6 +2091,11 @@ function DevWindow() {
                   wakeWordModelStatus.manifest_valid &&
                   wakeWordStatus.runtime_state === "model_loaded" &&
                   "Local wake-word model loaded."}
+                {(wakeWordStatus.provider === "local-openwakeword" ||
+                  wakeWordStatus.provider === "local-wakeword") &&
+                  wakeWordStatus.state ===
+                    "model_loaded_runtime_pipeline_incomplete" &&
+                  "Local wake-word inference pipeline is not complete yet."}
                 {wakeWordStatus.state === "detected" && " Wake word detected."}
                 {wakeWordStatus.state === "no_input_device" &&
                   "No microphone input device is available."}
@@ -2114,7 +2147,35 @@ function DevWindow() {
                   <div className="metricLabel">{t.wakeWordRuntimeState}</div>
                   <div className="metricValue">
                     {wakeWordStatus.runtime_state ||
+                      wakeWordModelStatus.runtime_state ||
                       wakeWordModelStatus.runtime ||
+                      "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">Loaded ONNX models</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.loaded_model_count ||
+                      wakeWordModelStatus.loaded_model_count ||
+                      0}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">Classifier input</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.classifier_input_shape ||
+                      wakeWordModelStatus.classifier_input_shape ||
+                      "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">Classifier output</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.classifier_output_shape ||
+                      wakeWordModelStatus.classifier_output_shape ||
                       "none"}
                   </div>
                 </div>
@@ -2236,6 +2297,16 @@ function DevWindow() {
                   <div className="wakeMetric">
                     <div className="metricLabel">{t.wakeWordLastError}</div>
                     <div className="metricValue">{wakeWordStatus.last_error}</div>
+                  </div>
+                )}
+                {(wakeWordStatus.runtime_error ||
+                  wakeWordModelStatus.runtime_error) && (
+                  <div className="wakeMetric">
+                    <div className="metricLabel">Runtime error</div>
+                    <div className="metricValue">
+                      {wakeWordStatus.runtime_error ||
+                        wakeWordModelStatus.runtime_error}
+                    </div>
                   </div>
                 )}
               </div>
