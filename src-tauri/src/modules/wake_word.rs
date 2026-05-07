@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
@@ -39,6 +40,8 @@ pub struct WakeWordSettings {
     pub wake_word_provider: String,
     #[serde(default)]
     pub wake_word_model_path: Option<String>,
+    #[serde(default)]
+    pub wake_word_runtime_path: Option<String>,
     #[serde(default)]
     pub wake_word_auto_listen_enabled: bool,
 }
@@ -94,6 +97,7 @@ pub struct WakeWordModelStatus {
     pub manifest_valid: bool,
     pub missing_files: Vec<String>,
     pub runtime: Option<String>,
+    pub runtime_path: Option<String>,
     pub phrase: Option<String>,
     pub sample_rate: Option<u32>,
     pub threshold: Option<f32>,
@@ -105,6 +109,25 @@ pub struct WakeWordModelStatus {
     pub classifier_input_shape: Option<String>,
     pub classifier_output_shape: Option<String>,
     pub runtime_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WakeWordInstallStatus {
+    pub install_ready: bool,
+    pub runtime_found: bool,
+    pub runtime_path: Option<String>,
+    pub runtime_error: Option<String>,
+    pub model_bundle_found: bool,
+    pub model_bundle_path: Option<String>,
+    pub manifest_valid: bool,
+    pub missing_files: Vec<String>,
+    pub license_notice: String,
+    pub provider_state: String,
+    pub message: String,
+    pub configured_runtime_path: Option<String>,
+    pub configured_model_path: Option<String>,
+    pub runtime_search_paths: Vec<String>,
+    pub model_search_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -247,8 +270,11 @@ enum WakeWordRuntimeError {
 }
 
 impl OnnxWakeWordRuntime {
-    fn load(bundle: &WakeWordModelBundle) -> Result<Self, WakeWordRuntimeError> {
-        load_onnx_wake_word_runtime(bundle)
+    fn load(
+        bundle: &WakeWordModelBundle,
+        configured_runtime_path: Option<&str>,
+    ) -> Result<Self, WakeWordRuntimeError> {
+        load_onnx_wake_word_runtime(bundle, configured_runtime_path)
     }
 
     #[allow(dead_code)]
@@ -349,6 +375,14 @@ fn normalize_settings(mut settings: WakeWordSettings) -> WakeWordSettings {
             Some(trimmed.to_string())
         }
     });
+    settings.wake_word_runtime_path = settings.wake_word_runtime_path.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
     settings
 }
 
@@ -360,6 +394,7 @@ fn settings_from_config() -> Result<WakeWordSettings, String> {
         wake_word_sensitivity: config.wake_word_sensitivity,
         wake_word_provider: config.wake_word_provider,
         wake_word_model_path: config.wake_word_model_path,
+        wake_word_runtime_path: config.wake_word_runtime_path,
         wake_word_auto_listen_enabled: config.wake_word_auto_listen_enabled,
     }))
 }
@@ -431,6 +466,7 @@ fn status_for_state(
             wake_word_sensitivity: default_wake_word_sensitivity(),
             wake_word_provider: default_wake_word_provider(),
             wake_word_model_path: None,
+            wake_word_runtime_path: None,
             wake_word_auto_listen_enabled: false,
         })
     });
@@ -526,6 +562,114 @@ fn wake_word_model_search_paths() -> Vec<PathBuf> {
             }
         })
         .collect()
+}
+
+fn ensure_dir(path: &Path) -> Result<(), String> {
+    fs::create_dir_all(path).map_err(|err| {
+        format!(
+            "Could not create wake-word folder {}: {err}",
+            path.display()
+        )
+    })
+}
+
+fn wake_word_model_install_dir() -> Result<PathBuf, String> {
+    let dir = app_data_dir()?
+        .join("voice")
+        .join("models")
+        .join("wake-word");
+    ensure_dir(&dir)?;
+    Ok(dir)
+}
+
+fn wake_word_runtime_install_dir() -> Result<PathBuf, String> {
+    let dir = app_data_dir()?
+        .join("voice")
+        .join("runtime")
+        .join("onnxruntime");
+    ensure_dir(&dir)?;
+    Ok(dir)
+}
+
+fn default_runtime_dll_path() -> Result<PathBuf, String> {
+    Ok(wake_word_runtime_install_dir()?.join("onnxruntime.dll"))
+}
+
+fn resolve_configured_runtime_path(raw_path: &str) -> Option<PathBuf> {
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(PathBuf::from(trimmed))
+}
+
+fn wake_word_runtime_candidate_paths(
+    configured_runtime_path: Option<&str>,
+    bundle: Option<&WakeWordModelBundle>,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(path) = configured_runtime_path.and_then(resolve_configured_runtime_path) {
+        candidates.push(path);
+    }
+
+    if let Some(path) = std::env::var_os(ONNX_RUNTIME_PATH_ENV).map(PathBuf::from) {
+        candidates.push(path);
+    }
+
+    if let Ok(path) = default_runtime_dll_path() {
+        candidates.push(path);
+    }
+
+    if let Some(bundle) = bundle {
+        candidates.push(bundle.bundle_dir.join("onnxruntime.dll"));
+        candidates.push(bundle.bundle_dir.join("runtime").join("onnxruntime.dll"));
+    }
+
+    let mut seen = Vec::new();
+    candidates
+        .into_iter()
+        .filter(|path| {
+            let display = path.display().to_string();
+            if seen.iter().any(|item| item == &display) {
+                false
+            } else {
+                seen.push(display);
+                true
+            }
+        })
+        .collect()
+}
+
+fn open_folder(path: &Path) -> Result<(), String> {
+    ensure_dir(path)?;
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("explorer");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(path);
+        command
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| format!("Could not open folder {}: {err}", path.display()))
 }
 
 fn is_supported_model_file(path: &Path) -> bool {
@@ -677,38 +821,40 @@ fn load_model_bundle(path: &Path) -> Result<WakeWordModelBundle, String> {
     })
 }
 
-fn resolve_onnx_runtime_path(bundle: &WakeWordModelBundle) -> Option<PathBuf> {
-    std::env::var_os(ONNX_RUNTIME_PATH_ENV)
-        .map(PathBuf::from)
-        .filter(|path| path.is_file())
-        .or_else(|| {
-            let candidates = [
-                bundle.bundle_dir.join("onnxruntime.dll"),
-                bundle.bundle_dir.join("runtime").join("onnxruntime.dll"),
-            ];
-            candidates.into_iter().find(|path| path.is_file())
-        })
+fn resolve_onnx_runtime_path(
+    bundle: &WakeWordModelBundle,
+    configured_runtime_path: Option<&str>,
+) -> Option<PathBuf> {
+    wake_word_runtime_candidate_paths(configured_runtime_path, Some(bundle))
+        .into_iter()
+        .find(|path| path.is_file())
 }
 
 fn ensure_onnx_runtime_loaded(
     bundle: &WakeWordModelBundle,
+    configured_runtime_path: Option<&str>,
 ) -> Result<PathBuf, WakeWordRuntimeError> {
-    static ONNX_RUNTIME_INIT: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+    static ONNX_RUNTIME_INIT: OnceLock<PathBuf> = OnceLock::new();
 
-    ONNX_RUNTIME_INIT
-        .get_or_init(|| {
-            let runtime_path = resolve_onnx_runtime_path(bundle).ok_or_else(|| {
-                format!(
-                    "Local wake-word runtime is missing or could not be loaded. Set {ONNX_RUNTIME_PATH_ENV} to onnxruntime.dll."
-                )
-            })?;
-            ort::init_from(&runtime_path)
-                .map_err(|err| format!("Could not load ONNX Runtime from {}: {err}", runtime_path.display()))?
-                .commit();
-            Ok(runtime_path)
-        })
-        .clone()
-        .map_err(WakeWordRuntimeError::RuntimeMissing)
+    if let Some(runtime_path) = ONNX_RUNTIME_INIT.get() {
+        return Ok(runtime_path.clone());
+    }
+
+    let runtime_path = resolve_onnx_runtime_path(bundle, configured_runtime_path).ok_or_else(|| {
+        WakeWordRuntimeError::RuntimeMissing(format!(
+            "Local wake-word runtime is missing or could not be loaded. Set {ONNX_RUNTIME_PATH_ENV} or select onnxruntime.dll in Dev settings."
+        ))
+    })?;
+    ort::init_from(&runtime_path)
+        .map_err(|err| {
+            WakeWordRuntimeError::RuntimeLoadFailed(format!(
+                "Could not load ONNX Runtime from {}: {err}",
+                runtime_path.display()
+            ))
+        })?
+        .commit();
+    let _ = ONNX_RUNTIME_INIT.set(runtime_path.clone());
+    Ok(runtime_path)
 }
 
 fn tensor_dims(dtype: &ValueType, label: &str) -> Result<Vec<i64>, WakeWordRuntimeError> {
@@ -917,6 +1063,7 @@ fn model_path_from_manifest(
 
 fn load_onnx_wake_word_runtime(
     bundle: &WakeWordModelBundle,
+    configured_runtime_path: Option<&str>,
 ) -> Result<OnnxWakeWordRuntime, WakeWordRuntimeError> {
     if !bundle.missing_files.is_empty() || !bundle.validation_errors.is_empty() {
         let mut errors = bundle.missing_files.clone();
@@ -934,7 +1081,7 @@ fn load_onnx_wake_word_runtime(
         )));
     }
 
-    let runtime_path = ensure_onnx_runtime_loaded(bundle)?;
+    let runtime_path = ensure_onnx_runtime_loaded(bundle, configured_runtime_path)?;
     log(format!(
         "loading ONNX wake-word bundle; manifest={}, runtime={}",
         bundle.manifest_path.display(),
@@ -1134,7 +1281,9 @@ fn model_status_for_settings(settings: &WakeWordSettings) -> WakeWordModelStatus
         .unwrap_or(false)
     {
         model_bundle_for_path(resolved_path.as_deref())
-            .and_then(|bundle| resolve_onnx_runtime_path(&bundle))
+            .and_then(|bundle| {
+                resolve_onnx_runtime_path(&bundle, settings.wake_word_runtime_path.as_deref())
+            })
             .map(|_| "runtime_configured".to_string())
             .unwrap_or_else(|| "runtime_missing".to_string())
     } else {
@@ -1145,7 +1294,7 @@ fn model_status_for_settings(settings: &WakeWordSettings) -> WakeWordModelStatus
         && manifest_valid
     {
         Some(format!(
-            "Local wake-word runtime is missing or could not be loaded. Set {ONNX_RUNTIME_PATH_ENV} to onnxruntime.dll."
+            "Local wake-word runtime is missing or could not be loaded. Set {ONNX_RUNTIME_PATH_ENV} or select onnxruntime.dll in Dev settings."
         ))
     } else if runtime_state == "unsupported_runtime" {
         runtime
@@ -1164,6 +1313,12 @@ fn model_status_for_settings(settings: &WakeWordSettings) -> WakeWordModelStatus
         manifest_valid,
         missing_files,
         runtime,
+        runtime_path: model_bundle_for_path(resolved_path.as_deref())
+            .and_then(|bundle| {
+                resolve_onnx_runtime_path(&bundle, settings.wake_word_runtime_path.as_deref())
+            })
+            .as_deref()
+            .map(path_string),
         phrase,
         sample_rate,
         threshold,
@@ -1333,6 +1488,7 @@ impl LocalWakeWordProvider {
                 manifest_valid: false,
                 missing_files: Vec::new(),
                 runtime: None,
+                runtime_path: None,
                 phrase: None,
                 sample_rate: None,
                 threshold: None,
@@ -1443,11 +1599,12 @@ impl WakeWordProvider for LocalWakeWordProvider {
             };
         }
 
-        let runtime_path = model_bundle_for_status(&self.model_status)
-            .and_then(|bundle| resolve_onnx_runtime_path(&bundle));
+        let runtime_path = model_bundle_for_status(&self.model_status).and_then(|bundle| {
+            resolve_onnx_runtime_path(&bundle, self.model_status.runtime_path.as_deref())
+        });
         if runtime_path.is_none() {
             let message = format!(
-                "Local wake-word runtime is missing or could not be loaded. Set {ONNX_RUNTIME_PATH_ENV} to onnxruntime.dll."
+                "Local wake-word runtime is missing or could not be loaded. Set {ONNX_RUNTIME_PATH_ENV} or select onnxruntime.dll in Dev settings."
             );
             return WakeWordProviderAvailability {
                 provider_state: "runtime_missing".into(),
@@ -1527,7 +1684,8 @@ impl WakeWordProvider for LocalWakeWordProvider {
             };
 
             if self.runtime.is_none() {
-                match OnnxWakeWordRuntime::load(&bundle) {
+                match OnnxWakeWordRuntime::load(&bundle, self.model_status.runtime_path.as_deref())
+                {
                     Ok(runtime) => {
                         update_runtime_loaded_status(&self.model_status, &runtime);
                         self.runtime = Some(runtime);
@@ -2259,6 +2417,7 @@ pub fn update_wake_word_settings(settings: WakeWordSettings) -> Result<WakeWordS
     config.wake_word_sensitivity = settings.wake_word_sensitivity;
     config.wake_word_provider = settings.wake_word_provider.clone();
     config.wake_word_model_path = settings.wake_word_model_path.clone();
+    config.wake_word_runtime_path = settings.wake_word_runtime_path.clone();
     config.wake_word_auto_listen_enabled = settings.wake_word_auto_listen_enabled;
     save_companion_config(&config)?;
 
@@ -2384,6 +2543,112 @@ pub fn get_wake_word_model_status() -> Result<WakeWordModelStatus, String> {
     Ok(model_status_for_settings(&settings))
 }
 
+fn wake_word_license_notice() -> String {
+    "openWakeWord code is open-source. Pretrained model licenses may differ; verify model license before redistribution or commercial use. OpenBlob does not bundle paid or cloud wake-word providers by default.".into()
+}
+
+fn install_status_for_settings(settings: &WakeWordSettings) -> WakeWordInstallStatus {
+    let model_status = model_status_for_settings(settings);
+    let bundle = model_bundle_for_status(&model_status);
+    let runtime_candidates = wake_word_runtime_candidate_paths(
+        settings.wake_word_runtime_path.as_deref(),
+        bundle.as_ref(),
+    );
+    let runtime_path = runtime_candidates
+        .iter()
+        .find(|path| path.is_file())
+        .cloned();
+    let runtime_found = runtime_path.is_some();
+    let model_bundle_found = model_status.model_exists && model_status.manifest_valid;
+    let availability = provider_availability(settings);
+
+    let runtime_error = if runtime_found {
+        None
+    } else if let Some(path) = settings.wake_word_runtime_path.as_deref() {
+        Some(format!(
+            "Configured ONNX Runtime DLL was not found: {}",
+            path.trim()
+        ))
+    } else {
+        Some(format!(
+            "ONNX Runtime is not configured. Select onnxruntime.dll or place it under {}.",
+            default_runtime_dll_path()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(
+                    |_| "%APPDATA%/OpenBlob/voice/runtime/onnxruntime/onnxruntime.dll".into()
+                )
+        ))
+    };
+
+    let install_ready = runtime_found && model_bundle_found;
+    let message = if install_ready {
+        "Wake-word runtime and model bundle are installed. Starting the listener is still explicit and wake-to-voice remains opt-in.".to_string()
+    } else if !runtime_found {
+        "ONNX Runtime is missing. Select a local onnxruntime.dll or place it in the OpenBlob runtime folder.".to_string()
+    } else if model_status.model_missing {
+        "Wake-word model bundle is missing. Select a local bundle or place one in the OpenBlob wake-word model folder.".to_string()
+    } else if !model_status.manifest_valid {
+        "Wake-word model bundle is invalid. Check manifest.json and missing files.".to_string()
+    } else {
+        "Wake-word installation is not ready yet.".to_string()
+    };
+
+    WakeWordInstallStatus {
+        install_ready,
+        runtime_found,
+        runtime_path: runtime_path.as_deref().map(path_string),
+        runtime_error,
+        model_bundle_found,
+        model_bundle_path: model_status.resolved_model_path.clone(),
+        manifest_valid: model_status.manifest_valid,
+        missing_files: model_status.missing_files,
+        license_notice: wake_word_license_notice(),
+        provider_state: availability.provider_state,
+        message,
+        configured_runtime_path: settings.wake_word_runtime_path.clone(),
+        configured_model_path: settings.wake_word_model_path.clone(),
+        runtime_search_paths: runtime_candidates
+            .iter()
+            .map(|path| path_string(path))
+            .collect(),
+        model_search_paths: wake_word_model_search_paths()
+            .iter()
+            .map(|path| path_string(path))
+            .collect(),
+    }
+}
+
+#[tauri::command]
+pub fn get_wake_word_install_status() -> Result<WakeWordInstallStatus, String> {
+    let settings = settings_from_config()?;
+    Ok(install_status_for_settings(&settings))
+}
+
+#[tauri::command]
+pub fn verify_wake_word_runtime() -> Result<WakeWordInstallStatus, String> {
+    let settings = settings_from_config()?;
+    let status = install_status_for_settings(&settings);
+    log(format!(
+        "runtime verification; found={}, path={}",
+        status.runtime_found,
+        status.runtime_path.as_deref().unwrap_or("none")
+    ));
+    Ok(status)
+}
+
+#[tauri::command]
+pub fn verify_wake_word_model_bundle() -> Result<WakeWordInstallStatus, String> {
+    let settings = settings_from_config()?;
+    let status = install_status_for_settings(&settings);
+    log(format!(
+        "model bundle verification; found={}, manifest_valid={}, path={}",
+        status.model_bundle_found,
+        status.manifest_valid,
+        status.model_bundle_path.as_deref().unwrap_or("none")
+    ));
+    Ok(status)
+}
+
 #[tauri::command]
 pub fn list_wake_word_models() -> Result<Vec<String>, String> {
     Ok(discover_wake_word_model_paths()
@@ -2427,6 +2692,71 @@ pub fn set_wake_word_model_path(path: Option<String>) -> Result<WakeWordModelSta
         current.runtime_error = availability.runtime_error;
     }
 
+    Ok(status)
+}
+
+#[tauri::command]
+pub fn set_wake_word_runtime_path(path: Option<String>) -> Result<WakeWordInstallStatus, String> {
+    let mut config = load_or_create_companion_config()?;
+    config.wake_word_runtime_path = path.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+    save_companion_config(&config)?;
+
+    let settings = settings_from_config()?;
+    let install_status = install_status_for_settings(&settings);
+    let availability = provider_availability(&settings);
+    if let Ok(mut current) = status_store().lock() {
+        current.provider_state = availability.provider_state;
+        current.runtime_state = availability.runtime_state;
+        current.provider_ready = availability.provider_ready;
+        current.provider_error = availability.last_error;
+        current.runtime_error = availability.runtime_error;
+    }
+
+    log(format!(
+        "runtime path updated; path={}",
+        settings.wake_word_runtime_path.as_deref().unwrap_or("none")
+    ));
+    Ok(install_status)
+}
+
+#[tauri::command]
+pub fn open_wake_word_model_folder() -> Result<WakeWordInstallStatus, String> {
+    let folder = wake_word_model_install_dir()?;
+    open_folder(&folder)?;
+    let settings = settings_from_config()?;
+    Ok(install_status_for_settings(&settings))
+}
+
+#[tauri::command]
+pub fn open_wake_word_runtime_folder() -> Result<WakeWordInstallStatus, String> {
+    let folder = wake_word_runtime_install_dir()?;
+    open_folder(&folder)?;
+    let settings = settings_from_config()?;
+    Ok(install_status_for_settings(&settings))
+}
+
+#[tauri::command]
+pub fn download_wake_word_runtime() -> Result<WakeWordInstallStatus, String> {
+    let settings = settings_from_config()?;
+    let mut status = install_status_for_settings(&settings);
+    status.message = "Automatic ONNX Runtime download is not configured yet. Place onnxruntime.dll manually in the OpenBlob runtime folder or select it from Dev settings.".into();
+    log("runtime download requested; automatic downloads are not configured");
+    Ok(status)
+}
+
+#[tauri::command]
+pub fn download_wake_word_model_bundle() -> Result<WakeWordInstallStatus, String> {
+    let settings = settings_from_config()?;
+    let mut status = install_status_for_settings(&settings);
+    status.message = "Automatic wake-word model download is not configured yet. Place a local OpenWakeWord bundle manually in the OpenBlob wake-word model folder or select it from Dev settings.".into();
+    log("model bundle download requested; automatic downloads are not configured");
     Ok(status)
 }
 
@@ -2513,6 +2843,7 @@ mod tests {
             wake_word_sensitivity: DEFAULT_WAKE_WORD_THRESHOLD,
             wake_word_provider: "local-openwakeword".into(),
             wake_word_model_path: Some(path_string(&dir.path().join("missing"))),
+            wake_word_runtime_path: None,
             wake_word_auto_listen_enabled: false,
         };
 
@@ -2521,6 +2852,41 @@ mod tests {
         assert_eq!(availability.start_state, "model_missing");
         assert!(availability.model_missing);
         assert!(!availability.start_allowed);
+    }
+
+    #[test]
+    fn runtime_candidates_prefer_explicit_configured_path() {
+        let dir = tempdir().unwrap();
+        let configured = dir.path().join("selected").join("onnxruntime.dll");
+        let bundle = WakeWordModelBundle {
+            bundle_dir: dir.path().join("bundle"),
+            manifest_path: dir.path().join("bundle").join("manifest.json"),
+            manifest: WakeWordBundleManifest {
+                id: Some("hey-openblob".into()),
+                provider: Some("local-openwakeword".into()),
+                phrase: Some("hey openblob".into()),
+                runtime: Some("onnx".into()),
+                sample_rate: Some(DEFAULT_WAKE_WORD_SAMPLE_RATE),
+                frame_ms: Some(DEFAULT_WAKE_WORD_FRAME_MS),
+                threshold: Some(DEFAULT_WAKE_WORD_THRESHOLD),
+                models: WakeWordBundleModels {
+                    melspectrogram: Some("melspectrogram.onnx".into()),
+                    embedding: Some("embedding.onnx".into()),
+                    classifier: Some("hey-openblob.onnx".into()),
+                },
+            },
+            missing_files: Vec::new(),
+            validation_errors: Vec::new(),
+        };
+
+        let candidates =
+            wake_word_runtime_candidate_paths(Some(&path_string(&configured)), Some(&bundle));
+
+        assert_eq!(candidates.first(), Some(&configured));
+        let bundle_runtime = Path::new("runtime").join("onnxruntime.dll");
+        assert!(candidates
+            .iter()
+            .any(|path| path.ends_with(&bundle_runtime)));
     }
 
     #[test]
