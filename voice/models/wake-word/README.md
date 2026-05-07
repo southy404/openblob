@@ -53,7 +53,7 @@ Current provider behavior:
 
 - `mic-test` only validates the local microphone pipeline and never runs wake-word detection.
 - `mock` is dev-only and can simulate detection from loud local input.
-- `local-openwakeword` / `local-wakeword` discover and validate local model bundles, normalize microphone audio to mono 16 kHz frames, and use a local ONNX Runtime boundary when explicitly configured.
+- `local-openwakeword` / `local-wakeword` discover and validate local model bundles, normalize microphone audio to mono 16 kHz frames, and run compatible local ONNX bundles when the runtime is explicitly configured.
 
 ONNX Runtime is not downloaded or bundled by OpenBlob. For local development, provide `onnxruntime.dll` either next to the bundle, under `openwakeword/runtime/onnxruntime.dll`, or through:
 
@@ -61,8 +61,8 @@ ONNX Runtime is not downloaded or bundled by OpenBlob. For local development, pr
 OPENBLOB_ONNX_RUNTIME_PATH=C:\path\to\onnxruntime.dll
 ```
 
-When the runtime and model bundle are present, OpenBlob can load the ONNX sessions and report classifier input/output metadata. The full openWakeWord mel-spectrogram -> embedding -> classifier inference chain is still guarded as incomplete until that pipeline is wired end to end; the UI reports `model_loaded_runtime_pipeline_incomplete` instead of pretending detection works.
+When the runtime and model bundle are present, OpenBlob loads the mel-spectrogram, embedding, and classifier ONNX sessions, feeds transient in-memory audio frames through the local chain, compares the resulting score with the manifest threshold, and emits `wake-word-detected` when the score passes. Model/runtime errors are reported as `runtime_missing`, `invalid_model_bundle`, `unsupported_model_shape`, or `provider_error` rather than being hidden or faked.
 
-Wake-to-voice is optional and controlled separately by `wake_word_auto_listen_enabled`. When enabled, the frontend can react to a `wake-word-detected` event and start the same voice input flow used by the manual `ALT + M` shortcut.
+Wake-to-voice is optional and controlled separately by `wake_word_auto_listen_enabled`. When enabled, the frontend reacts to a fresh `wake-word-detected` event and starts the same voice input flow used by the manual `ALT + M` shortcut. Detection itself never executes commands directly.
 
 No cloud calls, paid provider keys, automatic model downloads, or raw audio recording files are required for this foundation.
