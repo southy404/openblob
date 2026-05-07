@@ -2,7 +2,10 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 export async function ensureDevWindow() {
   const existing = await WebviewWindow.getByLabel("bubble-dev");
-  if (existing) return existing;
+  if (existing) {
+    await existing.setAlwaysOnTop(true).catch(() => {});
+    return existing;
+  }
 
   return new WebviewWindow("bubble-dev", {
     url: "bubble-dev.html",

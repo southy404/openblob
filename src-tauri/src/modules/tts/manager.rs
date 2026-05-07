@@ -1,12 +1,18 @@
 use super::kokoro;
 use super::piper;
 use super::tts_config::{detect_lang_from_text, preferred_lang, TtsConfig, TtsProvider};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TTS_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub async fn speak(text: &str, lang: Option<&str>) -> Result<(), String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Ok(());
     }
+
+    let generation = TTS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let _ = piper::stop_current();
 
     let config = TtsConfig::default();
 
@@ -16,29 +22,21 @@ pub async fn speak(text: &str, lang: Option<&str>) -> Result<(), String> {
 
     let resolved_lang = resolve_lang(trimmed, lang, &config);
 
-    match resolved_lang.as_str() {
-        "de" => {
-            speak_with_provider(
-                trimmed,
-                &config.de_provider,
-                &config.de_voice,
-                &config,
-            )
-            .await
-        }
-        _ => {
-            speak_with_provider(
-                trimmed,
-                &config.en_provider,
-                &config.en_voice,
-                &config,
-            )
-            .await
-        }
+    let result = match resolved_lang.as_str() {
+        "de" => speak_with_provider(trimmed, &config.de_provider, &config.de_voice, &config).await,
+        _ => speak_with_provider(trimmed, &config.en_provider, &config.en_voice, &config).await,
+    };
+
+    if generation != TTS_GENERATION.load(Ordering::SeqCst) {
+        return Ok(());
     }
+
+    result
 }
 
 pub async fn stop() -> Result<(), String> {
+    TTS_GENERATION.fetch_add(1, Ordering::SeqCst);
+    piper::stop_current()?;
     Ok(())
 }
 
@@ -74,6 +72,24 @@ fn normalize_lang_code(lang: &str) -> String {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::stop;
+
+    #[test]
+    fn stop_tts_is_idempotent() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("test runtime");
+
+        runtime.block_on(async {
+            stop().await.expect("first stop should succeed");
+            stop().await.expect("second stop should succeed");
+        });
+    }
+}
+
 async fn speak_with_provider(
     text: &str,
     provider: &TtsProvider,
@@ -87,20 +103,17 @@ async fn speak_with_provider(
 
     match provider {
         TtsProvider::Piper => {
-            piper::speak(
-                text,
-                &config.piper_exe,
-                &config.piper_models_dir,
-                trimmed_voice,
-            )
-        }
-        TtsProvider::Kokoro => {
-            kokoro::speak(
-                text,
-                &config.kokoro_base_url,
-                trimmed_voice,
-            )
+            let text = text.to_string();
+            let piper_exe = config.piper_exe.clone();
+            let piper_models_dir = config.piper_models_dir.clone();
+            let voice = trimmed_voice.to_string();
+
+            tokio::task::spawn_blocking(move || {
+                piper::speak(&text, &piper_exe, &piper_models_dir, &voice)
+            })
             .await
+            .map_err(|e| format!("Piper-Task fehlgeschlagen: {e}"))?
         }
+        TtsProvider::Kokoro => kokoro::speak(text, &config.kokoro_base_url, trimmed_voice).await,
     }
 }

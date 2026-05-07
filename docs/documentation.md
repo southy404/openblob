@@ -687,6 +687,8 @@ This flow should remain stable and independent from the wake-word foundation.
 - bubble enters voice/listening state
 - speech recognition captures command
 - recognized text is routed through the same command/chat pipeline
+- pressing the voice shortcut or cancel action during listening aborts the current voice session without hiding Blob or Bubble
+- starting a new text input cancels active listening, TTS playback, and subtitle chunks before routing the new input
 
 ### Important regression guard
 
@@ -1044,7 +1046,7 @@ OpenBlob has local TTS support.
 | Piper | active/local | ONNX-based local voice synthesis |
 | Kokoro | experimental | alternative local TTS path |
 
-Voice output should be optional and user-controlled.
+Voice output should be optional and user-controlled. Long final assistant replies are split into local speech chunks before calling Piper. The subtitle overlay displays the same active chunk that is being spoken and clears on `stop_tts`, cancellation, or a newer interaction.
 
 ---
 
