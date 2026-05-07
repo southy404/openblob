@@ -43,6 +43,8 @@ type WakeWordStatusName =
   | "permission_error"
   | "provider_missing"
   | "model_missing"
+  | "invalid_model_bundle"
+  | "runtime_missing"
   | "provider_not_implemented"
   | "error";
 
@@ -77,6 +79,12 @@ type WakeWordStatus = {
   provider_state: string;
   model_path?: string | null;
   model_missing: boolean;
+  runtime_state: string;
+  manifest_path?: string | null;
+  manifest_valid: boolean;
+  missing_files: string[];
+  sample_rate?: number | null;
+  threshold?: number | null;
   detection_count: number;
   last_detected_at?: string | null;
   last_detection_score?: number | null;
@@ -90,6 +98,13 @@ type WakeWordModelStatus = {
   resolved_model_path?: string | null;
   model_exists: boolean;
   model_missing: boolean;
+  manifest_path?: string | null;
+  manifest_valid: boolean;
+  missing_files: string[];
+  runtime?: string | null;
+  phrase?: string | null;
+  sample_rate?: number | null;
+  threshold?: number | null;
   discovered_models: string[];
   search_paths: string[];
   provider: WakeWordProvider;
@@ -141,6 +156,11 @@ type LocalizedText = {
   wakeWordModelPath: string;
   wakeWordModelStatus: string;
   wakeWordModels: string;
+  wakeWordRuntimeState: string;
+  wakeWordManifest: string;
+  wakeWordMissingFiles: string;
+  wakeWordThreshold: string;
+  wakeWordSampleRate: string;
   wakeWordDetectionCount: string;
   wakeWordLastDetected: string;
   wakeWordDetectionScore: string;
@@ -215,6 +235,11 @@ const TEXTS: Record<UiLang, LocalizedText> = {
     wakeWordModelPath: "Model",
     wakeWordModelStatus: "Model status",
     wakeWordModels: "Local models",
+    wakeWordRuntimeState: "Runtime",
+    wakeWordManifest: "Manifest",
+    wakeWordMissingFiles: "Missing files",
+    wakeWordThreshold: "Threshold",
+    wakeWordSampleRate: "Sample rate",
     wakeWordDetectionCount: "Detections",
     wakeWordLastDetected: "Last detected",
     wakeWordDetectionScore: "Score",
@@ -270,6 +295,11 @@ const TEXTS: Record<UiLang, LocalizedText> = {
     wakeWordModelPath: "Modell",
     wakeWordModelStatus: "Modellstatus",
     wakeWordModels: "Lokale Modelle",
+    wakeWordRuntimeState: "Runtime",
+    wakeWordManifest: "Manifest",
+    wakeWordMissingFiles: "Fehlende Dateien",
+    wakeWordThreshold: "Schwelle",
+    wakeWordSampleRate: "Sample-Rate",
     wakeWordDetectionCount: "Erkennungen",
     wakeWordLastDetected: "Zuletzt erkannt",
     wakeWordDetectionScore: "Score",
@@ -723,6 +753,12 @@ function DevWindow() {
     provider_state: "provider_missing",
     model_path: null,
     model_missing: false,
+    runtime_state: "not_configured",
+    manifest_path: null,
+    manifest_valid: false,
+    missing_files: [],
+    sample_rate: null,
+    threshold: null,
     detection_count: 0,
     last_detected_at: null,
     last_detection_score: null,
@@ -736,6 +772,13 @@ function DevWindow() {
       resolved_model_path: null,
       model_exists: false,
       model_missing: false,
+      manifest_path: null,
+      manifest_valid: false,
+      missing_files: [],
+      runtime: null,
+      phrase: null,
+      sample_rate: null,
+      threshold: null,
       discovered_models: [],
       search_paths: [],
       provider: "none",
@@ -860,6 +903,12 @@ function DevWindow() {
         provider_state: "error",
         model_path: null,
         model_missing: false,
+        runtime_state: "error",
+        manifest_path: null,
+        manifest_valid: false,
+        missing_files: [],
+        sample_rate: null,
+        threshold: null,
         detection_count: 0,
         last_detected_at: null,
         last_detection_score: null,
@@ -900,6 +949,7 @@ function DevWindow() {
             listening: true,
             detected: true,
             provider_state: "detected",
+            runtime_state: "detected",
             detection_count: prev.detection_count + 1,
             last_detected_at: event.payload.detectedAt,
             last_detection_score: event.payload.score,
@@ -999,6 +1049,12 @@ function DevWindow() {
         provider_state: "error",
         model_path: null,
         model_missing: false,
+        runtime_state: "error",
+        manifest_path: null,
+        manifest_valid: false,
+        missing_files: [],
+        sample_rate: null,
+        threshold: null,
         detection_count: 0,
         last_detected_at: null,
         last_detection_score: null,
@@ -1366,6 +1422,8 @@ function DevWindow() {
         .statusPill.permission_error .statusDot,
         .statusPill.provider_missing .statusDot,
         .statusPill.model_missing .statusDot,
+        .statusPill.invalid_model_bundle .statusDot,
+        .statusPill.runtime_missing .statusDot,
         .statusPill.provider_not_implemented .statusDot {
           background: #ffd166;
         }
@@ -1993,9 +2051,18 @@ function DevWindow() {
                   "Local wake-word provider selected, but no model is installed."}
                 {(wakeWordStatus.provider === "local-openwakeword" ||
                   wakeWordStatus.provider === "local-wakeword") &&
-                  !wakeWordStatus.model_missing &&
+                  wakeWordStatus.state === "invalid_model_bundle" &&
+                  "Local wake-word model bundle is invalid."}
+                {(wakeWordStatus.provider === "local-openwakeword" ||
+                  wakeWordStatus.provider === "local-wakeword") &&
+                  wakeWordStatus.state === "runtime_missing" &&
+                  "Local wake-word runtime is missing or could not be loaded."}
+                {(wakeWordStatus.provider === "local-openwakeword" ||
+                  wakeWordStatus.provider === "local-wakeword") &&
                   wakeWordModelStatus.model_exists &&
-                  "Local wake-word model found, but runtime inference is not implemented yet."}
+                  wakeWordModelStatus.manifest_valid &&
+                  wakeWordStatus.runtime_state === "model_loaded" &&
+                  "Local wake-word model loaded."}
                 {wakeWordStatus.state === "detected" && " Wake word detected."}
                 {wakeWordStatus.state === "no_input_device" &&
                   "No microphone input device is available."}
@@ -2044,6 +2111,15 @@ function DevWindow() {
                 </div>
 
                 <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordRuntimeState}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.runtime_state ||
+                      wakeWordModelStatus.runtime ||
+                      "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
                   <div className="metricLabel">{t.wakeWordAutoListenStatus}</div>
                   <div className="metricValue">
                     {wakeWordSettings.wake_word_auto_listen_enabled
@@ -2063,10 +2139,55 @@ function DevWindow() {
                   <div className="metricLabel">{t.wakeWordModelStatus}</div>
                   <div className="metricValue">
                     {wakeWordModelStatus.model_exists
-                      ? "model found"
+                      ? "bundle valid"
+                      : wakeWordModelStatus.missing_files.length
+                        ? "invalid bundle"
                       : wakeWordStatus.model_missing
                         ? "model missing"
                         : "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordManifest}</div>
+                  <div className="metricValue">
+                    {wakeWordModelStatus.manifest_path
+                      ? wakeWordModelStatus.manifest_valid
+                        ? `valid: ${wakeWordModelStatus.manifest_path}`
+                        : `invalid: ${wakeWordModelStatus.manifest_path}`
+                      : "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordMissingFiles}</div>
+                  <div className="metricValue">
+                    {wakeWordModelStatus.missing_files.length
+                      ? wakeWordModelStatus.missing_files.join(", ")
+                      : "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordSampleRate}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.sample_rate ||
+                      wakeWordModelStatus.sample_rate ||
+                      "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordThreshold}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.threshold == null &&
+                    wakeWordModelStatus.threshold == null
+                      ? "none"
+                      : (
+                          wakeWordStatus.threshold ??
+                          wakeWordModelStatus.threshold ??
+                          0
+                        ).toFixed(3)}
                   </div>
                 </div>
 

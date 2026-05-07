@@ -1429,7 +1429,34 @@ Speak or make noise
 Stop listener
 ```
 
-Expected:
+## Wake Word
+
+Wake-word support is optional, local-first, and disabled unless the user enables it and starts the listener. `ALT + M` remains the manual voice shortcut.
+
+Providers:
+
+- `mic-test` starts local microphone capture only to verify chunks, timestamps, and input level.
+- `mock` is development-only and can emit `wake-word-detected` from loud local input.
+- `local-openwakeword` / `local-wakeword` are the free local provider path. They discover and validate openWakeWord-style ONNX bundles under `%APPDATA%/OpenBlob/voice/models/wake-word/`, then the repo-local `voice/models/wake-word/` fallback.
+
+Bundle layout:
+
+```text
+voice/models/wake-word/
+  openwakeword/
+    manifest.json
+    melspectrogram.onnx
+    embedding.onnx
+    hey-openblob.onnx
+```
+
+The current local provider validates the manifest, checks missing files, normalizes microphone audio to mono 16 kHz fixed windows, and reports `runtime_missing` until an ONNX inference backend is linked. It does not call cloud services, does not require paid keys, does not auto-download models, and does not store raw microphone audio.
+
+Wake-to-voice is controlled separately by `wake_word_auto_listen_enabled`. When enabled, the frontend reacts to `wake-word-detected` and starts the existing voice input flow; the event itself never executes commands directly.
+
+---
+
+## Known Issues
 
 - state becomes `listening`
 - `audio_chunks_seen` increases

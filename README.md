@@ -340,6 +340,19 @@ OpenBlob is moving toward persistent long-term memory and query-aware context re
 
 ---
 
+### Wake Word
+
+Wake-word support is local-first and disabled by default. The manual `ALT + M` voice shortcut remains the fallback.
+
+- `mic-test` checks the local microphone pipeline only.
+- `mock` simulates wake detection for development.
+- `local-openwakeword` is the real local provider path: users manually install an openWakeWord-style ONNX bundle under `%APPDATA%/OpenBlob/voice/models/wake-word/`.
+- Wake-to-voice is opt-in and starts the existing voice input flow only after a `wake-word-detected` event.
+
+No cloud wake provider, paid API key, automatic model download, or raw audio file recording is required.
+
+---
+
 ### Notes
 
 - Commands are **fuzzy matched** — exact wording is not required.

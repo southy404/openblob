@@ -393,6 +393,8 @@ function BubbleApp() {
   const phaseRef = useRef<BlobPhase>("idle");
   const lastWakeVoiceAtRef = useRef(0);
 
+  const t = BUBBLE_TEXTS[uiLang];
+
   const SpeechRecognitionCtor = useMemo(
     () => window.SpeechRecognition || window.webkitSpeechRecognition || null,
     []
