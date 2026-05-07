@@ -136,6 +136,34 @@ struct WakeWordModelBundle {
     validation_errors: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct WakeWordBundleManifest {
+    id: Option<String>,
+    provider: Option<String>,
+    phrase: Option<String>,
+    runtime: Option<String>,
+    #[serde(rename = "sampleRate")]
+    sample_rate: Option<u32>,
+    #[serde(rename = "frameMs")]
+    frame_ms: Option<u32>,
+    threshold: Option<f32>,
+    models: WakeWordBundleModels,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WakeWordBundleModels {
+    melspectrogram: Option<String>,
+    embedding: Option<String>,
+    classifier: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct WakeWordModelBundle {
+    manifest_path: PathBuf,
+    manifest: WakeWordBundleManifest,
+    missing_files: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WakeWordDetectedEvent {
@@ -265,6 +293,22 @@ impl OnnxWakeWordRuntime {
 
     fn classifier_output_shape(&self) -> Option<String> {
         self.classifier.output_shape.clone()
+    }
+}
+
+struct OnnxWakeWordRuntime;
+
+impl OnnxWakeWordRuntime {
+    fn load(_bundle: &WakeWordModelBundle) -> Result<Self, String> {
+        Err(
+            "ONNX Runtime integration is not linked yet. Install a local openWakeWord ONNX runtime bundle before enabling real inference."
+                .into(),
+        )
+    }
+
+    #[allow(dead_code)]
+    fn run_inference_frame(&mut self, _frame: &[f32]) -> Result<f32, String> {
+        Err("ONNX wake-word inference is not available in this build.".into())
     }
 }
 
