@@ -14,6 +14,9 @@ import {
   Radio,
   TerminalSquare,
   ChevronDown,
+  FolderOpen,
+  Download,
+  CheckCircle2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -58,6 +61,7 @@ type WakeWordSettings = {
   wake_word_sensitivity: number;
   wake_word_provider: WakeWordProvider;
   wake_word_model_path?: string | null;
+  wake_word_runtime_path?: string | null;
 };
 
 type WakeWordStatus = {
@@ -109,6 +113,7 @@ type WakeWordModelStatus = {
   manifest_valid: boolean;
   missing_files: string[];
   runtime?: string | null;
+  runtime_path?: string | null;
   phrase?: string | null;
   sample_rate?: number | null;
   threshold?: number | null;
@@ -120,6 +125,24 @@ type WakeWordModelStatus = {
   classifier_input_shape?: string | null;
   classifier_output_shape?: string | null;
   runtime_error?: string | null;
+};
+
+type WakeWordInstallStatus = {
+  install_ready: boolean;
+  runtime_found: boolean;
+  runtime_path?: string | null;
+  runtime_error?: string | null;
+  model_bundle_found: boolean;
+  model_bundle_path?: string | null;
+  manifest_valid: boolean;
+  missing_files: string[];
+  license_notice: string;
+  provider_state: string;
+  message: string;
+  configured_runtime_path?: string | null;
+  configured_model_path?: string | null;
+  runtime_search_paths: string[];
+  model_search_paths: string[];
 };
 
 type WakeWordDetectedPayload = {
@@ -742,6 +765,7 @@ function DevWindow() {
     wake_word_sensitivity: 0.5,
     wake_word_provider: "none",
     wake_word_model_path: null,
+    wake_word_runtime_path: null,
   });
   const [wakeWordStatus, setWakeWordStatus] = useState<WakeWordStatus>({
     status: "disabled",
@@ -792,6 +816,7 @@ function DevWindow() {
       manifest_valid: false,
       missing_files: [],
       runtime: null,
+      runtime_path: null,
       phrase: null,
       sample_rate: null,
       threshold: null,
@@ -804,6 +829,26 @@ function DevWindow() {
       classifier_output_shape: null,
       runtime_error: null,
   });
+  const [wakeWordInstallStatus, setWakeWordInstallStatus] =
+    useState<WakeWordInstallStatus>({
+      install_ready: false,
+      runtime_found: false,
+      runtime_path: null,
+      runtime_error: null,
+      model_bundle_found: false,
+      model_bundle_path: null,
+      manifest_valid: false,
+      missing_files: [],
+      license_notice:
+        "openWakeWord code is open-source. Pretrained model licenses may differ.",
+      provider_state: "not_configured",
+      message: "Wake-word installation has not been checked yet.",
+      configured_runtime_path: null,
+      configured_model_path: null,
+      runtime_search_paths: [],
+      model_search_paths: [],
+    });
+  const [wakeWordInstallBusy, setWakeWordInstallBusy] = useState(false);
   const [wakeWordSaving, setWakeWordSaving] = useState(false);
   const [wakeWordLastFrontendEventAt, setWakeWordLastFrontendEventAt] =
     useState<string | null>(null);
@@ -891,15 +936,17 @@ function DevWindow() {
 
   const refreshWakeWord = async () => {
     try {
-      const [settings, status, modelStatus] = await Promise.all([
+      const [settings, status, modelStatus, installStatus] = await Promise.all([
         invoke<WakeWordSettings>("get_wake_word_settings"),
         invoke<WakeWordStatus>("get_wake_word_status"),
         invoke<WakeWordModelStatus>("get_wake_word_model_status"),
+        invoke<WakeWordInstallStatus>("get_wake_word_install_status"),
       ]);
 
       setWakeWordSettings(settings);
       setWakeWordStatus(status);
       setWakeWordModelStatus(modelStatus);
+      setWakeWordInstallStatus(installStatus);
     } catch (err) {
       console.error("failed to load wake word settings", err);
       setWakeWordStatus({
@@ -941,6 +988,12 @@ function DevWindow() {
         classifier_output_shape: null,
         runtime_error: String(err),
       });
+      setWakeWordInstallStatus((prev) => ({
+        ...prev,
+        install_ready: false,
+        runtime_error: String(err),
+        message: String(err),
+      }));
     }
   };
 
@@ -1044,12 +1097,14 @@ function DevWindow() {
         settings: wakeWordSettings,
       });
       setWakeWordSettings(saved);
-      const [nextStatus, modelStatus] = await Promise.all([
+      const [nextStatus, modelStatus, installStatus] = await Promise.all([
         invoke<WakeWordStatus>("get_wake_word_status"),
         invoke<WakeWordModelStatus>("get_wake_word_model_status"),
+        invoke<WakeWordInstallStatus>("get_wake_word_install_status"),
       ]);
       setWakeWordStatus(nextStatus);
       setWakeWordModelStatus(modelStatus);
+      setWakeWordInstallStatus(installStatus);
     } catch (err) {
       console.error("failed to save wake word settings", err);
       setWakeWordStatus({
@@ -1103,7 +1158,11 @@ function DevWindow() {
       const modelStatus = await invoke<WakeWordModelStatus>(
         "get_wake_word_model_status"
       );
+      const installStatus = await invoke<WakeWordInstallStatus>(
+        "get_wake_word_install_status"
+      );
       setWakeWordModelStatus(modelStatus);
+      setWakeWordInstallStatus(installStatus);
     } catch (err) {
       console.error("failed to start wake word listener", err);
     }
@@ -1116,10 +1175,116 @@ function DevWindow() {
       const modelStatus = await invoke<WakeWordModelStatus>(
         "get_wake_word_model_status"
       );
+      const installStatus = await invoke<WakeWordInstallStatus>(
+        "get_wake_word_install_status"
+      );
       setWakeWordModelStatus(modelStatus);
+      setWakeWordInstallStatus(installStatus);
     } catch (err) {
       console.error("failed to stop wake word listener", err);
     }
+  };
+
+  const refreshWakeWordInstallStatus = async (command: string) => {
+    try {
+      setWakeWordInstallBusy(true);
+      const installStatus = await invoke<WakeWordInstallStatus>(command);
+      setWakeWordInstallStatus(installStatus);
+      const [status, modelStatus] = await Promise.all([
+        invoke<WakeWordStatus>("get_wake_word_status"),
+        invoke<WakeWordModelStatus>("get_wake_word_model_status"),
+      ]);
+      setWakeWordStatus(status);
+      setWakeWordModelStatus(modelStatus);
+    } catch (err) {
+      console.error(`wake word install command failed: ${command}`, err);
+      setWakeWordInstallStatus((prev) => ({
+        ...prev,
+        install_ready: false,
+        message: String(err),
+        runtime_error: String(err),
+      }));
+    } finally {
+      setWakeWordInstallBusy(false);
+    }
+  };
+
+  const selectWakeWordRuntime = async () => {
+    const path = window.prompt(
+      "Paste the full path to onnxruntime.dll. OpenBlob will save the path but will not start the microphone."
+    );
+    if (path == null) return;
+
+    try {
+      setWakeWordInstallBusy(true);
+      const installStatus = await invoke<WakeWordInstallStatus>(
+        "set_wake_word_runtime_path",
+        { path }
+      );
+      setWakeWordInstallStatus(installStatus);
+      setWakeWordSettings((prev) => ({
+        ...prev,
+        wake_word_runtime_path: installStatus.configured_runtime_path ?? path,
+      }));
+      const status = await invoke<WakeWordStatus>("get_wake_word_status");
+      setWakeWordStatus(status);
+    } catch (err) {
+      console.error("failed to set wake word runtime path", err);
+      setWakeWordInstallStatus((prev) => ({
+        ...prev,
+        install_ready: false,
+        message: String(err),
+        runtime_error: String(err),
+      }));
+    } finally {
+      setWakeWordInstallBusy(false);
+    }
+  };
+
+  const selectWakeWordModelBundle = async () => {
+    const path = window.prompt(
+      "Paste the full path to the wake-word model bundle folder or manifest.json."
+    );
+    if (path == null) return;
+
+    try {
+      setWakeWordInstallBusy(true);
+      const modelStatus = await invoke<WakeWordModelStatus>(
+        "set_wake_word_model_path",
+        { path }
+      );
+      const installStatus = await invoke<WakeWordInstallStatus>(
+        "get_wake_word_install_status"
+      );
+      setWakeWordModelStatus(modelStatus);
+      setWakeWordInstallStatus(installStatus);
+      setWakeWordSettings((prev) => ({
+        ...prev,
+        wake_word_model_path: installStatus.configured_model_path ?? path,
+      }));
+      const status = await invoke<WakeWordStatus>("get_wake_word_status");
+      setWakeWordStatus(status);
+    } catch (err) {
+      console.error("failed to set wake word model path", err);
+      setWakeWordInstallStatus((prev) => ({
+        ...prev,
+        install_ready: false,
+        message: String(err),
+      }));
+    } finally {
+      setWakeWordInstallBusy(false);
+    }
+  };
+
+  const requestWakeWordDownload = async (
+    command: "download_wake_word_runtime" | "download_wake_word_model_bundle"
+  ) => {
+    const confirmed = window.confirm(
+      "This will download local runtime/model files to your OpenBlob app data folder. Microphone audio is never uploaded."
+    );
+    if (!confirmed) return;
+
+    await refreshWakeWordInstallStatus(command);
   };
 
   const filteredGroups = useMemo(() => {
@@ -1486,6 +1651,90 @@ function DevWindow() {
           gap: 10px;
         }
 
+        .wakeInstaller {
+          display: grid;
+          gap: 10px;
+          border-radius: 16px;
+          border: 1px solid rgba(255,255,255,0.08);
+          background: rgba(255,255,255,0.04);
+          padding: 12px;
+        }
+
+        .installerHeader {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 12px;
+        }
+
+        .installerText {
+          color: rgba(255,255,255,0.68);
+          font-size: 12px;
+          line-height: 1.45;
+        }
+
+        .installBadge {
+          min-height: 30px;
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          border-radius: 999px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.07);
+          padding: 0 11px;
+          color: rgba(255,255,255,0.78);
+          font-size: 11px;
+          white-space: nowrap;
+        }
+
+        .installBadge.ready {
+          color: #9ff0c3;
+        }
+
+        .installBadge.missing {
+          color: #ffd166;
+        }
+
+        .installerGrid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+        }
+
+        .installerPanel {
+          display: grid;
+          gap: 8px;
+          min-width: 0;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.08);
+          background: rgba(0,0,0,0.12);
+          padding: 10px;
+        }
+
+        .installerTitle {
+          color: rgba(255,255,255,0.88);
+          font-size: 13px;
+          font-weight: 700;
+        }
+
+        .installerLine,
+        .installerError {
+          color: rgba(255,255,255,0.70);
+          font-size: 12px;
+          line-height: 1.4;
+          word-break: break-word;
+        }
+
+        .installerError {
+          color: #ffd166;
+        }
+
+        .installerActions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
         .wakeMetric {
           border-radius: 14px;
           border: 1px solid rgba(255,255,255,0.08);
@@ -1560,6 +1809,10 @@ function DevWindow() {
           font-weight: 700;
           padding: 0 16px;
           cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
           transition: background 0.18s ease, border-color 0.18s ease, opacity 0.18s ease;
           white-space: nowrap;
           box-shadow:
@@ -1744,6 +1997,10 @@ function DevWindow() {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
 
+          .installerGrid {
+            grid-template-columns: 1fr;
+          }
+
           .wakeMetrics {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
@@ -1790,6 +2047,10 @@ function DevWindow() {
 
           .wakeGrid {
             grid-template-columns: 1fr;
+          }
+
+          .installerHeader {
+            display: grid;
           }
 
           .wakeMetrics {
@@ -2021,6 +2282,21 @@ function DevWindow() {
                 </div>
 
                 <div className="field">
+                  <div className="fieldLabel">ONNX Runtime DLL</div>
+                  <input
+                    className="textInput"
+                    value={wakeWordSettings.wake_word_runtime_path || ""}
+                    onChange={(e) =>
+                      setWakeWordSettings((prev) => ({
+                        ...prev,
+                        wake_word_runtime_path: e.target.value || null,
+                      }))
+                    }
+                    placeholder="%APPDATA%/OpenBlob/voice/runtime/onnxruntime/onnxruntime.dll"
+                  />
+                </div>
+
+                <div className="field">
                   <div className="fieldLabel">
                     {t.wakeWordSensitivity}{" "}
                     {Math.round(wakeWordSettings.wake_word_sensitivity * 100)}%
@@ -2066,6 +2342,172 @@ function DevWindow() {
                 >
                   {t.wakeWordStop}
                 </button>
+              </div>
+
+              <div className="wakeInstaller">
+                <div className="installerHeader">
+                  <div>
+                    <div className="label">Installation</div>
+                    <div className="installerText">
+                      Local files only. No microphone audio is uploaded, and
+                      nothing starts automatically after install or verify.
+                    </div>
+                  </div>
+                  <div
+                    className={`installBadge ${
+                      wakeWordInstallStatus.install_ready ? "ready" : "missing"
+                    }`}
+                  >
+                    <CheckCircle2 size={14} />
+                    {wakeWordInstallStatus.install_ready
+                      ? "install ready"
+                      : "not ready"}
+                  </div>
+                </div>
+
+                <div className="installerGrid">
+                  <div className="installerPanel">
+                    <div className="installerTitle">Runtime status</div>
+                    <div className="installerLine">
+                      ONNX Runtime configured:{" "}
+                      {wakeWordInstallStatus.runtime_found ? "yes" : "no"}
+                    </div>
+                    <div className="installerLine">
+                      Runtime path:{" "}
+                      {wakeWordInstallStatus.runtime_path ||
+                        wakeWordInstallStatus.configured_runtime_path ||
+                        "none"}
+                    </div>
+                    {wakeWordInstallStatus.runtime_error && (
+                      <div className="installerError">
+                        {wakeWordInstallStatus.runtime_error}
+                      </div>
+                    )}
+                    <div className="installerActions">
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() =>
+                          void refreshWakeWordInstallStatus(
+                            "verify_wake_word_runtime"
+                          )
+                        }
+                      >
+                        Verify ONNX Runtime
+                      </button>
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() => void selectWakeWordRuntime()}
+                      >
+                        Select ONNX Runtime DLL
+                      </button>
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() =>
+                          void refreshWakeWordInstallStatus(
+                            "open_wake_word_runtime_folder"
+                          )
+                        }
+                      >
+                        <FolderOpen size={14} /> Open runtime folder
+                      </button>
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() =>
+                          void requestWakeWordDownload(
+                            "download_wake_word_runtime"
+                          )
+                        }
+                      >
+                        <Download size={14} /> Download ONNX Runtime
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="installerPanel">
+                    <div className="installerTitle">Model bundle status</div>
+                    <div className="installerLine">
+                      Bundle found:{" "}
+                      {wakeWordInstallStatus.model_bundle_found ? "yes" : "no"}
+                    </div>
+                    <div className="installerLine">
+                      Bundle path:{" "}
+                      {wakeWordInstallStatus.model_bundle_path ||
+                        wakeWordInstallStatus.configured_model_path ||
+                        "none"}
+                    </div>
+                    <div className="installerLine">
+                      Manifest:{" "}
+                      {wakeWordInstallStatus.manifest_valid
+                        ? "valid"
+                        : "missing or invalid"}
+                    </div>
+                    {wakeWordInstallStatus.missing_files.length > 0 && (
+                      <div className="installerError">
+                        Missing files:{" "}
+                        {wakeWordInstallStatus.missing_files.join(", ")}
+                      </div>
+                    )}
+                    <div className="installerActions">
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() =>
+                          void refreshWakeWordInstallStatus(
+                            "verify_wake_word_model_bundle"
+                          )
+                        }
+                      >
+                        Verify model bundle
+                      </button>
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() => void selectWakeWordModelBundle()}
+                      >
+                        Select local model bundle
+                      </button>
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() =>
+                          void refreshWakeWordInstallStatus(
+                            "open_wake_word_model_folder"
+                          )
+                        }
+                      >
+                        <FolderOpen size={14} /> Open model folder
+                      </button>
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() =>
+                          void requestWakeWordDownload(
+                            "download_wake_word_model_bundle"
+                          )
+                        }
+                      >
+                        <Download size={14} /> Download model bundle
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="installerText">
+                  {wakeWordInstallStatus.message}{" "}
+                  {wakeWordInstallStatus.license_notice}
+                </div>
               </div>
 
               <div className={`statusPill ${wakeWordStatus.state}`}>

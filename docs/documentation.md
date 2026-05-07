@@ -719,6 +719,8 @@ Current goal:
 | `wake_word_phrase` | phrase shown/configured by user | default companion phrase |
 | `wake_word_sensitivity` | normalized sensitivity value | 0.0 - 1.0 |
 | `wake_word_provider` | selected provider | disabled / none / mic-test / mock / local-openwakeword / local-wakeword |
+| `wake_word_model_path` | optional explicit local model bundle path | null |
+| `wake_word_runtime_path` | optional explicit `onnxruntime.dll` path | null |
 | `wake_word_auto_listen_enabled` | whether wake detection starts the existing voice input flow | false |
 
 ### Tauri commands
@@ -730,6 +732,16 @@ Current goal:
 | `start_wake_word_listener` | explicitly start listener |
 | `stop_wake_word_listener` | stop listener |
 | `get_wake_word_status` | inspect runtime status |
+| `get_wake_word_model_status` | inspect selected/discovered bundle state |
+| `get_wake_word_install_status` | inspect runtime + model install readiness |
+| `verify_wake_word_runtime` | verify whether a local ONNX Runtime DLL is configured/found |
+| `verify_wake_word_model_bundle` | verify selected/discovered model manifest and required files |
+| `set_wake_word_model_path` | save an explicit local bundle path |
+| `set_wake_word_runtime_path` | save an explicit local `onnxruntime.dll` path |
+| `open_wake_word_model_folder` | open the AppData model install folder |
+| `open_wake_word_runtime_folder` | open the AppData ONNX Runtime install folder |
+| `download_wake_word_runtime` | explicit future download boundary; currently does not auto-download |
+| `download_wake_word_model_bundle` | explicit future download boundary; currently does not auto-download |
 
 ### Runtime states
 
@@ -1445,6 +1457,14 @@ Providers:
 - `mock` is development-only and can emit `wake-word-detected` from loud local input.
 - `local-openwakeword` / `local-wakeword` are the free local provider path. They discover and validate openWakeWord-style ONNX bundles under `%APPDATA%/OpenBlob/voice/models/wake-word/`, then the repo-local `voice/models/wake-word/` fallback.
 
+ONNX Runtime lookup order:
+
+1. explicit path saved in Dev UI (`wake_word_runtime_path`)
+2. `OPENBLOB_ONNX_RUNTIME_PATH`
+3. `%APPDATA%/OpenBlob/voice/runtime/onnxruntime/onnxruntime.dll`
+4. `onnxruntime.dll` next to the model bundle
+5. `runtime/onnxruntime.dll` inside the model bundle
+
 Bundle layout:
 
 ```text
@@ -1456,7 +1476,11 @@ voice/models/wake-word/
     hey-openblob.onnx
 ```
 
-The current local provider validates the manifest, checks missing files, normalizes microphone audio to mono 16 kHz fixed windows, and loads local ONNX sessions when `onnxruntime.dll` is available through `OPENBLOB_ONNX_RUNTIME_PATH` or next to the bundle. Compatible bundles run through the mel-spectrogram -> embedding -> classifier chain, compare the classifier score against the manifest threshold, and emit `wake-word-detected`. Unsupported shapes, missing runtime, invalid bundles, or inference failures are surfaced as explicit status/error states. It does not call cloud services, does not require paid keys, does not auto-download models, and does not store raw microphone audio.
+The current local provider validates the manifest, checks missing files, normalizes microphone audio to mono 16 kHz fixed windows, and loads local ONNX sessions when `onnxruntime.dll` is available. Compatible bundles run through the mel-spectrogram -> embedding -> classifier chain, compare the classifier score against the manifest threshold, and emit `wake-word-detected`. Unsupported shapes, missing runtime, invalid bundles, or inference failures are surfaced as explicit status/error states. It does not call cloud services, does not require paid keys, does not auto-download models, and does not store raw microphone audio.
+
+The Dev / Wake Word settings panel has an Installation area for verifying ONNX Runtime and model bundle readiness, opening the AppData install folders, and saving explicit local paths. The download buttons are an explicit safe boundary for future work; they currently return a clear manual-install message and do not fetch, execute, enable, or start anything automatically.
+
+Licensing note: openWakeWord code is open-source, but pretrained model licenses can differ. Users should verify model bundle licensing before redistribution or commercial use. OpenBlob does not bundle paid or cloud wake-word providers by default.
 
 Wake-to-voice is controlled separately by `wake_word_auto_listen_enabled`. When enabled, the frontend reacts to a fresh `wake-word-detected` event, checks listener/Busy/cooldown guards, and starts the existing voice input flow; the event itself never executes commands directly.
 
