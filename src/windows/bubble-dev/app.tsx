@@ -748,6 +748,27 @@ function getCommandGroups(lang: UiLang): LocalizedCommandGroup[] {
   ];
 }
 
+type SettingsPanelKey = "voiceTts" | "wakeWord";
+
+const DEV_PANEL_STORAGE_KEY = "openblob-dev-settings-panels";
+
+function readDevPanelState(): Record<SettingsPanelKey, boolean> {
+  try {
+    const value = window.localStorage.getItem(DEV_PANEL_STORAGE_KEY);
+    if (!value) {
+      return { voiceTts: false, wakeWord: false };
+    }
+
+    const parsed = JSON.parse(value) as Partial<Record<SettingsPanelKey, boolean>>;
+    return {
+      voiceTts: parsed.voiceTts ?? false,
+      wakeWord: parsed.wakeWord ?? false,
+    };
+  } catch {
+    return { voiceTts: false, wakeWord: false };
+  }
+}
+
 function DevWindow() {
   const [uiLang, setUiLang] = useState<UiLang>("en");
   const [lastRoute, setLastRoute] = useState<RouteState>("none");
@@ -852,6 +873,8 @@ function DevWindow() {
   const [wakeWordSaving, setWakeWordSaving] = useState(false);
   const [wakeWordLastFrontendEventAt, setWakeWordLastFrontendEventAt] =
     useState<string | null>(null);
+  const [openSettingsPanels, setOpenSettingsPanels] =
+    useState<Record<SettingsPanelKey, boolean>>(readDevPanelState);
 
   const t = TEXTS[uiLang];
   const commandGroups = useMemo(() => getCommandGroups(uiLang), [uiLang]);
@@ -869,6 +892,22 @@ function DevWindow() {
   });
 
   const appWindow = useMemo(() => getCurrentWindow(), []);
+
+  const toggleSettingsPanel = (key: SettingsPanelKey) => {
+    setOpenSettingsPanels((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        DEV_PANEL_STORAGE_KEY,
+        JSON.stringify(openSettingsPanels)
+      );
+    } catch {}
+  }, [openSettingsPanels]);
 
   useEffect(() => {
     const applyGlass = async () => {
@@ -1555,6 +1594,42 @@ function DevWindow() {
           gap: 12px;
         }
 
+        .settingsPanelToggle {
+          appearance: none;
+          border: 0;
+          background: transparent;
+          color: inherit;
+          padding: 0;
+          width: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          text-align: left;
+          cursor: pointer;
+        }
+
+        .settingsPanelSummary {
+          color: var(--text-soft);
+          font-size: 12px;
+          line-height: 1.35;
+          margin-top: 4px;
+        }
+
+        .settingsPanelBody {
+          display: grid;
+          gap: 12px;
+        }
+
+        .settingsChevron {
+          flex: 0 0 auto;
+          transition: transform 180ms ease;
+        }
+
+        .settingsChevron.open {
+          transform: rotate(180deg);
+        }
+
         .identityGrid {
           display: grid;
           grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
@@ -2190,8 +2265,70 @@ function DevWindow() {
             </div>
 
             <div className="card identityCard">
-              <div className="label">{t.wakeWord}</div>
+              <button
+                className="settingsPanelToggle"
+                type="button"
+                onClick={() => toggleSettingsPanel("voiceTts")}
+              >
+                <div>
+                  <div className="label">Voice / TTS</div>
+                  <div className="settingsPanelSummary">
+                    shortcut {voiceShortcut} - model {model}
+                  </div>
+                </div>
+                <ChevronDown
+                  size={16}
+                  className={`settingsChevron ${
+                    openSettingsPanels.voiceTts ? "open" : ""
+                  }`}
+                />
+              </button>
 
+              {openSettingsPanels.voiceTts && (
+                <div className="settingsPanelBody">
+                  <div className="wakeMetrics">
+                    <div className="wakeMetric">
+                      <div className="metricLabel">{t.voiceShortcut}</div>
+                      <div className="metricValue">{voiceShortcut}</div>
+                    </div>
+                    <div className="wakeMetric">
+                      <div className="metricLabel">{t.model}</div>
+                      <div className="metricValue">{model}</div>
+                    </div>
+                    <div className="wakeMetric">
+                      <div className="metricLabel">TTS playback</div>
+                      <div className="metricValue">
+                        Bubble quick setting controls speech output.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="card identityCard">
+              <button
+                className="settingsPanelToggle"
+                type="button"
+                onClick={() => toggleSettingsPanel("wakeWord")}
+              >
+                <div>
+                  <div className="label">{t.wakeWord}</div>
+                  <div className="settingsPanelSummary">
+                    {wakeWordSettings.wake_word_enabled ? "enabled" : "disabled"} -{" "}
+                    {wakeWordSettings.wake_word_provider} - {wakeWordStatus.state}
+                  </div>
+                </div>
+                <ChevronDown
+                  size={16}
+                  className={`settingsChevron ${
+                    openSettingsPanels.wakeWord ? "open" : ""
+                  }`}
+                />
+              </button>
+
+              {openSettingsPanels.wakeWord && (
+                <div className="settingsPanelBody">
               <div className="wakeGrid">
                 <div className="field">
                   <div className="fieldLabel">{t.wakeWordEnabled}</div>
@@ -2775,6 +2912,8 @@ function DevWindow() {
                   </div>
                 )}
               </div>
+                </div>
+              )}
             </div>
 
             <div className="searchWrap">

@@ -238,7 +238,7 @@ OpenBlob can open apps and services, then keep them as the active controlled tar
 
 | Shortcut / Command | Description |
 | ------------------ | ----------- |
-| `ALT + M`          | Start voice input manually |
+| `ALT + M`          | Start voice input manually; press it again while listening to cancel safely |
 | Wake-word settings | Configure phrase, provider, enabled state, and sensitivity in the dev/settings UI |
 | `mic-test` provider | Starts local microphone listener for development testing |
 | `mock` provider | Local development detection simulation |
@@ -248,6 +248,8 @@ OpenBlob now includes the foundation for wake-word support and the first real lo
 
 - configurable wake-word settings
 - safe start/stop listener commands
+- cancellable voice/TTS flows that clear active subtitles and allow immediate new input
+- long assistant replies are spoken in local Piper chunks so subtitles follow the active spoken sentence instead of racing ahead
 - local microphone input detection through the wake-word module
 - listener states such as `disabled`, `stopped`, `starting`, `listening`, `no_input_device`, `permission_error`, `provider_missing`, and `error`
 - selected/default input device reporting

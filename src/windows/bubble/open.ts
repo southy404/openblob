@@ -1,5 +1,9 @@
 import { LogicalPosition } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import {
+  readBlobAlwaysOnTop,
+  setWindowAlwaysOnTopSafely,
+} from "../window-pinning";
 
 const BUBBLE_WIDTH = 1040;
 const BUBBLE_HEIGHT = 135;
@@ -40,6 +44,7 @@ export async function positionBubbleWindow(win?: WebviewWindow) {
 export async function ensureBubbleWindow() {
   const existing = await WebviewWindow.getByLabel("bubble");
   if (existing) {
+    await setWindowAlwaysOnTopSafely(existing, readBlobAlwaysOnTop());
     await positionBubbleWindow(existing);
     return existing;
   }
@@ -49,7 +54,7 @@ export async function ensureBubbleWindow() {
     title: "Bubble",
     transparent: true,
     decorations: false,
-    alwaysOnTop: true,
+    alwaysOnTop: readBlobAlwaysOnTop(),
     shadow: false,
     skipTaskbar: true,
     resizable: false,
