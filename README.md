@@ -4,26 +4,27 @@
 
 # OpenBlob
 
-**open-source desktop copilot for Windows**
+**Open-source desktop copilot for Windows**
 
 ![License](https://img.shields.io/badge/license-MIT-7F77DD?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-378ADD?style=flat-square)
 ![Tauri](https://img.shields.io/badge/Tauri-v2-1D9E75?style=flat-square)
 ![Rust](https://img.shields.io/badge/backend-Rust-EF9F27?style=flat-square)
-![AI](https://img.shields.io/badge/AI-Multi--Model-D85A30?style=flat-square)
+![React](https://img.shields.io/badge/frontend-React-61DAFB?style=flat-square)
+![AI](https://img.shields.io/badge/AI-Local--First-D85A30?style=flat-square)
 ![Status](https://img.shields.io/badge/status-active%20development-639922?style=flat-square)
 
 </div>
 
 ---
 
-> **Build a desktop copilot that feels alive, useful, extensible, and truly personal.** <br />
-> Current focus: **stabilizing the architecture, improving contributor-friendliness, and refining the multi-window desktop UX.**
+> **Build a desktop copilot that feels alive, useful, extensible, and truly personal.**  
+> Current focus: **stabilizing the core architecture, improving command reliability, refining the multi-window desktop UX, and building safe local-first voice foundations.**
 
-OpenBlob is a local-first AI companion that lives on your Windows desktop — sees your screen, understands your context, and grows through community-driven features, smarter abilities, better design, and new integrations.
+OpenBlob is a local-first AI companion that lives on your Windows desktop. It can respond to chat, understand your active context, run deterministic desktop actions, analyze screenshots, transcribe system audio, and grow through community-driven features, smarter abilities, better design, and new integrations.
 
 <p align="center">
-  <img src="public/1.gif" width="100%" alt="Screenshot" />
+  <img src="public/1.gif" width="100%" alt="OpenBlob preview" />
 </p>
 
 ---
@@ -34,19 +35,36 @@ Most desktop assistants are too limited, too closed, too cloud-dependent, or too
 
 OpenBlob aims to be different:
 
-- **open-source** — built in public, for everyone
-- **local-first** — runs on your machine, not someone else's server
-- **deterministic-first system control** — handles core Windows actions like opening Downloads, Settings, Explorer, screen locking, and protected power commands
-- **context-aware** — understands what app you're in, not just what you type
-- **vision-enabled** — analyzes your screen and selected regions
-- **privacy-conscious** — transparent about what touches the network
-- **extensible** — designed for modules, plugins, and future capability packs
-- **community-built** — welcoming to devs, designers, tinkerers, and curious builders
-- **high-quality UX** — polished, expressive, playful, and useful
-- **reachable everywhere** — talk to your blob via Telegram, Discord, Slack, or Email
+- **Open-source** — built in public, for everyone.
+- **Local-first** — designed to run on your machine, not someone else's server.
+- **Deterministic-first system control** — handles core Windows actions like opening apps, Downloads, Settings, Explorer, screen locking, and protected power commands.
+- **Context-aware** — understands the active app/window and can use controlled session context for follow-up actions.
+- **Vision-enabled** — can analyze screenshots and selected regions.
+- **Voice-ready** — supports voice input and now includes the foundation for configurable wake-word listening.
+- **Privacy-conscious** — transparent about what runs locally, what accesses your mic/screen/browser, and what may touch the network.
+- **Extensible** — designed for modules, tools, connectors, and future capability packs.
+- **Community-built** — welcoming to developers, designers, tinkerers, and curious builders.
+- **High-quality UX** — expressive, playful, polished, and useful.
+- **Reachable everywhere** — connect your blob through Telegram, Discord, Slack, or Email.
 
-OpenBlob is currently in an **early but ambitious stage**:
-the foundation is there, the architecture is evolving, and the project is actively being reorganized to become more contributor-friendly and easier to extend.
+OpenBlob is currently in an **early but ambitious stage**. The foundation exists, the architecture is evolving, and the project is actively being reorganized to become more reliable, contributor-friendly, and easier to extend.
+
+---
+
+## Current Highlights
+
+- Tauri v2 desktop app with Rust backend and React UI.
+- Animated desktop blob companion with multi-window UX.
+- Natural language command routing in German and English.
+- App/media/browser launch routing for common Windows workflows.
+- Controlled target/session context for follow-up commands like `play Thriller`, `scroll down`, `click first result`, or `go back`.
+- YouTube search-and-play helpers with fuzzy result selection.
+- Deterministic Windows actions and protected confirmation flow for sensitive power commands.
+- Screenshot/snipping and vision workflows.
+- Transcript module for system-audio transcription and AI post-processing.
+- Local memory foundations and SQLite-backed memory work in progress.
+- Blob Connectors for Telegram, Discord, Slack, and Email.
+- Wake-word settings foundation and local microphone test runtime.
 
 ---
 
@@ -58,10 +76,46 @@ For a full technical deep-dive — architecture, core systems, Tauri bridge, mod
 
 ---
 
+## Installation / Development
+
+> OpenBlob is in active development. Some setup details may change as the architecture is cleaned up.
+
+### Requirements
+
+- Windows 10 or Windows 11
+- Node.js / pnpm
+- Rust stable toolchain
+- Tauri v2 prerequisites
+- Ollama for local LLM workflows
+- Optional: Whisper CLI for local transcript workflows
+
+### Run locally
+
+```bash
+git clone https://github.com/southy404/openblob.git
+cd openblob
+pnpm install
+pnpm tauri dev
+```
+
+If you prefer running from the Tauri crate directly:
+
+```bash
+cd src-tauri
+cargo tauri dev
+```
+
+If `cargo tauri dev` fails with `no such command: tauri`, install the Tauri CLI first or use the pnpm script:
+
+```bash
+cargo install tauri-cli --version "^2"
+```
+
+---
+
 ## Command Reference
 
-OpenBlob uses natural language command parsing.  
-Commands are grouped by capability and interpreted contextually (German + English supported).
+OpenBlob uses natural language command parsing. Commands are grouped by capability and interpreted contextually. German and English are supported.
 
 ---
 
@@ -100,7 +154,33 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 | -------------------- | -------------------------- |
 | `click first result` | Click first visible result |
 | `type <text>`        | Type into active input     |
-| `submit`             | Confirm input (Enter)      |
+| `submit`             | Confirm input with Enter   |
+
+---
+
+### 🎵 App, Media & Controlled Context
+
+OpenBlob can open apps and services, then keep them as the active controlled target for follow-up commands.
+
+| Command                                      | Description                                      |
+| -------------------------------------------- | ------------------------------------------------ |
+| `open spotify`                               | Open Spotify and set it as controlled context    |
+| `open steam`                                 | Open Steam and set it as controlled context      |
+| `open discord`                               | Open Discord                                     |
+| `open youtube`                               | Open YouTube and set browser context             |
+| `play Michael Jackson Thriller on YouTube`   | Search YouTube and play a matching normal video  |
+| `spiele Michael Jackson Thriller auf YouTube`| German YouTube play command                      |
+| `play Thriller`                              | Use the active controlled media/browser context  |
+| `search for <query>`                         | Search inside the active controlled context      |
+| `use this window`                            | Explicitly adopt the focused window as context   |
+
+**Context behavior**
+
+- `open YouTube` → YouTube becomes the controlled browser/web-service target.
+- `play Thriller` after opening YouTube → runs inside YouTube instead of becoming a generic search.
+- `open Spotify` → Spotify becomes the controlled media target.
+- `play Thriller` after opening Spotify → routes to Spotify.
+- Manual OS focus changes are treated as passive context and do not automatically replace OpenBlob's controlled target.
 
 ---
 
@@ -154,6 +234,36 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 
 ---
 
+### 🎙️ Voice & Wake Word
+
+| Shortcut / Command | Description |
+| ------------------ | ----------- |
+| `ALT + M`          | Start voice input manually |
+| Wake-word settings | Configure phrase, provider, enabled state, and sensitivity in the dev/settings UI |
+| `mic-test` provider | Starts local microphone listener for development testing |
+| `mock` provider | Local placeholder provider mode |
+
+OpenBlob now includes the foundation for wake-word support. This is **not a real wake-word model yet**. The current system provides:
+
+- configurable wake-word settings
+- safe start/stop listener commands
+- local microphone input detection through the wake-word module
+- listener states such as `disabled`, `stopped`, `starting`, `listening`, `no_input_device`, `permission_error`, `provider_missing`, and `error`
+- selected/default input device reporting
+- audio chunk counting
+- last audio timestamp
+- simple input level/RMS for development UI feedback
+
+Privacy behavior:
+
+- no cloud streaming
+- no raw audio storage
+- no automatic microphone startup unless explicitly enabled and started
+- no fake wake-word detection claims
+- existing `ALT + M` voice shortcut remains separate and untouched
+
+---
+
 ### ✍️ Transcript & Audio Intelligence
 
 | Command              | Description                              |
@@ -179,7 +289,7 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 
 ---
 
-### 🧠 Context & AI
+### 🧠 Context, Memory & AI
 
 | Command                | Description              |
 | ---------------------- | ------------------------ |
@@ -187,6 +297,10 @@ Commands are grouped by capability and interpreted contextually (German + Englis
 | `explain selection`    | Explain selected content |
 | `where am i`           | Detect current app/page  |
 | `what is on this page` | Analyze visible UI       |
+
+OpenBlob is moving toward persistent long-term memory and query-aware context retrieval. Current work includes local memory import, SQLite foundations, semantic facts, episodic events, and embedding-backed retrieval where local embedding models are available.
+
+> If embeddings are unavailable, OpenBlob should continue working and skip embedding gracefully instead of breaking chat.
 
 ---
 
@@ -241,10 +355,11 @@ No cloud wake provider, paid API key, automatic model download, or raw audio fil
 
 ### Notes
 
-- Commands are **fuzzy matched** — exact wording is not required
-- Language can be mixed (German + English)
-- Context is used to resolve intent (e.g. browser vs app vs game)
-- Some commands adapt based on the current active application
+- Commands are **fuzzy matched** — exact wording is not required.
+- Language can be mixed between German and English.
+- Context is used to resolve intent, such as browser vs app vs media service.
+- Some commands adapt based on the active controlled target.
+- If no confident action intent is detected, normal chat should remain the fallback path.
 
 ---
 
@@ -259,7 +374,7 @@ OpenBlob can be reached from the outside world via **Blob Connectors** — a lig
 
 When OpenBlob is running, the connectors forward commands directly to the same pipeline used by voice and text input. When it is not running, they fall back to the local Ollama model automatically.
 
-```
+```text
 Telegram / Discord / Slack / Email
               │
         Blob Connectors (Python)
@@ -276,10 +391,10 @@ Desktop action executed
 
 ### What this enables
 
-- Send `open spotify` via Telegram → Spotify opens on your desktop
-- Ask a question in Discord → Blob answers using your local Ollama model
-- Email the blob → it replies with context from your memory
-- All channels share the same identity, memory, and personality
+- Send `open spotify` via Telegram → Spotify opens on your desktop.
+- Ask a question in Discord → Blob answers using your local Ollama model.
+- Email the blob → it replies with context from your memory.
+- All channels can share the same identity, memory, and personality foundations.
 
 ### Quickstart
 
@@ -316,106 +431,16 @@ Full setup guides for each channel are in [`blob_connectors/README.md`](./blob_c
 
 ### Memory integration
 
-Blob Connectors read OpenBlob's local memory files directly:
+Blob Connectors can read OpenBlob's local memory files directly:
 
-- `companion_config.json` — blob name and preferred language
+- `companion_config.json` — blob name, language, wake-word settings, companion preferences
 - `user_profile.json` — owner name
 - `semantic_memory.json` — known apps, topics, communication style
-- `episodic_memory.jsonl` — past interactions across all channels
-- `personality_state.json` — current mood (energy, affection, playfulness)
+- `episodic_memory.jsonl` — past interactions across channels
+- `personality_state.json` — current mood such as energy, affection, playfulness
 - `bonding_state.json` — relationship level and trust score
 
-The richer your OpenBlob usage, the more context the connectors carry into every conversation.
-
----
-
-## Design Principles
-
-**1. Local-first**
-Whenever possible, things run locally on the user's machine.
-
-**2. Context > Prompt**
-The assistant should understand your environment — what app you're in, what's on screen — not just what you type.
-
-**3. Privacy-conscious**
-Users should understand what runs locally, what accesses the browser, and what may call external services.
-
-**4. Extensible by design**
-New modules, commands, tools, and UI ideas should be straightforward to add.
-
-**5. Community over gatekeeping**
-This project welcomes contributions from developers, designers, tinkerers, AI enthusiasts, and curious builders.
-
-**6. High-quality UX matters**
-A desktop copilot should not just work — it should feel polished, expressive, modern, and enjoyable to use.
-
-**7. Playful, but actually useful**
-Fun interactions and real productivity are not opposites.
-
----
-
-## Roadmap
-
-### Core
-
-- [ ] Stabilize command routing
-- [ ] Improve app / context detection
-- [ ] Fix snip capture reliability
-- [ ] Stabilize quick menu window actions / permissions flow
-- [ ] Improve browser automation reliability + consent handling
-- [ ] Improve voice pipeline
-- [ ] Add settings UI
-- [ ] Better error handling across all modules
-- [ ] Expand multilingual support beyond current `en` / `de` groundwork
-
-### AI / Intelligence
-
-- [ ] Persistent long-term memory ([proposal](./docs/proposals/memory-system.md))
-- [ ] Better multi-model routing
-- [ ] Structured reasoning pipeline
-- [ ] Tool-based agent system
-- [ ] Higher-accuracy transcript cleanup pipeline
-- [ ] Real speaker diarization
-- [ ] Transcript-to-memory extraction
-- [ ] Semantic memory retrieval (RAG over episodic memory)
-
-### Blob Connectors
-
-- [ ] Google Calendar integration (create, read, delete events)
-- [ ] Semantic memory retrieval per channel
-- [ ] Persistent session history across restarts
-- [ ] WhatsApp connector
-- [ ] Matrix / Element connector
-- [ ] Voice message support (Telegram voice → Whisper → command)
-- [ ] Per-channel permission system
-
-### Avatar / UX
-
-- [ ] Richer blob behaviors and reactions
-- [ ] Personality system (persistent character state)
-- [ ] More emotional states and animations
-- [ ] UI polish pass (glassmorphism, motion, feel)
-- [ ] Cleaner onboarding
-
-### Mini Games & Fun
-
-- [ ] More mini game modes beyond Hide & Seek
-- [ ] Score tracking / blob reactions to outcomes
-- [ ] Interactive blob challenges (tap, race, puzzle)
-
-### Platform
-
-- [ ] Plugin architecture
-- [ ] Capability registry
-- [ ] Contributor extension guide
-- [ ] Community skill packs
-
-### Quality
-
-- [ ] Tests
-- [ ] Contributor docs
-- [ ] CI improvements
-- [ ] Release workflow
+The richer your OpenBlob usage, the more context the connectors can carry into every conversation.
 
 ---
 
@@ -428,8 +453,9 @@ OpenBlob uses Chrome or Edge with remote debugging enabled for advanced browser 
 - clicking visible links and buttons
 - typing into inputs
 - YouTube search and play helpers
+- browser follow-up actions through controlled target context
 
-> Browser automation is powerful — it remains transparent and user-controlled. Future versions will make permissions and consent handling even clearer.
+> Browser automation is powerful. It should remain transparent and user-controlled. Future versions will make permissions and consent handling even clearer.
 
 ---
 
@@ -438,11 +464,11 @@ OpenBlob uses Chrome or Edge with remote debugging enabled for advanced browser 
 OpenBlob can capture your screen or a selected region and reason about what it sees:
 
 - OCR and text extraction
-- Translation and explanation of on-screen text
-- Game UI, quest log, and error recognition
-- Automatic search query generation based on in-game content
+- translation and explanation of on-screen text
+- game UI, quest log, and error recognition
+- automatic search query generation based on in-game content
 
-> Example: screenshot a quest log → detect the game → extract the objective → build the perfect search query. All locally.
+> Example: screenshot a quest log → detect the game → extract the objective → build a useful search query.
 
 ---
 
@@ -468,6 +494,29 @@ This is especially useful for YouTube videos, podcasts, online meetings, spoken 
 
 ---
 
+## Wake Word Foundation
+
+OpenBlob now includes the first foundation for wake-word support.
+
+Current status:
+
+- settings exist for enabled state, wake phrase, sensitivity, and provider
+- Tauri commands exist for settings, status, start, and stop
+- local microphone availability detection is supported
+- `mic-test` / `mock` provider modes can start a local listener
+- dev UI can show listener state, selected input device, chunks seen, last audio timestamp, and input level
+- no actual wake-word detection model is wired yet
+
+Planned next steps:
+
+- real wake-word provider integration, such as Porcupine or another local model
+- wake phrase management through the dev/settings UI
+- consent-first onboarding for microphone access
+- better visual feedback while listening
+- wake-word event bridge into the existing voice command flow
+
+---
+
 ## Mini Games
 
 OpenBlob has a growing interactive side beyond just being an assistant.
@@ -475,6 +524,111 @@ OpenBlob has a growing interactive side beyond just being an assistant.
 **Hide & Seek** — trigger via voice or text command. The blob hides somewhere on screen. You find it.
 
 More game modes are planned as the project grows.
+
+---
+
+## Design Principles
+
+**1. Local-first**  
+Whenever possible, things run locally on the user's machine.
+
+**2. Context > Prompt**  
+The assistant should understand your environment — what app you're in, what's on screen, and what it opened before.
+
+**3. Privacy-conscious**  
+Users should understand what runs locally, what accesses the browser, what uses the mic, and what may call external services.
+
+**4. Extensible by design**  
+New modules, commands, tools, and UI ideas should be straightforward to add.
+
+**5. Community over gatekeeping**  
+This project welcomes contributions from developers, designers, tinkerers, AI enthusiasts, and curious builders.
+
+**6. High-quality UX matters**  
+A desktop copilot should not just work — it should feel polished, expressive, modern, and enjoyable to use.
+
+**7. Playful, but actually useful**  
+Fun interactions and real productivity are not opposites.
+
+---
+
+## Roadmap
+
+### Core
+
+- [ ] Stabilize command routing
+- [ ] Preserve normal chat fallback when no confident action intent is detected
+- [ ] Improve active app / controlled context detection
+- [ ] Fix snip capture reliability
+- [ ] Stabilize quick menu window actions / permissions flow
+- [ ] Improve browser automation reliability and consent handling
+- [ ] Improve voice pipeline
+- [ ] Expand settings UI
+- [ ] Better error handling across all modules
+- [ ] Expand multilingual support beyond current `en` / `de` groundwork
+
+### AI / Intelligence
+
+- [ ] Persistent long-term memory ([proposal](./docs/proposals/memory-system.md))
+- [ ] Better multi-model routing
+- [ ] Structured reasoning pipeline
+- [ ] Tool-based agent system
+- [ ] Query-aware semantic memory retrieval
+- [ ] Embedding-backed memory retrieval with graceful fallback
+- [ ] Higher-accuracy transcript cleanup pipeline
+- [ ] Real speaker diarization
+- [ ] Transcript-to-memory extraction
+
+### Voice / Wake Word
+
+- [x] Manual voice shortcut foundation
+- [x] Wake-word settings foundation
+- [x] Local microphone test runtime
+- [ ] Real wake-word provider integration
+- [ ] Wake-word event bridge into voice command flow
+- [ ] Microphone permission/onboarding UX
+- [ ] Noise handling and false-positive prevention
+- [ ] Local-only wake phrase/model configuration
+
+### Blob Connectors
+
+- [ ] Google Calendar integration through connector/tool layer
+- [ ] Semantic memory retrieval per channel
+- [ ] Persistent session history across restarts
+- [ ] WhatsApp connector
+- [ ] Matrix / Element connector
+- [ ] Voice message support, such as Telegram voice → Whisper → command
+- [ ] Per-channel permission system
+
+### Avatar / UX
+
+- [ ] Richer blob behaviors and reactions
+- [ ] Personality system with persistent character state
+- [ ] More emotional states and animations
+- [ ] UI polish pass: glassmorphism, motion, feel
+- [ ] Cleaner onboarding
+
+### Mini Games & Fun
+
+- [ ] More mini game modes beyond Hide & Seek
+- [ ] Score tracking and blob reactions to outcomes
+- [ ] Interactive blob challenges: tap, race, puzzle
+
+### Platform
+
+- [ ] Plugin architecture
+- [ ] Capability registry
+- [ ] App launch capability registry
+- [ ] Contributor extension guide
+- [ ] Community skill packs
+
+### Quality
+
+- [ ] Tests
+- [ ] Contributor docs
+- [ ] CI improvements
+- [ ] Release workflow
+- [ ] Smoke-test checklist for Windows app/media/browser workflows
 
 ---
 
@@ -492,6 +646,7 @@ Contributions are welcome — all kinds, not just code.
 | Mini games      | new game modes, interaction ideas                                |
 | AI experiments  | prompting strategies, model routing, agent ideas                 |
 | Transcript      | ASR cleanup, diarization, transcript UX, meeting workflows       |
+| Voice           | wake-word providers, mic permission UX, local voice pipeline      |
 | Blob Connectors | new channel connectors, memory improvements, calendar/tool hooks |
 
 Please open an issue before large changes so we can align on direction.
@@ -524,12 +679,16 @@ Recent work focused on:
 
 - making the structure more open-source-friendly
 - preparing multilingual support (`en` / `de`)
-- separating larger UI elements into dedicated windows (like the quick menu)
-- introducing the first transcript module + transcript window
+- separating larger UI elements into dedicated windows
+- introducing the transcript module and transcript window
 - improving long-term maintainability
-- adding deterministic Windows system commands with protected confirmation flow for sensitive actions
+- adding deterministic Windows system commands with protected confirmation flow
 - adding Blob Connectors for Telegram, Discord, Slack, and Email
 - connecting external channels to the Rust command pipeline via local HTTP
+- hardening app/media/browser launch routing
+- adding controlled target context for follow-up browser and media actions
+- making memory embedding failures non-blocking for normal chat
+- adding wake-word settings and local microphone test foundation
 
 The project is already functional, but still has rough edges and active regressions in some areas. Expect rapid changes, experimental ideas, and ongoing cleanup.
 
@@ -555,7 +714,7 @@ Built with inspiration from:
 
 ## Topics
 
-`desktop-copilot` `tauri` `react` `rust` `ollama` `local-ai` `open-source` `desktop-assistant` `automation` `windows` `voice` `vision` `screenshot` `transcript` `speech-to-text` `whisper` `framer-motion` `mini-games` `context-aware` `telegram` `discord` `slack` `connectors`
+`desktop-copilot` `tauri` `react` `rust` `ollama` `local-ai` `open-source` `desktop-assistant` `automation` `windows` `voice` `wake-word` `microphone` `vision` `screenshot` `transcript` `speech-to-text` `whisper` `framer-motion` `mini-games` `context-aware` `telegram` `discord` `slack` `connectors`
 
 ---
 
