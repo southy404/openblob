@@ -72,7 +72,13 @@ fn protocol_registered(_protocol: &str) -> bool {
     false
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn open_protocol_uri(_protocol: &str, uri: &str) -> Result<bool, String> {
+    spawn_open(&[uri])?;
+    Ok(true)
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
 fn open_protocol_uri(_protocol: &str, _uri: &str) -> Result<bool, String> {
     Ok(false)
 }
@@ -82,7 +88,7 @@ pub fn open_url_prefer_browser(url: &str, new_window: bool, incognito: bool) -> 
     {
         let _ = (new_window, incognito);
         spawn_open(&[url])?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(windows)]
@@ -180,13 +186,8 @@ fn open_known_local_target(target: &str) -> Result<bool, String> {
             "settings" | "system settings" => {
                 // Works across macOS versions (Monterey+: System Settings).
                 // Falls back to the bundle id if the name is different.
-                if spawn_open(&["-a", "System Settings"]).is_ok() {
-                    true
-                } else if spawn_open(&["-b", "com.apple.systempreferences"]).is_ok() {
-                    true
-                } else {
-                    false
-                }
+                spawn_open(&["-a", "System Settings"]).is_ok()
+                    || spawn_open(&["-b", "com.apple.systempreferences"]).is_ok()
             }
             "safari" => {
                 spawn_open(&["-a", "Safari"])?;
@@ -211,7 +212,7 @@ fn open_known_local_target(target: &str) -> Result<bool, String> {
             _ => false,
         };
 
-        return Ok(opened);
+        Ok(opened)
     }
 
     #[cfg(windows)]
@@ -389,6 +390,16 @@ pub fn open_app_target(target: &str, prefer_browser: bool) -> Result<String, Str
 
     #[cfg(target_os = "macos")]
     {
+        if let Some(app) = crate::modules::windows_discovery::find_app_launch_target(&normalized) {
+            if app.launch_target.ends_with(".app") || app.launch_target.starts_with('/') {
+                spawn_open(&[&app.launch_target])?;
+            } else {
+                spawn_open(&["-a", &app.launch_target])?;
+            }
+
+            return Ok(format!("Opening {}.", app.canonical_name));
+        }
+
         // Basic "open app by name" for macOS.
         // `open -a` works for installed apps; otherwise we'll fall back to web.
         if spawn_open(&["-a", target.trim()]).is_ok() {
@@ -450,6 +461,14 @@ pub fn play_steam_title(query: &str) -> Result<String, String> {
     }
 
     let store_url = steam_store_search_url(query);
+    #[cfg(target_os = "macos")]
+    {
+        let steam_url = format!("steam://openurl/{}", store_url);
+        if open_protocol_uri("steam", &steam_url)? {
+            return Ok(format!("Searching Steam for '{}'.", query));
+        }
+    }
+
     if protocol_registered("steam") {
         let steam_url = format!("steam://openurl/{}", store_url);
         open_shell_target(&steam_url)?;
@@ -543,7 +562,7 @@ pub fn focus_app_window(app: &str) -> Result<(), String> {
             .map_err(|e| format!("Could not focus app: {e}"))?;
 
         std::thread::sleep(std::time::Duration::from_millis(120));
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(windows)]

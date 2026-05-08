@@ -10,7 +10,7 @@ pub struct DiscoveredApp {
     pub source: String,
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 pub fn find_app_launch_target(_query: &str) -> Option<DiscoveredApp> {
     None
 }
@@ -358,6 +358,187 @@ mod windows_impl {
 
 #[cfg(windows)]
 pub use windows_impl::find_app_launch_target;
+
+#[cfg(target_os = "macos")]
+mod macos_impl {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, OnceLock};
+
+    use super::{alias_candidates, normalize, score_candidate, DiscoveredApp};
+
+    static APP_CACHE: OnceLock<Mutex<Vec<DiscoveredApp>>> = OnceLock::new();
+
+    fn cache() -> &'static Mutex<Vec<DiscoveredApp>> {
+        APP_CACHE.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    pub fn find_app_launch_target(query: &str) -> Option<DiscoveredApp> {
+        let q = normalize(query);
+        let mut candidates = Vec::new();
+
+        for (name, launch) in macos_alias_candidates() {
+            let score = score_candidate(&q, &normalize(name));
+            if score >= 0.80 || normalize(name).contains(&q) || q.contains(&normalize(name)) {
+                candidates.push(DiscoveredApp {
+                    canonical_name: name.to_string(),
+                    launch_target: launch.to_string(),
+                    score,
+                    source: "macos-alias".into(),
+                });
+            }
+        }
+
+        for (name, _) in alias_candidates() {
+            let score = score_candidate(&q, &normalize(name));
+            if score >= 0.88 || normalize(name).contains(&q) || q.contains(&normalize(name)) {
+                candidates.push(DiscoveredApp {
+                    canonical_name: title_case_app_name(name),
+                    launch_target: title_case_app_name(name),
+                    score: score * 0.92,
+                    source: "shared-alias".into(),
+                });
+            }
+        }
+
+        {
+            let cached = cache().lock().ok()?.clone();
+            for app in cached {
+                let score = score_candidate(&q, &normalize(&app.canonical_name));
+                if score >= 0.80
+                    || normalize(&app.canonical_name).contains(&q)
+                    || q.contains(&normalize(&app.canonical_name))
+                {
+                    candidates.push(DiscoveredApp { score, ..app });
+                }
+            }
+        }
+
+        for app in scan_app_roots(&q) {
+            candidates.push(app);
+        }
+
+        candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
+        let best = candidates.into_iter().next()?;
+        remember(best.clone());
+        Some(best)
+    }
+
+    fn remember(app: DiscoveredApp) {
+        if let Ok(mut cached) = cache().lock() {
+            let exists = cached.iter().any(|current| {
+                normalize(&current.canonical_name) == normalize(&app.canonical_name)
+                    && current.launch_target == app.launch_target
+            });
+            if !exists {
+                cached.push(app);
+            }
+        }
+    }
+
+    fn macos_alias_candidates() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("finder", "Finder"),
+            ("file explorer", "Finder"),
+            ("explorer", "Finder"),
+            ("settings", "System Settings"),
+            ("system settings", "System Settings"),
+            ("einstellungen", "System Settings"),
+            ("safari", "Safari"),
+            ("chrome", "Google Chrome"),
+            ("google chrome", "Google Chrome"),
+            ("terminal", "Terminal"),
+            ("calculator", "Calculator"),
+            ("calc", "Calculator"),
+            ("notes", "Notes"),
+            ("mail", "Mail"),
+            ("calendar", "Calendar"),
+            ("messages", "Messages"),
+            ("facetime", "FaceTime"),
+            ("music", "Music"),
+            ("photos", "Photos"),
+            ("activity monitor", "Activity Monitor"),
+        ]
+    }
+
+    fn app_roots() -> Vec<PathBuf> {
+        let mut roots = vec![
+            PathBuf::from("/Applications"),
+            PathBuf::from("/System/Applications"),
+            PathBuf::from("/System/Applications/Utilities"),
+        ];
+
+        if let Some(home) = std::env::var_os("HOME") {
+            roots.push(PathBuf::from(home).join("Applications"));
+        }
+
+        roots
+    }
+
+    fn scan_app_roots(query: &str) -> Vec<DiscoveredApp> {
+        let mut results = Vec::new();
+
+        for root in app_roots() {
+            scan_app_dir(query, &root, 0, &mut results);
+        }
+
+        results
+    }
+
+    fn scan_app_dir(query: &str, dir: &Path, depth: usize, results: &mut Vec<DiscoveredApp>) {
+        if depth > 4 || !dir.exists() {
+            return;
+        }
+
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("app") {
+                let name = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let score = score_candidate(query, &normalize(&name));
+                if score >= 0.78
+                    || normalize(&name).contains(query)
+                    || query.contains(&normalize(&name))
+                {
+                    results.push(DiscoveredApp {
+                        canonical_name: name,
+                        launch_target: path.display().to_string(),
+                        score,
+                        source: "macos-applications".into(),
+                    });
+                }
+                continue;
+            }
+
+            if path.is_dir() {
+                scan_app_dir(query, &path, depth + 1, results);
+            }
+        }
+    }
+
+    fn title_case_app_name(input: &str) -> String {
+        input
+            .split_whitespace()
+            .map(|part| {
+                let mut chars = part.chars();
+                match chars.next() {
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub use macos_impl::find_app_launch_target;
 
 fn normalize(input: &str) -> String {
     input

@@ -802,6 +802,7 @@ function DevWindow() {
   const [isMacOS] = useState(() =>
     /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
   );
+  const [isWindows] = useState(() => /Windows/i.test(navigator.userAgent));
   const [wakeWordSettings, setWakeWordSettings] = useState<WakeWordSettings>({
     wake_word_enabled: false,
     wake_word_auto_listen_enabled: false,
@@ -2408,6 +2409,14 @@ function DevWindow() {
 
               {openSettingsPanels.wakeWord && (
                 <div className="settingsPanelBody">
+                  {!isWindows ? (
+                    <div className="wakeNotice">
+                      Wake-word setup is currently available on Windows only.
+                      macOS support needs a platform-specific runtime and model
+                      packaging flow before these controls are shown.
+                    </div>
+                  ) : (
+                    <>
               <div className="wakeGrid">
                 <div className="field">
                   <div className="fieldLabel">{t.wakeWordEnabled}</div>
@@ -2991,6 +3000,8 @@ function DevWindow() {
                   </div>
                 )}
               </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
