@@ -212,13 +212,13 @@ pub async fn execute_capability(
         CAP_SYSTEM_OPEN_SETTINGS => {
             system::open_settings()?;
             session_memory::set_controlled_app("Settings", "open_settings");
-            Ok(ok(CAP_SYSTEM_OPEN_SETTINGS, "Opened Windows Settings."))
+            Ok(ok(CAP_SYSTEM_OPEN_SETTINGS, "Opened system settings."))
         }
 
         CAP_SYSTEM_OPEN_EXPLORER => {
             system::open_explorer()?;
-            session_memory::set_controlled_app("File Explorer", "open_explorer");
-            Ok(ok(CAP_SYSTEM_OPEN_EXPLORER, "Opened File Explorer."))
+            session_memory::set_controlled_app("File Manager", "open_explorer");
+            Ok(ok(CAP_SYSTEM_OPEN_EXPLORER, "Opened the file manager."))
         }
 
         CAP_SYSTEM_LOCK_SCREEN => {

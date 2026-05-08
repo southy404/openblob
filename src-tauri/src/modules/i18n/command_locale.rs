@@ -79,7 +79,10 @@ pub struct CommandLocale {
 static ACTIVE_LOCALE: OnceLock<CommandLocale> = OnceLock::new();
 
 fn command_locale_path(lang: &str) -> PathBuf {
-    PathBuf::from("src").join("i18n").join("commands").join(format!("{lang}.json"))
+    PathBuf::from("src")
+        .join("i18n")
+        .join("commands")
+        .join(format!("{lang}.json"))
 }
 
 pub fn load_command_locale(lang: &str) -> Result<CommandLocale, String> {
@@ -92,8 +95,7 @@ pub fn load_command_locale(lang: &str) -> Result<CommandLocale, String> {
 }
 
 pub fn init_command_locale(lang: &str) -> Result<(), String> {
-    let locale = load_command_locale(lang)
-        .or_else(|_| load_command_locale("en"))?;
+    let locale = load_command_locale(lang).or_else(|_| load_command_locale("en"))?;
 
     let _ = ACTIVE_LOCALE.set(locale);
     Ok(())

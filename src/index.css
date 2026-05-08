@@ -396,3 +396,9 @@ canvas {
 .bubble-no-drag * {
   -webkit-app-region: no-drag;
 }
+
+.macos-lite .glass-panel,
+.macos-lite .glass-section {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}

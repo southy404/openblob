@@ -64,7 +64,7 @@ pub static CAPABILITIES: &[CapabilityDescriptor] = &[
     CapabilityDescriptor {
         id: CAP_SYSTEM_OPEN_DOWNLOADS,
         title: "Open Downloads",
-        description: "Open the Downloads folder in Explorer.",
+        description: "Open the Downloads folder.",
         permission: PermissionLevel::Safe,
         contexts: DESKTOP_OR_ANY,
         unstable: false,
@@ -72,7 +72,7 @@ pub static CAPABILITIES: &[CapabilityDescriptor] = &[
     CapabilityDescriptor {
         id: CAP_SYSTEM_OPEN_SETTINGS,
         title: "Open Settings",
-        description: "Open Windows Settings.",
+        description: "Open system settings.",
         permission: PermissionLevel::Safe,
         contexts: DESKTOP_OR_ANY,
         unstable: false,
@@ -80,7 +80,7 @@ pub static CAPABILITIES: &[CapabilityDescriptor] = &[
     CapabilityDescriptor {
         id: CAP_SYSTEM_OPEN_EXPLORER,
         title: "Open Explorer",
-        description: "Open File Explorer.",
+        description: "Open the file manager.",
         permission: PermissionLevel::Safe,
         contexts: DESKTOP_OR_ANY,
         unstable: false,
@@ -88,7 +88,7 @@ pub static CAPABILITIES: &[CapabilityDescriptor] = &[
     CapabilityDescriptor {
         id: CAP_SYSTEM_LOCK_SCREEN,
         title: "Lock Screen",
-        description: "Lock the current Windows session.",
+        description: "Lock the current session.",
         permission: PermissionLevel::Safe,
         contexts: DESKTOP_OR_ANY,
         unstable: false,

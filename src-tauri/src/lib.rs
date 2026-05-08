@@ -173,6 +173,116 @@ fn get_transcript_status() -> Result<modules::transcript::types::TranscriptStatu
 }
 
 #[tauri::command]
+fn transcript_check_prereqs() -> modules::transcript::setup::TranscriptPrereqs {
+    modules::transcript::setup::check_prereqs()
+}
+
+#[tauri::command]
+fn transcript_download_default_model() -> Result<String, String> {
+    let path = modules::transcript::setup::ensure_default_model_downloaded()?;
+    Ok(path.display().to_string())
+}
+
+#[tauri::command]
+fn transcript_open_audio_midi_setup() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-a", "Audio MIDI Setup"])
+            .status()
+            .map_err(|e| format!("Failed to open Audio MIDI Setup: {e}"))?;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("Audio MIDI Setup helper is only available on macOS.".into())
+}
+
+#[tauri::command]
+fn transcript_open_sound_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        // Best-effort deep link; fallback to opening System Settings.
+        let status = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.sound")
+            .status();
+
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            _ => {
+                std::process::Command::new("open")
+                    .args(["-a", "System Settings"])
+                    .status()
+                    .map_err(|e| format!("Failed to open System Settings: {e}"))?;
+                Ok(())
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("Sound settings helper is only available on macOS.".into())
+}
+
+#[tauri::command]
+fn transcript_open_microphone_privacy_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+            .status();
+
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            _ => {
+                std::process::Command::new("open")
+                    .args(["-a", "System Settings"])
+                    .status()
+                    .map_err(|e| format!("Failed to open System Settings: {e}"))?;
+                Ok(())
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("Privacy settings helper is only available on macOS.".into())
+}
+
+#[tauri::command]
+fn transcript_open_accessibility_privacy_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .status();
+
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            _ => {
+                std::process::Command::new("open")
+                    .args(["-a", "System Settings"])
+                    .status()
+                    .map_err(|e| format!("Failed to open System Settings: {e}"))?;
+                Ok(())
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("Privacy settings helper is only available on macOS.".into())
+}
+
+#[tauri::command]
+fn transcript_open_blackhole_download() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        // Can't install automatically; open official download page.
+        std::process::Command::new("open")
+            .arg("https://existential.audio/blackhole/")
+            .status()
+            .map_err(|e| format!("Failed to open download page: {e}"))?;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("BlackHole helper is only available on macOS.".into())
+}
+
+#[tauri::command]
 fn get_current_transcript() -> Result<Option<modules::transcript::types::TranscriptSession>, String>
 {
     modules::transcript::session::get_active_session()
@@ -223,6 +333,21 @@ fn apply_glass_effect(window: tauri::Window) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn clear_glass_effect(window: tauri::Window) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        window_vibrancy::clear_vibrancy(&window).map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        apply_blur(&window, None).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn capture_snip_region(x: i32, y: i32, width: u32, height: u32) -> Result<String, String> {
     modules::screen_capture::capture_region_to_file(x, y, width, height)
 }
@@ -263,6 +388,11 @@ async fn analyze_snip(
 #[tauri::command]
 async fn ping_ollama() -> Result<bool, String> {
     crate::core::legacy::ollama_text_runtime::ping_ollama().await
+}
+
+#[tauri::command]
+async fn ensure_ollama_running() -> Result<bool, String> {
+    crate::core::legacy::ollama_text_runtime::ensure_ollama_running().await
 }
 
 #[tauri::command]
@@ -421,9 +551,19 @@ async fn youtube_play_title(title: String) -> Result<String, String> {
 
 #[tauri::command]
 fn get_cursor_position() -> (i32, i32) {
-    let device_state = DeviceState::new();
-    let mouse = device_state.get_mouse();
-    mouse.coords
+    #[cfg(target_os = "macos")]
+    {
+        // `device_query` panics (and spams stderr) without Accessibility permission on macOS.
+        // Avoid calling it at all.
+        return (0, 0);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let device_state = DeviceState::new();
+        let mouse = device_state.get_mouse();
+        mouse.coords
+    }
 }
 
 #[tauri::command]
@@ -584,6 +724,13 @@ async fn stop_tts() -> Result<(), String> {
     modules::tts::manager::stop().await
 }
 
+#[tauri::command]
+async fn tts_download_default_piper_assets() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(modules::tts::setup::tts_download_default_piper_assets)
+        .await
+        .map_err(|e| format!("Download task failed: {e}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -600,8 +747,11 @@ pub fn run() {
 
                     let shortcut_str = shortcut.to_string().replace(' ', "").to_lowercase();
                     println!("global shortcut pressed: {}", shortcut_str);
+                    let _ = app.emit("debug-shortcut", shortcut_str.clone());
 
-                    let is_toggle = shortcut_str == "control+space" || shortcut_str == "ctrl+space";
+                    let is_toggle = shortcut_str == "control+space"
+                        || shortcut_str == "ctrl+space"
+                        || shortcut_str == "alt+space";
 
                     let is_voice = shortcut_str == "alt+keym" || shortcut_str == "alt+m";
                     let is_private_memory = shortcut_str == "control+shift+keym"
@@ -610,7 +760,8 @@ pub fn run() {
                         || shortcut_str == "ctrl+shift+m";
 
                     if is_toggle {
-                        let _ = app.emit("companion-toggle", ());
+                        // Frontend bubble listens to `bubble-toggle`.
+                        let _ = app.emit("bubble-toggle", ());
                         return;
                     }
 
@@ -882,9 +1033,16 @@ pub fn run() {
                     .route("/memory/event", post(handle_memory_event))
                     .with_state(ExternalCommandState { app: app_handle });
 
-                let listener = tokio::net::TcpListener::bind("127.0.0.1:7842")
-                    .await
-                    .expect("Konnte lokalen Command-Server nicht starten");
+                let listener = match tokio::net::TcpListener::bind("127.0.0.1:7842").await {
+                    Ok(listener) => listener,
+                    Err(err) => {
+                        eprintln!(
+                            "[openblob] Command-Server konnte nicht starten (127.0.0.1:7842): {}",
+                            err
+                        );
+                        return;
+                    }
+                };
 
                 println!("[openblob] Command-Server läuft auf http://127.0.0.1:7842");
 
@@ -956,8 +1114,20 @@ pub fn run() {
 
             let shortcut = app.global_shortcut();
 
-            if !shortcut.is_registered("Ctrl+Space") {
-                shortcut.register("Ctrl+Space")?;
+            // On macOS, Ctrl+Space is commonly reserved by the OS (input source switcher).
+            // Prefer Alt+Space as a default toggle shortcut there.
+            #[cfg(target_os = "macos")]
+            {
+                if !shortcut.is_registered("Alt+Space") {
+                    let _ = shortcut.register("Alt+Space");
+                }
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                if !shortcut.is_registered("Ctrl+Space") {
+                    shortcut.register("Ctrl+Space")?;
+                }
             }
 
             if !shortcut.is_registered("Alt+M") {
@@ -972,6 +1142,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ping_ollama,
+            ensure_ollama_running,
             ask_ollama,
             export_memory,
             forget_memory,
@@ -989,6 +1160,7 @@ pub fn run() {
             handle_voice_command,
             speak_text,
             apply_glass_effect,
+            clear_glass_effect,
             stop_tts,
             get_identity,
             update_identity,
@@ -1017,9 +1189,17 @@ pub fn run() {
             stop_transcript,
             get_transcript_status,
             get_current_transcript,
+            transcript_check_prereqs,
+            transcript_download_default_model,
+            transcript_open_audio_midi_setup,
+            transcript_open_sound_settings,
+            transcript_open_microphone_privacy_settings,
+            transcript_open_accessibility_privacy_settings,
+            transcript_open_blackhole_download,
             save_current_transcript,
             summarize_current_transcript,
             process_transcript,
+            tts_download_default_piper_assets,
             modules::wake_word::get_wake_word_settings,
             modules::wake_word::update_wake_word_settings,
             modules::wake_word::start_wake_word_listener,

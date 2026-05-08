@@ -112,7 +112,10 @@ fn forget_today(conn: &Connection) -> Result<MemoryMutationReport, String> {
     let ids = event_ids_since(conn, &start)?;
     let events = delete_events_by_ids(conn, &ids)?;
     let summaries = conn
-        .execute("DELETE FROM memory_summaries WHERE created_at >= ?1", [&start])
+        .execute(
+            "DELETE FROM memory_summaries WHERE created_at >= ?1",
+            [&start],
+        )
         .map_err(|e| format!("Could not forget today's memory summaries: {e}"))?;
     let embeddings = delete_orphan_embeddings(conn)?;
 
@@ -213,7 +216,10 @@ fn delete_events_by_ids(conn: &Connection, ids: &[String]) -> Result<usize, Stri
     for id in ids {
         conn.execute("DELETE FROM memory_embeddings WHERE target_id = ?1", [id])
             .map_err(|e| format!("Could not delete event embedding '{id}': {e}"))?;
-        let _ = conn.execute("DELETE FROM memory_embedding_vec WHERE target_id = ?1", [id]);
+        let _ = conn.execute(
+            "DELETE FROM memory_embedding_vec WHERE target_id = ?1",
+            [id],
+        );
         conn.execute("DELETE FROM memory_events_fts WHERE event_id = ?1", [id])
             .map_err(|e| format!("Could not delete event FTS row '{id}': {e}"))?;
         count += conn
@@ -250,14 +256,17 @@ fn delete_all(conn: &Connection, table: &str) -> Result<usize, String> {
 }
 
 fn delete_all_optional(conn: &Connection, table: &str) -> usize {
-    conn.execute(&format!("DELETE FROM {table}"), []).unwrap_or(0)
+    conn.execute(&format!("DELETE FROM {table}"), [])
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::modules::memory::events::{MemoryEvent, MemoryEventKind, PrivacyTier};
-    use crate::modules::memory::sqlite_store::{insert_memory_event, open_memory_database_in_memory};
+    use crate::modules::memory::sqlite_store::{
+        insert_memory_event, open_memory_database_in_memory,
+    };
 
     #[test]
     fn forget_matching_events_deletes_indexes() {
@@ -271,7 +280,11 @@ mod tests {
 
         assert_eq!(report.events, 1);
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM memory_events WHERE id = ?1", [id], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM memory_events WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
             .expect("event count");
         assert_eq!(count, 0);
     }

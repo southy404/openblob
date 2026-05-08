@@ -64,12 +64,7 @@ pub fn start_runtime(
     thread::spawn(move || {
         println!("[transcript] worker thread spawned for {}", session_id);
 
-        if let Err(err) = run_transcript_worker(
-            app_for_worker,
-            session_id,
-            rx,
-            stop_flag_worker,
-        ) {
+        if let Err(err) = run_transcript_worker(app_for_worker, session_id, rx, stop_flag_worker) {
             eprintln!("[transcript] worker crashed: {}", err);
         }
     });
@@ -120,8 +115,9 @@ fn run_transcript_worker(
 
         let pending_ms = pending_duration_ms(&pending_chunks);
 
-        let should_flush =
-            pending_ms >= CHUNK_TARGET_MS || pending_ms >= CHUNK_MAX_MS || (should_break && !pending_chunks.is_empty());
+        let should_flush = pending_ms >= CHUNK_TARGET_MS
+            || pending_ms >= CHUNK_MAX_MS
+            || (should_break && !pending_chunks.is_empty());
 
         if should_flush {
             flush_pending_chunks(
@@ -253,9 +249,9 @@ fn merge_audio_chunks(chunks: &[AudioChunk]) -> Option<AudioChunk> {
     let sample_rate = first.sample_rate;
     let channels = first.channels;
 
-    let compatible = chunks.iter().all(|chunk| {
-        chunk.sample_rate == sample_rate && chunk.channels == channels
-    });
+    let compatible = chunks
+        .iter()
+        .all(|chunk| chunk.sample_rate == sample_rate && chunk.channels == channels);
 
     if !compatible {
         return None;

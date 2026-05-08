@@ -159,7 +159,12 @@ pub fn insert_memory_fact_superseding(
             metadata_json,
         ],
     )
-    .map_err(|e| format!("Could not insert superseding memory fact '{}': {e}", fact.source_key))?;
+    .map_err(|e| {
+        format!(
+            "Could not insert superseding memory fact '{}': {e}",
+            fact.source_key
+        )
+    })?;
 
     let inserted = conn.changes() > 0;
     if inserted {

@@ -197,9 +197,16 @@ function SnipPanel() {
   >("idle");
   const [previewError, setPreviewError] = useState("");
   const [searchData, setSearchData] = useState<SearchData | null>(null);
+  const [isMacOS] = useState(() =>
+    /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  );
 
   const busyRef = useRef(false);
   const t = TEXTS[uiLang];
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("macos-lite", isMacOS);
+  }, [isMacOS]);
 
   useEffect(() => {
     const applyGlass = async () => {
@@ -436,6 +443,12 @@ function SnipPanel() {
             inset 0 -1px 1px rgba(0,0,0,0.18);
         }
 
+        .macos-lite .snip-panel {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+          background: rgba(18, 20, 26, 0.74);
+        }
+
         .snip-panel::before {
           content: "";
           position: absolute;
@@ -552,6 +565,11 @@ function SnipPanel() {
           -webkit-backdrop-filter: blur(14px) saturate(135%);
         }
 
+        .macos-lite .glass-card {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+        }
+
         .preview-card {
           min-height: 260px;
           display: grid;
@@ -611,12 +629,17 @@ function SnipPanel() {
           border-radius: 18px;
           padding: 14px;
           border: 1px solid rgba(255,255,255,0.10);
-          background: rgba(255,255,255,0.05);
+          background: transparent;
           color: var(--text-main);
           outline: none;
           font: 500 13px/1.55 Inter, system-ui, sans-serif;
           backdrop-filter: blur(12px);
           -webkit-backdrop-filter: blur(12px);
+        }
+
+        .macos-lite .comment-box {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
         }
 
         .comment-box::placeholder {
@@ -651,6 +674,11 @@ function SnipPanel() {
           align-items: center;
           justify-content: center;
           gap: 8px;
+        }
+
+        .macos-lite .action-btn {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
         }
 
         .action-btn:hover {

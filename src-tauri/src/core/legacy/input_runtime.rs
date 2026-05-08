@@ -45,19 +45,35 @@ pub fn press_key_combo(keys: &[&str]) -> Result<(), String> {
 
 pub fn shortcut_ctrl(key: char) -> Result<(), String> {
     send_keys(|enigo| {
-        enigo.key(Key::Control, Direction::Press).map_err(|e| e.to_string())?;
-        enigo.key(Key::Unicode(key), Direction::Click).map_err(|e| e.to_string())?;
-        enigo.key(Key::Control, Direction::Release).map_err(|e| e.to_string())
+        enigo
+            .key(Key::Control, Direction::Press)
+            .map_err(|e| e.to_string())?;
+        enigo
+            .key(Key::Unicode(key), Direction::Click)
+            .map_err(|e| e.to_string())?;
+        enigo
+            .key(Key::Control, Direction::Release)
+            .map_err(|e| e.to_string())
     })
 }
 
 pub fn shortcut_ctrl_shift(key: char) -> Result<(), String> {
     send_keys(|enigo| {
-        enigo.key(Key::Control, Direction::Press).map_err(|e| e.to_string())?;
-        enigo.key(Key::Shift, Direction::Press).map_err(|e| e.to_string())?;
-        enigo.key(Key::Unicode(key), Direction::Click).map_err(|e| e.to_string())?;
-        enigo.key(Key::Shift, Direction::Release).map_err(|e| e.to_string())?;
-        enigo.key(Key::Control, Direction::Release).map_err(|e| e.to_string())
+        enigo
+            .key(Key::Control, Direction::Press)
+            .map_err(|e| e.to_string())?;
+        enigo
+            .key(Key::Shift, Direction::Press)
+            .map_err(|e| e.to_string())?;
+        enigo
+            .key(Key::Unicode(key), Direction::Click)
+            .map_err(|e| e.to_string())?;
+        enigo
+            .key(Key::Shift, Direction::Release)
+            .map_err(|e| e.to_string())?;
+        enigo
+            .key(Key::Control, Direction::Release)
+            .map_err(|e| e.to_string())
     })
 }
 

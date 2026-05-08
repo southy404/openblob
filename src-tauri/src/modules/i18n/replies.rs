@@ -23,15 +23,11 @@ fn parse_map(raw: &str) -> HashMap<String, String> {
 }
 
 fn de_replies() -> &'static HashMap<String, String> {
-    DE_REPLIES.get_or_init(|| {
-        parse_map(include_str!("replies/de.json"))
-    })
+    DE_REPLIES.get_or_init(|| parse_map(include_str!("replies/de.json")))
 }
 
 fn en_replies() -> &'static HashMap<String, String> {
-    EN_REPLIES.get_or_init(|| {
-        parse_map(include_str!("replies/en.json"))
-    })
+    EN_REPLIES.get_or_init(|| parse_map(include_str!("replies/en.json")))
 }
 
 fn is_german_locale() -> bool {

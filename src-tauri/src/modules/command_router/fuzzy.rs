@@ -25,11 +25,16 @@ pub fn best_similarity(token: &str, words: &[&str]) -> f32 {
 }
 
 pub fn fuzzy_has_any(tokens: &[&str], words: &[&str], threshold: f32) -> bool {
-    tokens.iter().any(|t| best_similarity(t, words) >= threshold)
+    tokens
+        .iter()
+        .any(|t| best_similarity(t, words) >= threshold)
 }
 
 pub fn fuzzy_count(tokens: &[&str], words: &[&str], threshold: f32) -> usize {
-    tokens.iter().filter(|t| best_similarity(t, words) >= threshold).count()
+    tokens
+        .iter()
+        .filter(|t| best_similarity(t, words) >= threshold)
+        .count()
 }
 
 pub fn contains_any_phrase(normalized: &str, phrases: &[&str]) -> bool {

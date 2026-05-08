@@ -1,6 +1,6 @@
 # OpenBlob — Developer Documentation
 
-> **Local-first AI desktop companion for Windows**  
+> **Local-first AI desktop companion for Windows**
 > Built with Tauri v2 · React · Rust · Ollama · Local-first memory · Voice · Vision · Transcript · Connectors
 
 ---
@@ -703,8 +703,8 @@ Wake-word work must not break:
 
 ## Wake Word Foundation
 
-**Location:** `src-tauri/src/modules/wake_word.rs`  
-**Config location:** `src-tauri/src/modules/profile/companion_config.rs`  
+**Location:** `src-tauri/src/modules/wake_word.rs`
+**Config location:** `src-tauri/src/modules/profile/companion_config.rs`
 **Dev UI:** `src/windows/bubble-dev/app.tsx`
 
 The wake-word system is a safe local foundation with the first local ONNX inference path. It validates openWakeWord-style bundles, loads local ONNX sessions when `onnxruntime.dll` is explicitly configured, normalizes microphone frames to mono 16 kHz windows, runs the mel-spectrogram -> embedding -> classifier chain for compatible float32 models, and emits `wake-word-detected` when the classifier score passes the manifest threshold.

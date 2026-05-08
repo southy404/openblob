@@ -206,6 +206,12 @@ type LocalizedText = {
 
   routeNone: string;
 
+  ttsTools: string;
+  downloadPiper: string;
+  downloading: string;
+  downloadDone: string;
+  downloadFailed: string;
+
   languageOptions: Array<{ value: UiLang; label: string }>;
 };
 
@@ -286,6 +292,12 @@ const TEXTS: Record<UiLang, LocalizedText> = {
 
     routeNone: "none",
 
+    ttsTools: "TTS Tools",
+    downloadPiper: "Download Piper + default voice (macOS)",
+    downloading: "Downloading…",
+    downloadDone: "Done.",
+    downloadFailed: "Failed.",
+
     languageOptions: [
       { value: "en", label: "English" },
       { value: "de", label: "Deutsch" },
@@ -346,6 +358,12 @@ const TEXTS: Record<UiLang, LocalizedText> = {
 
     routeNone: "keine",
 
+    ttsTools: "TTS-Werkzeuge",
+    downloadPiper: "Piper + Standardstimme laden (macOS)",
+    downloading: "Lade herunter…",
+    downloadDone: "Fertig.",
+    downloadFailed: "Fehlgeschlagen.",
+
     languageOptions: [
       { value: "en", label: "English" },
       { value: "de", label: "Deutsch" },
@@ -390,15 +408,15 @@ function getCommandGroups(lang: UiLang): LocalizedCommandGroup[] {
           },
           {
             command: "öffne einstellungen",
-            description: "Windows-Einstellungen öffnen",
+            description: "Systemeinstellungen öffnen",
           },
           {
             command: "öffne explorer",
-            description: "Datei-Explorer öffnen",
+            description: "Dateimanager öffnen",
           },
           {
             command: "bildschirm sperren",
-            description: "Aktuelle Windows-Sitzung sperren",
+            description: "Aktuelle Sitzung sperren",
           },
           {
             command: "herunterfahren",
@@ -637,11 +655,11 @@ function getCommandGroups(lang: UiLang): LocalizedCommandGroup[] {
       icon: <MonitorSmartphone size={15} />,
       items: [
         { command: "open downloads", description: "Open the Downloads folder" },
-        { command: "open settings", description: "Open Windows Settings" },
-        { command: "open explorer", description: "Open File Explorer" },
+        { command: "open settings", description: "Open system settings" },
+        { command: "open explorer", description: "Open the file manager" },
         {
           command: "lock screen",
-          description: "Lock the current Windows session",
+          description: "Lock the current session",
         },
         {
           command: "shutdown",
@@ -779,6 +797,18 @@ function DevWindow() {
   const [ownerName, setOwnerName] = useState("");
   const [language, setLanguage] = useState<UiLang>("en");
   const [saving, setSaving] = useState(false);
+  const [ttsBusy, setTtsBusy] = useState(false);
+  const [ttsMessage, setTtsMessage] = useState<string | null>(null);
+  const [isMacOS] = useState(() =>
+    /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  );
+  const [isWindows] = useState(() => /Windows/i.test(navigator.userAgent));
+  const wakeWordRuntimeLabel = isMacOS
+    ? "ONNX Runtime dylib"
+    : "ONNX Runtime DLL";
+  const wakeWordRuntimePlaceholder = isMacOS
+    ? "~/Library/Application Support/OpenBlob/voice/runtime/onnxruntime/libonnxruntime.dylib"
+    : "%APPDATA%/OpenBlob/voice/runtime/onnxruntime/onnxruntime.dll";
   const [wakeWordSettings, setWakeWordSettings] = useState<WakeWordSettings>({
     wake_word_enabled: false,
     wake_word_auto_listen_enabled: false,
@@ -908,6 +938,10 @@ function DevWindow() {
       );
     } catch {}
   }, [openSettingsPanels]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("macos-lite", isMacOS);
+  }, [isMacOS]);
 
   useEffect(() => {
     const applyGlass = async () => {
@@ -1128,6 +1162,22 @@ function DevWindow() {
     }
   };
 
+  const downloadPiper = async () => {
+    try {
+      setTtsBusy(true);
+      setTtsMessage(t.downloading);
+      const result = (await invoke(
+        "tts_download_default_piper_assets"
+      )) as string;
+      setTtsMessage(result || t.downloadDone);
+    } catch (err) {
+      console.error("tts download failed", err);
+      setTtsMessage(t.downloadFailed);
+    } finally {
+      setTtsBusy(false);
+    }
+  };
+
   const saveWakeWordSettings = async () => {
     try {
       setWakeWordSaving(true);
@@ -1250,7 +1300,7 @@ function DevWindow() {
 
   const selectWakeWordRuntime = async () => {
     const path = window.prompt(
-      "Paste the full path to onnxruntime.dll. OpenBlob will save the path but will not start the microphone."
+      `Paste the full path to ${wakeWordRuntimeLabel}. OpenBlob will save the path but will not start the microphone.`
     );
     if (path == null) return;
 
@@ -1443,6 +1493,12 @@ function DevWindow() {
             inset 0 -1px 1px rgba(0,0,0,0.18);
         }
 
+        .macos-lite .panel {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+          background: rgba(18, 20, 26, 0.74);
+        }
+
         .panel::before {
           content: "";
           position: absolute;
@@ -1566,6 +1622,11 @@ function DevWindow() {
           backdrop-filter: blur(18px) saturate(155%);
           -webkit-backdrop-filter: blur(18px) saturate(155%);
           min-width: 0;
+        }
+
+        .macos-lite .card {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
         }
 
         .label {
@@ -1966,6 +2027,11 @@ function DevWindow() {
           min-height: 52px;
         }
 
+        .macos-lite .group {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+        }
+
         .groupToggle {
           width: 100%;
           border: 0;
@@ -2301,6 +2367,26 @@ function DevWindow() {
                         Bubble quick setting controls speech output.
                       </div>
                     </div>
+                    {isMacOS && (
+                      <div className="wakeMetric">
+                        <div className="metricLabel">{t.ttsTools}</div>
+                        <button
+                          className="saveBtn"
+                          onClick={() => void downloadPiper()}
+                          disabled={ttsBusy}
+                          type="button"
+                          style={{
+                            width: "100%",
+                            justifyContent: "center",
+                          }}
+                        >
+                          {ttsBusy ? t.downloading : t.downloadPiper}
+                        </button>
+                        {ttsMessage ? (
+                          <div className="metricValue">{ttsMessage}</div>
+                        ) : null}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -2329,6 +2415,14 @@ function DevWindow() {
 
               {openSettingsPanels.wakeWord && (
                 <div className="settingsPanelBody">
+                  {!isWindows && !isMacOS ? (
+                    <div className="wakeNotice">
+                      Wake-word setup is currently available on Windows and
+                      macOS only. This platform needs a local ONNX Runtime
+                      package before these controls can be used.
+                    </div>
+                  ) : (
+                    <>
               <div className="wakeGrid">
                 <div className="field">
                   <div className="fieldLabel">{t.wakeWordEnabled}</div>
@@ -2419,7 +2513,7 @@ function DevWindow() {
                 </div>
 
                 <div className="field">
-                  <div className="fieldLabel">ONNX Runtime DLL</div>
+                  <div className="fieldLabel">{wakeWordRuntimeLabel}</div>
                   <input
                     className="textInput"
                     value={wakeWordSettings.wake_word_runtime_path || ""}
@@ -2429,7 +2523,7 @@ function DevWindow() {
                         wake_word_runtime_path: e.target.value || null,
                       }))
                     }
-                    placeholder="%APPDATA%/OpenBlob/voice/runtime/onnxruntime/onnxruntime.dll"
+                    placeholder={wakeWordRuntimePlaceholder}
                   />
                 </div>
 
@@ -2539,7 +2633,7 @@ function DevWindow() {
                         disabled={wakeWordInstallBusy}
                         onClick={() => void selectWakeWordRuntime()}
                       >
-                        Select ONNX Runtime DLL
+                        Select {wakeWordRuntimeLabel}
                       </button>
                       <button
                         className="saveBtn"
@@ -2912,6 +3006,8 @@ function DevWindow() {
                   </div>
                 )}
               </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>

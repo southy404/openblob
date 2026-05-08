@@ -18,7 +18,7 @@
 
 ---
 
-> **Build a desktop copilot that feels alive, useful, extensible, and truly personal.**  
+> **Build a desktop copilot that feels alive, useful, extensible, and truly personal.**
 > Current focus: **stabilizing the core architecture, improving command reliability, refining the multi-window desktop UX, and building safe local-first voice foundations.**
 
 OpenBlob is a local-first AI companion that lives on your Windows desktop. It can respond to chat, understand your active context, run deterministic desktop actions, analyze screenshots, transcribe system audio, and grow through community-driven features, smarter abilities, better design, and new integrations.
@@ -553,25 +553,25 @@ More game modes are planned as the project grows.
 
 ## Design Principles
 
-**1. Local-first**  
+**1. Local-first**
 Whenever possible, things run locally on the user's machine.
 
-**2. Context > Prompt**  
+**2. Context > Prompt**
 The assistant should understand your environment — what app you're in, what's on screen, and what it opened before.
 
-**3. Privacy-conscious**  
+**3. Privacy-conscious**
 Users should understand what runs locally, what accesses the browser, what uses the mic, and what may call external services.
 
-**4. Extensible by design**  
+**4. Extensible by design**
 New modules, commands, tools, and UI ideas should be straightforward to add.
 
-**5. Community over gatekeeping**  
+**5. Community over gatekeeping**
 This project welcomes contributions from developers, designers, tinkerers, AI enthusiasts, and curious builders.
 
-**6. High-quality UX matters**  
+**6. High-quality UX matters**
 A desktop copilot should not just work — it should feel polished, expressive, modern, and enjoyable to use.
 
-**7. Playful, but actually useful**  
+**7. Playful, but actually useful**
 Fun interactions and real productivity are not opposites.
 
 ---

@@ -342,7 +342,11 @@ pub fn find_title(service: &str, query: &str) -> Option<StreamTitle> {
         }
 
         // Penalize extremely weak title matches
-        if exact_word_hits == 0 && partial_word_hits == 0 && !title_norm.contains(&q) && !q.contains(&title_norm) {
+        if exact_word_hits == 0
+            && partial_word_hits == 0
+            && !title_norm.contains(&q)
+            && !q.contains(&title_norm)
+        {
             score -= 200;
         }
 
@@ -390,7 +394,10 @@ fn score_recommendation(item: &StreamTitle, q: &RecommendationQuery) -> (i32, St
     }
 
     if !genre.is_empty() {
-        if genres_norm.iter().any(|g| g == &genre || g.contains(&genre)) {
+        if genres_norm
+            .iter()
+            .any(|g| g == &genre || g.contains(&genre))
+        {
             score += 240;
             reasons.push(format!("it matches the {} vibe", genre));
         } else {
@@ -407,8 +414,18 @@ fn score_recommendation(item: &StreamTitle, q: &RecommendationQuery) -> (i32, St
 
         let mood_hit_genres = genres_norm.iter().any(|g| match mood.as_str() {
             "funny" => g.contains("comedy") || g.contains("animation"),
-            "dark" => g.contains("thriller") || g.contains("drama") || g.contains("sci-fi") || g.contains("crime"),
-            "smart" => g.contains("sci-fi") || g.contains("mystery") || g.contains("crime") || g.contains("documentary"),
+            "dark" => {
+                g.contains("thriller")
+                    || g.contains("drama")
+                    || g.contains("sci-fi")
+                    || g.contains("crime")
+            }
+            "smart" => {
+                g.contains("sci-fi")
+                    || g.contains("mystery")
+                    || g.contains("crime")
+                    || g.contains("documentary")
+            }
             "emotional" => g.contains("drama"),
             "action" => g.contains("action"),
             "scifi" => g.contains("sci-fi"),
@@ -559,7 +576,10 @@ pub fn parse_preference_query(input: &str, service_hint: Option<&str>) -> Recomm
         Some("funny".into())
     } else if contains_any(&text, &["dark", "duester", "dunkel", "bleak"]) {
         Some("dark".into())
-    } else if contains_any(&text, &["smart", "clever", "klug", "mind bending", "complex"]) {
+    } else if contains_any(
+        &text,
+        &["smart", "clever", "klug", "mind bending", "complex"],
+    ) {
         Some("smart".into())
     } else if contains_any(&text, &["sad", "emotional", "traurig", "heartfelt"]) {
         Some("emotional".into())
@@ -607,7 +627,14 @@ pub fn parse_preference_query(input: &str, service_hint: Option<&str>) -> Recomm
 
     let trending = contains_any(
         &text,
-        &["trend", "trending", "popular", "top", "hot", "gerade angesagt"],
+        &[
+            "trend",
+            "trending",
+            "popular",
+            "top",
+            "hot",
+            "gerade angesagt",
+        ],
     );
 
     RecommendationQuery {
@@ -679,10 +706,7 @@ pub fn best_followup_alternative(
 }
 
 pub fn is_streaming_service_name(input: &str) -> bool {
-    matches!(
-        normalize_service(input).as_str(),
-        "netflix"
-    )
+    matches!(normalize_service(input).as_str(), "netflix")
 }
 
 pub fn looks_like_streaming_query(input: &str) -> bool {
@@ -706,7 +730,7 @@ pub fn looks_like_streaming_query(input: &str) -> bool {
             "lustig",
             "funny",
             "dark",
-            "smart"
+            "smart",
         ],
     )
 }
@@ -733,11 +757,7 @@ pub fn search_titles(service: &str, query: &str, limit: usize) -> Vec<StreamTitl
             } else if token.contains(&q) || q.contains(token) {
                 score += 130;
             } else {
-                score += q
-                    .split_whitespace()
-                    .filter(|w| token.contains(w))
-                    .count() as i32
-                    * 40;
+                score += q.split_whitespace().filter(|w| token.contains(w)).count() as i32 * 40;
             }
         }
 
@@ -751,5 +771,9 @@ pub fn search_titles(service: &str, query: &str, limit: usize) -> Vec<StreamTitl
     }
 
     scored.sort_by(|a, b| b.0.cmp(&a.0));
-    scored.into_iter().take(limit).map(|(_, item)| item).collect()
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(_, item)| item)
+        .collect()
 }

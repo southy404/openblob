@@ -42,8 +42,7 @@ where
     let raw = serde_json::to_string_pretty(value)
         .map_err(|e| format!("Could not serialize JSON for '{}': {e}", path.display()))?;
 
-    fs::write(path, raw)
-        .map_err(|e| format!("Could not write JSON file '{}': {e}", path.display()))
+    fs::write(path, raw).map_err(|e| format!("Could not write JSON file '{}': {e}", path.display()))
 }
 
 pub fn append_jsonl<T>(path: &Path, value: &T) -> Result<(), String>

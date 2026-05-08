@@ -11,7 +11,9 @@ use crate::modules::memory::semantic_memory::SemanticMemory;
 use crate::modules::memory::sqlite_store::{insert_memory_event, open_memory_database};
 use crate::modules::profile::user_profile::UserProfile;
 use crate::modules::storage::json_store::load_json;
-use crate::modules::storage::paths::{episodic_memory_path, semantic_memory_path, user_profile_path};
+use crate::modules::storage::paths::{
+    episodic_memory_path, semantic_memory_path, user_profile_path,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LegacyImportReport {
@@ -342,9 +344,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let source_path = dir.path().join("episodic_memory.jsonl");
 
-        let report =
-            import_legacy_episodic_memory_from_path(&mut conn, &source_path, true)
-                .expect("import succeeds");
+        let report = import_legacy_episodic_memory_from_path(&mut conn, &source_path, true)
+            .expect("import succeeds");
 
         assert_eq!(report.imported, 0);
         assert_eq!(report.skipped, 0);
@@ -377,9 +378,8 @@ mod tests {
         .expect("write legacy line");
         writeln!(file, "not json").expect("write invalid line");
 
-        let report =
-            import_legacy_episodic_memory_from_path(&mut conn, &source_path, true)
-                .expect("import succeeds");
+        let report = import_legacy_episodic_memory_from_path(&mut conn, &source_path, true)
+            .expect("import succeeds");
 
         assert_eq!(report.imported, 1);
         assert_eq!(report.skipped, 1);
@@ -410,9 +410,8 @@ mod tests {
         )
         .expect("write source");
 
-        let report =
-            import_legacy_episodic_memory_from_path(&mut conn, &source_path, false)
-                .expect("import succeeds");
+        let report = import_legacy_episodic_memory_from_path(&mut conn, &source_path, false)
+            .expect("import succeeds");
 
         assert_eq!(report.imported, 1);
         assert!(source_path.exists());

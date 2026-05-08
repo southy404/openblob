@@ -272,7 +272,14 @@ fn format_search_result(raw: &str) -> String {
     reply_with(
         "snip_search_intent",
         &[
-            ("intent", if intent.is_empty() { unknown.clone() } else { intent }),
+            (
+                "intent",
+                if intent.is_empty() {
+                    unknown.clone()
+                } else {
+                    intent
+                },
+            ),
             (
                 "game_or_app",
                 if game_or_app.is_empty() {
@@ -289,7 +296,14 @@ fn format_search_result(raw: &str) -> String {
                     extracted_text
                 },
             ),
-            ("key_text", if key_text.is_empty() { unknown.clone() } else { key_text }),
+            (
+                "key_text",
+                if key_text.is_empty() {
+                    unknown.clone()
+                } else {
+                    key_text
+                },
+            ),
             (
                 "search_query",
                 if search_query.is_empty() {
@@ -314,10 +328,7 @@ fn format_search_result(raw: &str) -> String {
                     alt_query_2
                 },
             ),
-            (
-                "answer",
-                if answer.is_empty() { no_answer } else { answer },
-            ),
+            ("answer", if answer.is_empty() { no_answer } else { answer }),
         ],
     )
 }
@@ -423,10 +434,7 @@ pub async fn ask_ollama_vision(prompt: &str, image_path: &str) -> Result<OllamaR
 
                 return Err(reply_with(
                     "vision_model_failed",
-                    &[
-                        ("model", model),
-                        ("error", err),
-                    ],
+                    &[("model", model), ("error", err)],
                 ));
             }
         }

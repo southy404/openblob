@@ -1,4 +1,4 @@
-use super::constants::{STREAMING_MORE_WORDS};
+use super::constants::STREAMING_MORE_WORDS;
 use super::extract::{detect_streaming_service, extract_stream_title};
 use super::fuzzy::contains_any_phrase;
 use super::normalize::tokens;
@@ -76,7 +76,9 @@ pub fn parse_media_command(normalized: &str) -> Option<CompanionAction> {
         }
         let has_content_verb = contains_any_phrase(
             normalized,
-            &["open ", "play ", "spiele ", "spiel ", "oeffne ", "launch ", "starte ", "start "],
+            &[
+                "open ", "play ", "spiele ", "spiel ", "oeffne ", "launch ", "starte ", "start ",
+            ],
         );
         if has_content_verb {
             let title = extract_stream_title(normalized, "youtube");
@@ -93,7 +95,9 @@ pub fn parse_media_command(normalized: &str) -> Option<CompanionAction> {
         }
         let has_content_verb = contains_any_phrase(
             normalized,
-            &["open ", "play ", "spiele ", "spiel ", "oeffne ", "launch ", "starte ", "start "],
+            &[
+                "open ", "play ", "spiele ", "spiel ", "oeffne ", "launch ", "starte ", "start ",
+            ],
         );
         if has_content_verb {
             let service_name = service.clone().expect("service exists");
@@ -180,7 +184,10 @@ pub fn parse_media_command(normalized: &str) -> Option<CompanionAction> {
         Some("action".to_string())
     } else if contains_any_phrase(normalized, &["thriller"]) {
         Some("thriller".to_string())
-    } else if contains_any_phrase(normalized, &["sci fi", "scifi", "sci-fi", "science fiction"]) {
+    } else if contains_any_phrase(
+        normalized,
+        &["sci fi", "scifi", "sci-fi", "science fiction"],
+    ) {
         Some("scifi".to_string())
     } else {
         None
@@ -238,7 +245,9 @@ pub fn parse_media_command(normalized: &str) -> Option<CompanionAction> {
 
     let play_or_open_media = contains_any_phrase(
         normalized,
-        &["play ", "spiele ", "open ", "oeffne ", "launch ", "starte ", "start "],
+        &[
+            "play ", "spiele ", "open ", "oeffne ", "launch ", "starte ", "start ",
+        ],
     ) && service.is_some();
 
     if play_or_open_media {

@@ -1,7 +1,9 @@
 use crate::modules::companion::bonding::{load_bonding_state, save_bonding_state};
 use crate::modules::memory::episodic_memory::{append_episode, EpisodicMemoryEntry};
 use crate::modules::memory::events::MemoryEvent;
-use crate::modules::memory::semantic_memory::{load_or_create_semantic_memory, save_semantic_memory};
+use crate::modules::memory::semantic_memory::{
+    load_or_create_semantic_memory, save_semantic_memory,
+};
 use crate::modules::memory::writer::enqueue_memory_event;
 use crate::modules::profile::companion_config::load_or_create_companion_config;
 use crate::modules::profile::user_profile::{load_or_create_user_profile, save_user_profile};

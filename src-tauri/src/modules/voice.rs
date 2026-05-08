@@ -33,8 +33,8 @@ pub fn record_and_transcribe_voice(seconds: Option<u64>) -> Result<String, Strin
         sample_format: SampleFormat::Int,
     };
 
-    let writer = WavWriter::create(&wav_path, spec)
-        .map_err(|e| format!("WAV create Fehler: {e}"))?;
+    let writer =
+        WavWriter::create(&wav_path, spec).map_err(|e| format!("WAV create Fehler: {e}"))?;
     let writer = Arc::new(Mutex::new(Some(writer)));
 
     let err_fn = |err| eprintln!("audio stream error: {err}");

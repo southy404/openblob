@@ -9,7 +9,10 @@ use super::normalize::{normalize, tokens};
 
 pub fn extract_percent(normalized: &str) -> Option<u8> {
     for token in normalized.split_whitespace() {
-        let cleaned = token.replace('%', "").replace("prozent", "").replace("percent", "");
+        let cleaned = token
+            .replace('%', "")
+            .replace("prozent", "")
+            .replace("percent", "");
         if let Ok(value) = cleaned.parse::<u8>() {
             return Some(value.min(100));
         }
@@ -79,7 +82,11 @@ pub fn extract_search_query(normalized: &str, toks: &[&str], remove_aliases: &[&
     let filtered: Vec<&str> = toks
         .iter()
         .copied()
-        .filter(|token| !remove_aliases.iter().any(|alias| jaro_winkler(token, alias) >= 0.88))
+        .filter(|token| {
+            !remove_aliases
+                .iter()
+                .any(|alias| jaro_winkler(token, alias) >= 0.88)
+        })
         .collect();
 
     let joined = filtered.join(" ").trim().to_string();
@@ -93,7 +100,14 @@ pub fn extract_search_query(normalized: &str, toks: &[&str], remove_aliases: &[&
 pub fn extract_generic_search_query(input: &str) -> Option<String> {
     let normalized = normalize(input);
 
-    for prefix in ["suche nach ", "suche ", "search for ", "search ", "finde ", "find "] {
+    for prefix in [
+        "suche nach ",
+        "suche ",
+        "search for ",
+        "search ",
+        "finde ",
+        "find ",
+    ] {
         if let Some(rest) = normalized.strip_prefix(prefix) {
             let q = rest.trim();
             if !q.is_empty() {
@@ -131,7 +145,8 @@ pub fn extract_timer_seconds(normalized: &str) -> Option<u64> {
                         total_seconds += value * 60;
                         found = true;
                     }
-                    "s" | "sec" | "secs" | "second" | "seconds" | "sek" | "sekunde" | "sekunden" => {
+                    "s" | "sec" | "secs" | "second" | "seconds" | "sek" | "sekunde"
+                    | "sekunden" => {
                         total_seconds += value;
                         found = true;
                     }
@@ -220,7 +235,15 @@ pub fn extract_open_target(normalized: &str, toks: &[&str]) -> (String, bool) {
 
     if let Some(target) = extract_after_prefixes(
         normalized,
-        &["oeffne ", "oeffne mal ", "starte ", "start ", "open ", "launch ", "run "],
+        &[
+            "oeffne ",
+            "oeffne mal ",
+            "starte ",
+            "start ",
+            "open ",
+            "launch ",
+            "run ",
+        ],
     ) {
         let cleaned = target
             .replace(" im browser", "")

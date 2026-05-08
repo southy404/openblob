@@ -28,7 +28,10 @@ pub fn apply_memory_retention_with_connection(
     events += delete_event_ids(conn, &overflow_ids)?;
 
     let summaries = conn
-        .execute("DELETE FROM memory_summaries WHERE created_at < ?1", [&summary_cutoff])
+        .execute(
+            "DELETE FROM memory_summaries WHERE created_at < ?1",
+            [&summary_cutoff],
+        )
         .map_err(|e| format!("Could not delete expired memory summaries: {e}"))?;
 
     let facts = conn
@@ -64,11 +67,7 @@ pub fn apply_memory_retention_with_connection(
     })
 }
 
-pub fn decayed_importance(
-    importance: f32,
-    created_at: &str,
-    half_life_days: u32,
-) -> f64 {
+pub fn decayed_importance(importance: f32, created_at: &str, half_life_days: u32) -> f64 {
     let Ok(created_at) = chrono::DateTime::parse_from_rfc3339(created_at) else {
         return importance.clamp(0.0, 1.0) as f64;
     };
@@ -104,10 +103,7 @@ fn ids_for_query(
     Ok(ids)
 }
 
-fn ids_for_overflow(
-    conn: &rusqlite::Connection,
-    max_events: usize,
-) -> Result<Vec<String>, String> {
+fn ids_for_overflow(conn: &rusqlite::Connection, max_events: usize) -> Result<Vec<String>, String> {
     let total: i64 = conn
         .query_row("SELECT COUNT(*) FROM memory_events", [], |row| row.get(0))
         .map_err(|e| format!("Could not count memory events for retention: {e}"))?;
@@ -136,7 +132,10 @@ fn delete_event_ids(conn: &rusqlite::Connection, ids: &[String]) -> Result<usize
     for id in ids {
         conn.execute("DELETE FROM memory_embeddings WHERE target_id = ?1", [id])
             .map_err(|e| format!("Could not delete retained embedding '{id}': {e}"))?;
-        let _ = conn.execute("DELETE FROM memory_embedding_vec WHERE target_id = ?1", [id]);
+        let _ = conn.execute(
+            "DELETE FROM memory_embedding_vec WHERE target_id = ?1",
+            [id],
+        );
         conn.execute("DELETE FROM memory_events_fts WHERE event_id = ?1", [id])
             .map_err(|e| format!("Could not delete retained FTS row '{id}': {e}"))?;
         count += conn
@@ -150,7 +149,9 @@ fn delete_event_ids(conn: &rusqlite::Connection, ids: &[String]) -> Result<usize
 mod tests {
     use super::*;
     use crate::modules::memory::events::{MemoryEvent, MemoryEventKind, PrivacyTier};
-    use crate::modules::memory::sqlite_store::{insert_memory_event, open_memory_database_in_memory};
+    use crate::modules::memory::sqlite_store::{
+        insert_memory_event, open_memory_database_in_memory,
+    };
 
     #[test]
     fn max_events_retention_keeps_newest_events() {

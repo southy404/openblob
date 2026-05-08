@@ -1,6 +1,6 @@
 # Persistent Memory System Proposal
 
-Status: proposed  
+Status: proposed
 Related issue: #13
 
 ## Summary

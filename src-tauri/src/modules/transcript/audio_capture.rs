@@ -8,12 +8,20 @@ use std::{
 
 use crossbeam_channel::Sender;
 
+#[cfg(target_os = "macos")]
+use cpal::{
+    traits::{DeviceTrait, HostTrait, StreamTrait},
+    SampleFormat,
+};
+
 #[cfg(target_os = "windows")]
 use std::ffi::c_void;
+#[cfg(target_os = "macos")]
+use std::{sync::Mutex, time::Duration};
 
 #[cfg(target_os = "windows")]
 use windows::{
-    core::{ComInterface, Error as WinError, GUID, HRESULT, Interface},
+    core::{ComInterface, Error as WinError, Interface, GUID, HRESULT},
     Win32::{
         Foundation::HANDLE,
         Media::Audio::{
@@ -32,6 +40,12 @@ use windows::{
 };
 
 const TARGET_CHUNK_MS: u64 = 2_500;
+
+#[cfg(target_os = "macos")]
+struct MacCaptureState {
+    buffer: Vec<i16>,
+    chunk_start_ms: u64,
+}
 
 #[derive(Debug, Clone)]
 pub struct AudioChunk {
@@ -201,10 +215,7 @@ fn run_system_loopback_capture(
                     let f32_samples =
                         std::slice::from_raw_parts(data_ptr as *const f32, sample_count);
 
-                    mono_i16_buffer.extend(downmix_f32_to_mono_i16(
-                        f32_samples,
-                        input_channels,
-                    ));
+                    mono_i16_buffer.extend(downmix_f32_to_mono_i16(f32_samples, input_channels));
                 }
 
                 capture_client
@@ -274,12 +285,178 @@ fn run_system_loopback_capture(
     result
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn run_system_loopback_capture(
+    stop_flag: Arc<AtomicBool>,
+    tx: Sender<AudioChunk>,
+) -> Result<(), String> {
+    let host = cpal::default_host();
+    let device = host.default_input_device().ok_or_else(|| {
+        "No default macOS input device found. Route system audio to an input device such as BlackHole and set it as the default input.".to_string()
+    })?;
+    let supported_config = device
+        .default_input_config()
+        .map_err(|e| format!("Failed to read macOS input config: {e}"))?;
+    let sample_rate = supported_config.sample_rate().0;
+    let input_channels = supported_config.channels();
+    let config = supported_config.config();
+    let target_samples = ((sample_rate as u64 * TARGET_CHUNK_MS) / 1000) as usize;
+
+    println!(
+        "[audio] macOS input format={:?}, channels={}, sample_rate={}",
+        supported_config.sample_format(),
+        input_channels,
+        sample_rate
+    );
+
+    let state = Arc::new(Mutex::new(MacCaptureState {
+        buffer: Vec::with_capacity(target_samples * 2),
+        chunk_start_ms: 0,
+    }));
+
+    let err_fn = |err| eprintln!("[audio] macOS input stream error: {}", err);
+
+    let stream = match supported_config.sample_format() {
+        SampleFormat::F32 => {
+            let tx = tx.clone();
+            let stream_state = state.clone();
+            device
+                .build_input_stream(
+                    &config,
+                    move |data: &[f32], _| {
+                        let samples = downmix_f32_to_mono_i16(data, input_channels);
+                        push_macos_samples(
+                            &stream_state,
+                            &tx,
+                            sample_rate,
+                            target_samples,
+                            samples,
+                        );
+                    },
+                    err_fn,
+                    None,
+                )
+                .map_err(|e| format!("Failed to build macOS f32 input stream: {e}"))?
+        }
+        SampleFormat::I16 => {
+            let tx = tx.clone();
+            let stream_state = state.clone();
+            device
+                .build_input_stream(
+                    &config,
+                    move |data: &[i16], _| {
+                        let samples = downmix_i16_to_mono_i16(data, input_channels);
+                        push_macos_samples(
+                            &stream_state,
+                            &tx,
+                            sample_rate,
+                            target_samples,
+                            samples,
+                        );
+                    },
+                    err_fn,
+                    None,
+                )
+                .map_err(|e| format!("Failed to build macOS i16 input stream: {e}"))?
+        }
+        SampleFormat::U16 => {
+            let tx = tx.clone();
+            let stream_state = state.clone();
+            device
+                .build_input_stream(
+                    &config,
+                    move |data: &[u16], _| {
+                        let samples = downmix_u16_to_mono_i16(data, input_channels);
+                        push_macos_samples(
+                            &stream_state,
+                            &tx,
+                            sample_rate,
+                            target_samples,
+                            samples,
+                        );
+                    },
+                    err_fn,
+                    None,
+                )
+                .map_err(|e| format!("Failed to build macOS u16 input stream: {e}"))?
+        }
+        other => {
+            return Err(format!("Unsupported macOS input sample format: {other:?}"));
+        }
+    };
+
+    stream
+        .play()
+        .map_err(|e| format!("Failed to start macOS input stream: {e}"))?;
+
+    while !stop_flag.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    drop(stream);
+
+    if let Ok(mut state) = state.lock() {
+        if !state.buffer.is_empty() {
+            let samples = std::mem::take(&mut state.buffer);
+            let current_ms = mono_samples_to_ms(samples.len(), sample_rate);
+            let chunk = AudioChunk {
+                sample_rate,
+                channels: 1,
+                samples_i16: samples,
+                start_ms: state.chunk_start_ms,
+                end_ms: state.chunk_start_ms + current_ms,
+            };
+
+            let _ = tx.send(chunk);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn push_macos_samples(
+    state: &Arc<Mutex<MacCaptureState>>,
+    tx: &Sender<AudioChunk>,
+    sample_rate: u32,
+    target_samples: usize,
+    samples: Vec<i16>,
+) {
+    if samples.is_empty() {
+        return;
+    }
+
+    let mut chunks = Vec::new();
+    if let Ok(mut state) = state.lock() {
+        state.buffer.extend(samples);
+
+        while state.buffer.len() >= target_samples {
+            let chunk_samples: Vec<i16> = state.buffer.drain(..target_samples).collect();
+            let chunk_ms = mono_samples_to_ms(chunk_samples.len(), sample_rate);
+            let start_ms = state.chunk_start_ms;
+            state.chunk_start_ms = start_ms + chunk_ms;
+
+            chunks.push(AudioChunk {
+                sample_rate,
+                channels: 1,
+                samples_i16: chunk_samples,
+                start_ms,
+                end_ms: start_ms + chunk_ms,
+            });
+        }
+    }
+
+    for chunk in chunks {
+        let _ = tx.send(chunk);
+    }
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 fn run_system_loopback_capture(
     _stop_flag: Arc<AtomicBool>,
     _tx: Sender<AudioChunk>,
 ) -> Result<(), String> {
-    Err("System loopback capture is only implemented for Windows".into())
+    Err("System loopback capture is only implemented for Windows and macOS".into())
 }
 
 fn mono_samples_to_ms(sample_count: usize, sample_rate: u32) -> u64 {
@@ -288,10 +465,7 @@ fn mono_samples_to_ms(sample_count: usize, sample_rate: u32) -> u64 {
 
 fn downmix_f32_to_mono_i16(samples: &[f32], channels: u16) -> Vec<i16> {
     if channels <= 1 {
-        return samples
-            .iter()
-            .map(|s| float_to_i16(*s))
-            .collect();
+        return samples.iter().map(|s| float_to_i16(*s)).collect();
     }
 
     let ch = channels as usize;
@@ -307,4 +481,41 @@ fn downmix_f32_to_mono_i16(samples: &[f32], channels: u16) -> Vec<i16> {
 
 fn float_to_i16(sample: f32) -> i16 {
     (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
+}
+
+#[cfg(target_os = "macos")]
+fn downmix_i16_to_mono_i16(samples: &[i16], channels: u16) -> Vec<i16> {
+    if channels <= 1 {
+        return samples.to_vec();
+    }
+
+    let ch = channels as usize;
+    let mut mono = Vec::with_capacity(samples.len() / ch);
+
+    for frame in samples.chunks_exact(ch) {
+        let avg = frame.iter().map(|s| *s as i32).sum::<i32>() / channels as i32;
+        mono.push(avg.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
+    }
+
+    mono
+}
+
+#[cfg(target_os = "macos")]
+fn downmix_u16_to_mono_i16(samples: &[u16], channels: u16) -> Vec<i16> {
+    if channels <= 1 {
+        return samples
+            .iter()
+            .map(|s| (*s as i32 - 32768).clamp(i16::MIN as i32, i16::MAX as i32) as i16)
+            .collect();
+    }
+
+    let ch = channels as usize;
+    let mut mono = Vec::with_capacity(samples.len() / ch);
+
+    for frame in samples.chunks_exact(ch) {
+        let avg = frame.iter().map(|s| *s as i32 - 32768).sum::<i32>() / channels as i32;
+        mono.push(avg.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
+    }
+
+    mono
 }

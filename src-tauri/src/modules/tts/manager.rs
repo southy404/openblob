@@ -1,6 +1,8 @@
 use super::kokoro;
 use super::piper;
 use super::tts_config::{detect_lang_from_text, preferred_lang, TtsConfig, TtsProvider};
+#[cfg(target_os = "macos")]
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static TTS_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -104,15 +106,32 @@ async fn speak_with_provider(
     match provider {
         TtsProvider::Piper => {
             let text = text.to_string();
+            let fallback_text = text.clone();
             let piper_exe = config.piper_exe.clone();
             let piper_models_dir = config.piper_models_dir.clone();
             let voice = trimmed_voice.to_string();
 
-            tokio::task::spawn_blocking(move || {
+            let result = tokio::task::spawn_blocking(move || {
                 piper::speak(&text, &piper_exe, &piper_models_dir, &voice)
             })
             .await
-            .map_err(|e| format!("Piper-Task fehlgeschlagen: {e}"))?
+            .map_err(|e| format!("Piper-Task fehlgeschlagen: {e}"))?;
+
+            #[cfg(target_os = "macos")]
+            {
+                if result.is_err() {
+                    // Fallback to macOS built-in TTS if Piper isn't available.
+                    Command::new("say")
+                        .arg(fallback_text)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                        .map_err(|e| format!("TTS failed: {e}"))?;
+                    return Ok(());
+                }
+            }
+
+            result
         }
         TtsProvider::Kokoro => kokoro::speak(text, &config.kokoro_base_url, trimmed_voice).await,
     }
