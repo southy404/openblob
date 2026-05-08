@@ -13,6 +13,7 @@ use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 use tauri::Emitter;
+use tempfile::TempDir;
 
 use crate::modules::profile::companion_config::{
     default_wake_word_phrase, default_wake_word_provider, default_wake_word_sensitivity,
@@ -30,9 +31,21 @@ const DEFAULT_WAKE_WORD_FRAME_MS: u32 = 80;
 const DEFAULT_WAKE_WORD_THRESHOLD: f32 = 0.5;
 const ONNX_RUNTIME_PATH_ENV: &str = "OPENBLOB_ONNX_RUNTIME_PATH";
 const ONNX_RUNTIME_VERSION: &str = "1.24.4";
+#[cfg(target_os = "windows")]
 const ONNX_RUNTIME_WINDOWS_X64_URL: &str =
     "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip";
+#[cfg(target_os = "windows")]
 const ONNX_RUNTIME_WINDOWS_X64_SHA256: &str = "";
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const ONNX_RUNTIME_MACOS_ARM64_URL: &str =
+    "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-osx-arm64-1.24.4.tgz";
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const ONNX_RUNTIME_MACOS_ARM64_SHA256: &str = "";
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const ONNX_RUNTIME_MACOS_X64_URL: &str =
+    "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-osx-x64-1.24.4.tgz";
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const ONNX_RUNTIME_MACOS_X64_SHA256: &str = "";
 const OPENBLOB_WAKE_WORD_BUNDLE_URL: &str = "";
 const OPENBLOB_WAKE_WORD_BUNDLE_SHA256: &str = "";
 const OPENWAKEWORD_AUDIO_FRAME_SAMPLES: usize = 1_280;
@@ -628,8 +641,42 @@ fn wake_word_runtime_install_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn default_runtime_dll_path() -> Result<PathBuf, String> {
-    Ok(wake_word_runtime_install_dir()?.join("onnxruntime.dll"))
+fn runtime_library_file_name() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "onnxruntime.dll"
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        "libonnxruntime.dylib"
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        "libonnxruntime.so"
+    }
+}
+
+fn runtime_library_label() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "ONNX Runtime DLL"
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        "ONNX Runtime dylib"
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        "ONNX Runtime shared library"
+    }
+}
+
+fn default_runtime_library_path() -> Result<PathBuf, String> {
+    Ok(wake_word_runtime_install_dir()?.join(runtime_library_file_name()))
 }
 
 fn resolve_configured_runtime_path(raw_path: &str) -> Option<PathBuf> {
@@ -655,13 +702,26 @@ fn wake_word_runtime_candidate_paths(
         candidates.push(path);
     }
 
-    if let Ok(path) = default_runtime_dll_path() {
+    if let Ok(path) = default_runtime_library_path() {
         candidates.push(path);
     }
 
     if let Some(bundle) = bundle {
-        candidates.push(bundle.bundle_dir.join("onnxruntime.dll"));
-        candidates.push(bundle.bundle_dir.join("runtime").join("onnxruntime.dll"));
+        candidates.push(bundle.bundle_dir.join(runtime_library_file_name()));
+        candidates.push(
+            bundle
+                .bundle_dir
+                .join("runtime")
+                .join(runtime_library_file_name()),
+        );
+
+        #[cfg(target_os = "macos")]
+        {
+            candidates.extend(find_runtime_libraries_in_dir(&bundle.bundle_dir));
+            candidates.extend(find_runtime_libraries_in_dir(
+                &bundle.bundle_dir.join("runtime"),
+            ));
+        }
     }
 
     let mut seen = Vec::new();
@@ -677,6 +737,32 @@ fn wake_word_runtime_candidate_paths(
             }
         })
         .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn find_runtime_libraries_in_dir(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(is_macos_onnx_runtime_library_name)
+                    .unwrap_or(false)
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn is_macos_onnx_runtime_library_name(name: &str) -> bool {
+    name == "libonnxruntime.dylib"
+        || (name.starts_with("libonnxruntime.") && name.ends_with(".dylib"))
 }
 
 fn open_folder(path: &Path) -> Result<(), String> {
@@ -878,6 +964,13 @@ fn resolve_onnx_runtime_path(
         .find(|path| path.is_file())
 }
 
+fn runtime_missing_message() -> String {
+    format!(
+        "Local wake-word runtime is missing or could not be loaded. Set {ONNX_RUNTIME_PATH_ENV} or select {} in Dev settings.",
+        runtime_library_label()
+    )
+}
+
 fn ensure_onnx_runtime_loaded(
     bundle: &WakeWordModelBundle,
     configured_runtime_path: Option<&str>,
@@ -888,11 +981,8 @@ fn ensure_onnx_runtime_loaded(
         return Ok(runtime_path.clone());
     }
 
-    let runtime_path = resolve_onnx_runtime_path(bundle, configured_runtime_path).ok_or_else(|| {
-        WakeWordRuntimeError::RuntimeMissing(format!(
-            "Local wake-word runtime is missing or could not be loaded. Set {ONNX_RUNTIME_PATH_ENV} or select onnxruntime.dll in Dev settings."
-        ))
-    })?;
+    let runtime_path = resolve_onnx_runtime_path(bundle, configured_runtime_path)
+        .ok_or_else(|| WakeWordRuntimeError::RuntimeMissing(runtime_missing_message()))?;
     ort::init_from(&runtime_path)
         .map_err(|err| {
             WakeWordRuntimeError::RuntimeLoadFailed(format!(
@@ -976,7 +1066,7 @@ fn resolve_tensor_input_shape(
         )));
     }
 
-    if known_product == 0 || input_len % known_product != 0 {
+    if known_product == 0 || !input_len.is_multiple_of(known_product) {
         return Err(WakeWordRuntimeError::UnsupportedModelShape(format!(
             "{label} input shape {dims:?} cannot be resolved for {input_len} values."
         )));
@@ -1070,7 +1160,7 @@ impl OnnxSession {
     }
 
     fn run_f32(&mut self, input: &[f32], label: &str) -> Result<Vec<f32>, WakeWordRuntimeError> {
-        let mut input_values = input.to_vec();
+        let input_values = input.to_vec();
 
         let shape = if label == "melspectrogram" {
             vec![1, input_values.len() as i64]
@@ -1351,7 +1441,7 @@ fn model_status_for_settings(settings: &WakeWordSettings) -> WakeWordModelStatus
         .unwrap_or_else(|| {
             if resolved_path
                 .as_deref()
-                .map(|path| path.exists() && !manifest_path_for_bundle(path).is_some())
+                .map(|path| path.exists() && manifest_path_for_bundle(path).is_none())
                 .unwrap_or(false)
                 && is_local_provider(&settings.wake_word_provider)
             {
@@ -1433,9 +1523,7 @@ fn model_status_for_settings(settings: &WakeWordSettings) -> WakeWordModelStatus
         && is_local_provider(&settings.wake_word_provider)
         && manifest_valid
     {
-        Some(format!(
-            "Local wake-word runtime is missing or could not be loaded. Set {ONNX_RUNTIME_PATH_ENV} or select onnxruntime.dll in Dev settings."
-        ))
+        Some(runtime_missing_message())
     } else if runtime_state == "unsupported_runtime" {
         runtime
             .as_ref()
@@ -1749,9 +1837,7 @@ impl WakeWordProvider for LocalWakeWordProvider {
             resolve_onnx_runtime_path(&bundle, self.model_status.runtime_path.as_deref())
         });
         if runtime_path.is_none() {
-            let message = format!(
-                "Local wake-word runtime is missing or could not be loaded. Set {ONNX_RUNTIME_PATH_ENV} or select onnxruntime.dll in Dev settings."
-            );
+            let message = runtime_missing_message();
             return WakeWordProviderAvailability {
                 provider_state: "runtime_missing".into(),
                 runtime_state: "runtime_missing".into(),
@@ -2681,7 +2767,8 @@ fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn extract_onnxruntime_dll_from_zip(zip_bytes: &[u8]) -> Result<Vec<u8>, String> {
+#[cfg(target_os = "windows")]
+fn extract_onnxruntime_library_from_zip(zip_bytes: &[u8]) -> Result<Vec<u8>, String> {
     let cursor = Cursor::new(zip_bytes);
 
     let mut archive = zip::ZipArchive::new(cursor)
@@ -2709,6 +2796,103 @@ fn extract_onnxruntime_dll_from_zip(zip_bytes: &[u8]) -> Result<Vec<u8>, String>
     }
 
     Err("onnxruntime.dll was not found inside the downloaded ZIP.".into())
+}
+
+#[cfg(target_os = "macos")]
+fn extract_onnxruntime_libraries_from_tgz(tgz_bytes: &[u8]) -> Result<PathBuf, String> {
+    let temp_dir =
+        TempDir::new().map_err(|err| format!("Could not create runtime extract dir: {err}"))?;
+    let archive_path = temp_dir.path().join("onnxruntime.tgz");
+    fs::write(&archive_path, tgz_bytes)
+        .map_err(|err| format!("Could not write ONNX Runtime archive: {err}"))?;
+
+    let status = Command::new("tar")
+        .args(["-xzf"])
+        .arg(&archive_path)
+        .arg("-C")
+        .arg(temp_dir.path())
+        .status()
+        .map_err(|err| format!("Could not extract ONNX Runtime archive: {err}"))?;
+
+    if !status.success() {
+        return Err("Could not extract ONNX Runtime archive.".into());
+    }
+
+    let runtime_dir = wake_word_runtime_install_dir()?;
+    ensure_dir(&runtime_dir)?;
+
+    let mut runtime_path = None;
+    for dylib_path in find_macos_runtime_libraries_recursive(temp_dir.path()) {
+        let file_name = dylib_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(runtime_library_file_name());
+        let out_path = if file_name == runtime_library_file_name() {
+            runtime_dir.join(runtime_library_file_name())
+        } else {
+            runtime_dir.join(file_name)
+        };
+        fs::copy(&dylib_path, &out_path).map_err(|err| {
+            format!(
+                "Could not install ONNX Runtime library {}: {err}",
+                dylib_path.display()
+            )
+        })?;
+
+        let is_default_runtime_library = out_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name == runtime_library_file_name())
+            .unwrap_or(false);
+
+        if is_default_runtime_library || runtime_path.is_none() {
+            runtime_path = Some(out_path);
+        }
+    }
+
+    let Some(runtime_path) = runtime_path else {
+        return Err("libonnxruntime.dylib was not found inside the downloaded archive.".into());
+    };
+
+    let default_path = default_runtime_library_path()?;
+    if runtime_path != default_path {
+        fs::copy(&runtime_path, &default_path).map_err(|err| {
+            format!(
+                "Could not create default ONNX Runtime library {}: {err}",
+                default_path.display()
+            )
+        })?;
+        return Ok(default_path);
+    }
+
+    Ok(runtime_path)
+}
+
+#[cfg(target_os = "macos")]
+fn find_macos_runtime_libraries_recursive(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = fs::read_dir(root) else {
+        return found;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(find_macos_runtime_libraries_recursive(&path));
+            continue;
+        }
+
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(is_macos_onnx_runtime_library_name)
+            .unwrap_or(false)
+        {
+            found.push(path);
+        }
+    }
+
+    found
 }
 
 fn extract_model_bundle_zip(zip_bytes: &[u8], target_dir: &Path) -> Result<(), String> {
@@ -2926,17 +3110,17 @@ fn install_status_for_settings(settings: &WakeWordSettings) -> WakeWordInstallSt
         None
     } else if let Some(path) = settings.wake_word_runtime_path.as_deref() {
         Some(format!(
-            "Configured ONNX Runtime DLL was not found: {}",
+            "Configured {} was not found: {}",
+            runtime_library_label(),
             path.trim()
         ))
     } else {
         Some(format!(
-            "ONNX Runtime is not configured. Select onnxruntime.dll or place it under {}.",
-            default_runtime_dll_path()
+            "ONNX Runtime is not configured. Select {} or place it under {}.",
+            runtime_library_label(),
+            default_runtime_library_path()
                 .map(|path| path.display().to_string())
-                .unwrap_or_else(
-                    |_| "%APPDATA%/OpenBlob/voice/runtime/onnxruntime/onnxruntime.dll".into()
-                )
+                .unwrap_or_else(|_| runtime_library_file_name().into())
         ))
     };
 
@@ -2944,7 +3128,10 @@ fn install_status_for_settings(settings: &WakeWordSettings) -> WakeWordInstallSt
     let message = if install_ready {
         "Wake-word runtime and model bundle are installed. Starting the listener is still explicit and wake-to-voice remains opt-in.".to_string()
     } else if !runtime_found {
-        "ONNX Runtime is missing. Select a local onnxruntime.dll or place it in the OpenBlob runtime folder.".to_string()
+        format!(
+            "ONNX Runtime is missing. Select a local {} or place it in the OpenBlob runtime folder.",
+            runtime_library_label()
+        )
     } else if model_status.model_missing {
         "Wake-word model bundle is missing. Select a local bundle or place one in the OpenBlob wake-word model folder.".to_string()
     } else if !model_status.manifest_valid {
@@ -3108,13 +3295,34 @@ pub async fn download_wake_word_runtime() -> Result<WakeWordInstallStatus, Strin
         "runtime download started; version={ONNX_RUNTIME_VERSION}"
     ));
 
-    let zip_bytes = download_bytes(ONNX_RUNTIME_WINDOWS_X64_URL).await?;
-    verify_sha256(&zip_bytes, ONNX_RUNTIME_WINDOWS_X64_SHA256)?;
+    #[cfg(target_os = "windows")]
+    let runtime_path = {
+        let zip_bytes = download_bytes(ONNX_RUNTIME_WINDOWS_X64_URL).await?;
+        verify_sha256(&zip_bytes, ONNX_RUNTIME_WINDOWS_X64_SHA256)?;
 
-    let dll_bytes = extract_onnxruntime_dll_from_zip(&zip_bytes)?;
-    let runtime_path = default_runtime_dll_path()?;
+        let library_bytes = extract_onnxruntime_library_from_zip(&zip_bytes)?;
+        let runtime_path = default_runtime_library_path()?;
 
-    write_file_atomic(&runtime_path, &dll_bytes)?;
+        write_file_atomic(&runtime_path, &library_bytes)?;
+        runtime_path
+    };
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let runtime_path = {
+        let tgz_bytes = download_bytes(ONNX_RUNTIME_MACOS_ARM64_URL).await?;
+        verify_sha256(&tgz_bytes, ONNX_RUNTIME_MACOS_ARM64_SHA256)?;
+        extract_onnxruntime_libraries_from_tgz(&tgz_bytes)?
+    };
+
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    let runtime_path = {
+        let tgz_bytes = download_bytes(ONNX_RUNTIME_MACOS_X64_URL).await?;
+        verify_sha256(&tgz_bytes, ONNX_RUNTIME_MACOS_X64_SHA256)?;
+        extract_onnxruntime_libraries_from_tgz(&tgz_bytes)?
+    };
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    return Err("ONNX Runtime download is not implemented for this OS yet.".into());
 
     let mut config = load_or_create_companion_config()?;
     config.wake_word_runtime_path = Some(path_string(&runtime_path));
@@ -3270,7 +3478,10 @@ mod tests {
     #[test]
     fn runtime_candidates_prefer_explicit_configured_path() {
         let dir = tempdir().unwrap();
-        let configured = dir.path().join("selected").join("onnxruntime.dll");
+        let configured = dir
+            .path()
+            .join("selected")
+            .join(runtime_library_file_name());
         let bundle = WakeWordModelBundle {
             bundle_dir: dir.path().join("bundle"),
             manifest_path: dir.path().join("bundle").join("manifest.json"),
@@ -3296,7 +3507,7 @@ mod tests {
             wake_word_runtime_candidate_paths(Some(&path_string(&configured)), Some(&bundle));
 
         assert_eq!(candidates.first(), Some(&configured));
-        let bundle_runtime = Path::new("runtime").join("onnxruntime.dll");
+        let bundle_runtime = Path::new("runtime").join(runtime_library_file_name());
         assert!(candidates
             .iter()
             .any(|path| path.ends_with(&bundle_runtime)));

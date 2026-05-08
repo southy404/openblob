@@ -408,15 +408,15 @@ function getCommandGroups(lang: UiLang): LocalizedCommandGroup[] {
           },
           {
             command: "öffne einstellungen",
-            description: "Windows-Einstellungen öffnen",
+            description: "Systemeinstellungen öffnen",
           },
           {
             command: "öffne explorer",
-            description: "Datei-Explorer öffnen",
+            description: "Dateimanager öffnen",
           },
           {
             command: "bildschirm sperren",
-            description: "Aktuelle Windows-Sitzung sperren",
+            description: "Aktuelle Sitzung sperren",
           },
           {
             command: "herunterfahren",
@@ -655,11 +655,11 @@ function getCommandGroups(lang: UiLang): LocalizedCommandGroup[] {
       icon: <MonitorSmartphone size={15} />,
       items: [
         { command: "open downloads", description: "Open the Downloads folder" },
-        { command: "open settings", description: "Open Windows Settings" },
-        { command: "open explorer", description: "Open File Explorer" },
+        { command: "open settings", description: "Open system settings" },
+        { command: "open explorer", description: "Open the file manager" },
         {
           command: "lock screen",
-          description: "Lock the current Windows session",
+          description: "Lock the current session",
         },
         {
           command: "shutdown",
@@ -803,6 +803,12 @@ function DevWindow() {
     /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
   );
   const [isWindows] = useState(() => /Windows/i.test(navigator.userAgent));
+  const wakeWordRuntimeLabel = isMacOS
+    ? "ONNX Runtime dylib"
+    : "ONNX Runtime DLL";
+  const wakeWordRuntimePlaceholder = isMacOS
+    ? "~/Library/Application Support/OpenBlob/voice/runtime/onnxruntime/libonnxruntime.dylib"
+    : "%APPDATA%/OpenBlob/voice/runtime/onnxruntime/onnxruntime.dll";
   const [wakeWordSettings, setWakeWordSettings] = useState<WakeWordSettings>({
     wake_word_enabled: false,
     wake_word_auto_listen_enabled: false,
@@ -1294,7 +1300,7 @@ function DevWindow() {
 
   const selectWakeWordRuntime = async () => {
     const path = window.prompt(
-      "Paste the full path to onnxruntime.dll. OpenBlob will save the path but will not start the microphone."
+      `Paste the full path to ${wakeWordRuntimeLabel}. OpenBlob will save the path but will not start the microphone.`
     );
     if (path == null) return;
 
@@ -2409,11 +2415,11 @@ function DevWindow() {
 
               {openSettingsPanels.wakeWord && (
                 <div className="settingsPanelBody">
-                  {!isWindows ? (
+                  {!isWindows && !isMacOS ? (
                     <div className="wakeNotice">
-                      Wake-word setup is currently available on Windows only.
-                      macOS support needs a platform-specific runtime and model
-                      packaging flow before these controls are shown.
+                      Wake-word setup is currently available on Windows and
+                      macOS only. This platform needs a local ONNX Runtime
+                      package before these controls can be used.
                     </div>
                   ) : (
                     <>
@@ -2507,7 +2513,7 @@ function DevWindow() {
                 </div>
 
                 <div className="field">
-                  <div className="fieldLabel">ONNX Runtime DLL</div>
+                  <div className="fieldLabel">{wakeWordRuntimeLabel}</div>
                   <input
                     className="textInput"
                     value={wakeWordSettings.wake_word_runtime_path || ""}
@@ -2517,7 +2523,7 @@ function DevWindow() {
                         wake_word_runtime_path: e.target.value || null,
                       }))
                     }
-                    placeholder="%APPDATA%/OpenBlob/voice/runtime/onnxruntime/onnxruntime.dll"
+                    placeholder={wakeWordRuntimePlaceholder}
                   />
                 </div>
 
@@ -2627,7 +2633,7 @@ function DevWindow() {
                         disabled={wakeWordInstallBusy}
                         onClick={() => void selectWakeWordRuntime()}
                       >
-                        Select ONNX Runtime DLL
+                        Select {wakeWordRuntimeLabel}
                       </button>
                       <button
                         className="saveBtn"
