@@ -14,19 +14,23 @@ tauri-build = { version = "2.5.6", features = [] }
 tauri = { version = "2.10.3", features = ["macos-private-api", "protocol-asset"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json", "blocking"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+sqlite-vec = "0.1.9"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
 enigo = "0.2"
 device_query = "2"
 cpal = "0.15"
 hound = "3.5"
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-24"] }
 base64 = "0.22"
 tempfile ="3"
 urlencoding = "2"
+uuid = { version = "1", features = ["v7", "serde"] }
 strsim = "0.11"
 walkdir = "2.5"
-tokio = { version = "1", features = ["rt", "time"] }
+tokio = { version = "1", features = ["rt", "time", "sync"] }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 url = "2"
@@ -42,6 +46,8 @@ anyhow = "1"
 thiserror = "2"
 bytemuck = "1"
 axum = "0.7"
+zip = "2"
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

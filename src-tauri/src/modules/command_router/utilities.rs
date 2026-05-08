@@ -3,7 +3,9 @@ use super::types::CompanionAction;
 use crate::modules::i18n::command_locale::command_locale;
 
 fn matches_any_contains(input: &str, phrases: &[String]) -> bool {
-    phrases.iter().any(|p| !p.trim().is_empty() && input.contains(p))
+    phrases
+        .iter()
+        .any(|p| !p.trim().is_empty() && input.contains(p))
 }
 
 fn matches_any_exact(input: &str, phrases: &[String]) -> bool {

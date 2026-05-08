@@ -4,28 +4,18 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 
 use crate::core::capabilities::registry::{
-    CAP_BROWSER_SEARCH_GOOGLE,
-    CAP_BROWSER_SEARCH_YOUTUBE,
-    CAP_MEDIA_PLAY_PAUSE,
-    CAP_SYSTEM_CANCEL_PENDING,
-    CAP_SYSTEM_CONFIRM_PENDING,
-    CAP_SYSTEM_LOCK_SCREEN,
-    CAP_SYSTEM_OPEN_APP,
-    CAP_SYSTEM_OPEN_DOWNLOADS,
-    CAP_SYSTEM_OPEN_EXPLORER,
-    CAP_SYSTEM_OPEN_SETTINGS,
-    CAP_SYSTEM_RESTART,
-    CAP_SYSTEM_SHUTDOWN,
-    CAP_VISION_CAPTURE_SCREEN,
+    CAP_BROWSER_SEARCH_GOOGLE, CAP_BROWSER_SEARCH_YOUTUBE, CAP_MEDIA_PLAY_PAUSE,
+    CAP_SYSTEM_CANCEL_PENDING, CAP_SYSTEM_CONFIRM_PENDING, CAP_SYSTEM_LOCK_SCREEN,
+    CAP_SYSTEM_OPEN_APP, CAP_SYSTEM_OPEN_DOWNLOADS, CAP_SYSTEM_OPEN_EXPLORER,
+    CAP_SYSTEM_OPEN_SETTINGS, CAP_SYSTEM_RESTART, CAP_SYSTEM_SHUTDOWN, CAP_VISION_CAPTURE_SCREEN,
 };
 use crate::core::capabilities::types::CapabilityRequest;
 use crate::core::executor::result::CapabilityResult;
+use crate::core::legacy::{app_open_runtime, browser_runtime};
 use crate::core::permissions::policy::is_allowed;
-use crate::modules::browser_automations;
 use crate::modules::context::ActiveContext;
+use crate::modules::session_memory;
 use crate::modules::system;
-use crate::core::legacy::app_open_runtime;
-
 
 const PENDING_ACTION_TTL: Duration = Duration::from_secs(12);
 
@@ -35,8 +25,7 @@ struct PendingAction {
     created_at: Instant,
 }
 
-static PENDING_ACTION: LazyLock<Mutex<Option<PendingAction>>> =
-    LazyLock::new(|| Mutex::new(None));
+static PENDING_ACTION: LazyLock<Mutex<Option<PendingAction>>> = LazyLock::new(|| Mutex::new(None));
 
 #[derive(Debug, Deserialize)]
 struct SearchPayload {
@@ -56,6 +45,28 @@ fn ok(id: impl Into<String>, message: impl Into<String>) -> CapabilityResult {
 
 fn err(id: impl Into<String>, message: impl Into<String>) -> CapabilityResult {
     CapabilityResult::err(id.into(), message.into())
+}
+
+fn normalize_open_target(target: &str) -> String {
+    target
+        .trim()
+        .to_lowercase()
+        .replace(" application", "")
+        .replace(" app", "")
+        .replace(" programm", "")
+        .replace(" program", "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn remember_opened_controlled_target(target: &str, command: &str) {
+    match target {
+        "spotify" => session_memory::set_controlled_media_service("spotify", "spotify", command),
+        "steam" => session_memory::set_controlled_media_service("steam", "steam", command),
+        other if !other.trim().is_empty() => session_memory::set_controlled_app(other, command),
+        _ => {}
+    }
 }
 
 fn set_pending_action(capability_id: &str) -> Result<(), String> {
@@ -94,23 +105,15 @@ fn confirm_message_for(capability_id: &str) -> &'static str {
     }
 }
 
-fn execute_confirmed_pending_action(
-    pending: PendingAction,
-) -> Result<CapabilityResult, String> {
+fn execute_confirmed_pending_action(pending: PendingAction) -> Result<CapabilityResult, String> {
     match pending.capability_id.as_str() {
         CAP_SYSTEM_SHUTDOWN => {
             system::shutdown_pc()?;
-            Ok(ok(
-                CAP_SYSTEM_CONFIRM_PENDING,
-                "Shutting down the PC.",
-            ))
+            Ok(ok(CAP_SYSTEM_CONFIRM_PENDING, "Shutting down the PC."))
         }
         CAP_SYSTEM_RESTART => {
             system::restart_pc()?;
-            Ok(ok(
-                CAP_SYSTEM_CONFIRM_PENDING,
-                "Restarting the PC.",
-            ))
+            Ok(ok(CAP_SYSTEM_CONFIRM_PENDING, "Restarting the PC."))
         }
         _ => Ok(err(
             CAP_SYSTEM_CONFIRM_PENDING,
@@ -151,23 +154,12 @@ pub async fn execute_capability(
 
             let query = payload.query.trim();
             if query.is_empty() {
-                return Ok(err(
-                    CAP_BROWSER_SEARCH_GOOGLE,
-                    "Search query was empty.",
-                ));
+                return Ok(err(CAP_BROWSER_SEARCH_GOOGLE, "Search query was empty."));
             }
 
-            let url = format!(
-                "https://www.google.com/search?q={}",
-                urlencoding::encode(query)
-            );
+            let message = browser_runtime::google_search(query).await?;
 
-            browser_automations::navigate_best_tab(&url).await?;
-
-            Ok(ok(
-                CAP_BROWSER_SEARCH_GOOGLE,
-                format!("Searching Google for '{}'.", query),
-            ))
+            Ok(ok(CAP_BROWSER_SEARCH_GOOGLE, message))
         }
 
         CAP_BROWSER_SEARCH_YOUTUBE => {
@@ -176,23 +168,12 @@ pub async fn execute_capability(
 
             let query = payload.query.trim();
             if query.is_empty() {
-                return Ok(err(
-                    CAP_BROWSER_SEARCH_YOUTUBE,
-                    "Search query was empty.",
-                ));
+                return Ok(err(CAP_BROWSER_SEARCH_YOUTUBE, "Search query was empty."));
             }
 
-            let url = format!(
-                "https://www.youtube.com/results?search_query={}",
-                urlencoding::encode(query)
-            );
+            let message = browser_runtime::youtube_search(query).await?;
 
-            browser_automations::navigate_best_tab(&url).await?;
-
-            Ok(ok(
-                CAP_BROWSER_SEARCH_YOUTUBE,
-                format!("Searching YouTube for '{}'.", query),
-            ))
+            Ok(ok(CAP_BROWSER_SEARCH_YOUTUBE, message))
         }
 
         CAP_SYSTEM_OPEN_APP => {
@@ -201,22 +182,27 @@ pub async fn execute_capability(
 
             let target = payload.target.trim();
             if target.is_empty() {
-                return Ok(err(
-                    CAP_SYSTEM_OPEN_APP,
-                    "Open-app target was empty.",
-                ));
+                return Ok(err(CAP_SYSTEM_OPEN_APP, "Open-app target was empty."));
             }
 
-            let message = app_open_runtime::open_app_target(
-                target,
-                payload.prefer_browser,
-            )?;
+            let normalized_target = normalize_open_target(target);
+
+            let message = if browser_runtime::controlled_web_service_home(&normalized_target)
+                .is_some()
+            {
+                browser_runtime::open_controlled_web_service(&normalized_target).await?
+            } else {
+                let message = app_open_runtime::open_app_target(target, payload.prefer_browser)?;
+                remember_opened_controlled_target(&normalized_target, "open_app");
+                message
+            };
 
             Ok(ok(CAP_SYSTEM_OPEN_APP, message))
         }
 
         CAP_SYSTEM_OPEN_DOWNLOADS => {
             system::open_downloads()?;
+            session_memory::set_controlled_app("File Explorer", "open_downloads");
             Ok(ok(
                 CAP_SYSTEM_OPEN_DOWNLOADS,
                 "Opened the Downloads folder.",
@@ -225,26 +211,19 @@ pub async fn execute_capability(
 
         CAP_SYSTEM_OPEN_SETTINGS => {
             system::open_settings()?;
-            Ok(ok(
-                CAP_SYSTEM_OPEN_SETTINGS,
-                "Opened Windows Settings.",
-            ))
+            session_memory::set_controlled_app("Settings", "open_settings");
+            Ok(ok(CAP_SYSTEM_OPEN_SETTINGS, "Opened Windows Settings."))
         }
 
         CAP_SYSTEM_OPEN_EXPLORER => {
             system::open_explorer()?;
-            Ok(ok(
-                CAP_SYSTEM_OPEN_EXPLORER,
-                "Opened File Explorer.",
-            ))
+            session_memory::set_controlled_app("File Explorer", "open_explorer");
+            Ok(ok(CAP_SYSTEM_OPEN_EXPLORER, "Opened File Explorer."))
         }
 
         CAP_SYSTEM_LOCK_SCREEN => {
             system::lock_screen()?;
-            Ok(ok(
-                CAP_SYSTEM_LOCK_SCREEN,
-                "Locking the screen.",
-            ))
+            Ok(ok(CAP_SYSTEM_LOCK_SCREEN, "Locking the screen."))
         }
 
         CAP_SYSTEM_SHUTDOWN | CAP_SYSTEM_RESTART => {
@@ -290,10 +269,7 @@ pub async fn execute_capability(
 
         CAP_MEDIA_PLAY_PAUSE => {
             system::media_play_pause()?;
-            Ok(ok(
-                CAP_MEDIA_PLAY_PAUSE,
-                "Toggled media playback.",
-            ))
+            Ok(ok(CAP_MEDIA_PLAY_PAUSE, "Toggled media playback."))
         }
 
         _ => Ok(err(

@@ -1,5 +1,9 @@
 import { LogicalPosition } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import {
+  readBlobAlwaysOnTop,
+  setWindowAlwaysOnTopSafely,
+} from "../window-pinning";
 
 const SUBTITLE_WIDTH = 1180;
 const SUBTITLE_HEIGHT = 190;
@@ -7,14 +11,17 @@ const SUBTITLE_BOTTOM_OFFSET = 150;
 
 export async function ensureSubtitleWindow() {
   const existing = await WebviewWindow.getByLabel("bubble-subtitle");
-  if (existing) return existing;
+  if (existing) {
+    await setWindowAlwaysOnTopSafely(existing, readBlobAlwaysOnTop());
+    return existing;
+  }
 
   const win = new WebviewWindow("bubble-subtitle", {
     url: "bubble-subtitle.html",
     title: "Bubble Subtitle",
     transparent: true,
     decorations: false,
-    alwaysOnTop: true,
+    alwaysOnTop: readBlobAlwaysOnTop(),
     shadow: false,
     skipTaskbar: true,
     resizable: false,

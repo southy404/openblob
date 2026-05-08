@@ -18,6 +18,7 @@ pub fn find_app_launch_target(_query: &str) -> Option<DiscoveredApp> {
 #[cfg(windows)]
 mod windows_impl {
     use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
     use std::sync::{Mutex, OnceLock};
 
     use walkdir::WalkDir;
@@ -39,6 +40,10 @@ mod windows_impl {
         let mut candidates: Vec<DiscoveredApp> = Vec::new();
 
         for (name, launch) in aliases {
+            if !alias_launch_is_available(launch) {
+                continue;
+            }
+
             let score = score_candidate(&q, &normalize(name));
             if score >= 0.80 || normalize(name).contains(&q) || q.contains(&normalize(name)) {
                 candidates.push(DiscoveredApp {
@@ -113,9 +118,9 @@ mod windows_impl {
         ];
 
         for hive in hives {
-            if let Ok(app_paths) = hive.open_subkey(
-                "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths",
-            ) {
+            if let Ok(app_paths) =
+                hive.open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths")
+            {
                 for sub in app_paths.enum_keys().flatten() {
                     let sub_norm = normalize(&sub);
                     let score = score_candidate(query, &sub_norm);
@@ -148,9 +153,7 @@ mod windows_impl {
         )];
 
         if let Ok(appdata) = std::env::var("APPDATA") {
-            roots.push(
-                PathBuf::from(appdata).join(r"Microsoft\Windows\Start Menu\Programs"),
-            );
+            roots.push(PathBuf::from(appdata).join(r"Microsoft\Windows\Start Menu\Programs"));
         }
 
         roots
@@ -312,6 +315,45 @@ mod windows_impl {
         candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
         candidates.into_iter().next()
     }
+
+    fn alias_launch_is_available(launch: &str) -> bool {
+        if is_builtin_shell_target(launch) {
+            return true;
+        }
+
+        if let Some(protocol) = launch.split_once(':').map(|(protocol, _)| protocol) {
+            return protocol_registered(protocol);
+        }
+
+        if launch.contains('\\') {
+            return Path::new(launch).exists();
+        }
+
+        command_exists_windows(launch)
+    }
+
+    fn is_builtin_shell_target(launch: &str) -> bool {
+        matches!(
+            launch,
+            "calc" | "mspaint" | "notepad" | "explorer" | "taskmgr"
+        )
+    }
+
+    fn protocol_registered(protocol: &str) -> bool {
+        RegKey::predef(HKEY_CLASSES_ROOT)
+            .open_subkey(protocol)
+            .is_ok()
+    }
+
+    fn command_exists_windows(command: &str) -> bool {
+        Command::new("where")
+            .arg(command)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(windows)]
@@ -354,9 +396,9 @@ fn alias_candidates() -> HashMap<&'static str, &'static str> {
         ("task manager", "taskmgr"),
         ("settings", "ms-settings:"),
         ("einstellungen", "ms-settings:"),
-        ("steam", "steam"),
-        ("discord", "discord"),
-        ("spotify", "spotify"),
+        ("steam", "steam://open/main"),
+        ("discord", "discord://-/"),
+        ("spotify", "spotify:"),
         ("chrome", "chrome"),
         ("edge", "msedge"),
         ("fl studio", "FL64"),

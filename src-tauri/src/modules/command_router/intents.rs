@@ -1,7 +1,9 @@
 use crate::modules::i18n::command_locale::command_locale;
 
 use super::constants::*;
-use super::extract::{detect_known_target, extract_after_prefixes, extract_number, extract_percent};
+use super::extract::{
+    detect_known_target, extract_after_prefixes, extract_number, extract_percent,
+};
 use super::fuzzy::{fuzzy_has_any, score, score_strings};
 use super::types::{IntentKind, IntentScore};
 
@@ -49,28 +51,29 @@ pub fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
         },
         IntentScore {
             kind: IntentKind::VolumeUp,
-            score: score(toks, VOLUME_UP_WORDS, 0.84, 1.8)
-                + score(toks, VOLUME_WORDS, 0.84, 0.8),
+            score: score(toks, VOLUME_UP_WORDS, 0.84, 1.8) + score(toks, VOLUME_WORDS, 0.84, 0.8),
         },
         IntentScore {
             kind: IntentKind::VolumeDown,
-            score: score(toks, VOLUME_DOWN_WORDS, 0.84, 1.8)
-                + score(toks, VOLUME_WORDS, 0.84, 0.8),
+            score: score(toks, VOLUME_DOWN_WORDS, 0.84, 1.8) + score(toks, VOLUME_WORDS, 0.84, 0.8),
         },
         IntentScore {
             kind: IntentKind::Mute,
-            score: score(toks, MUTE_WORDS, 0.84, 1.7)
-                + score(toks, VOLUME_WORDS, 0.82, 0.5),
+            score: score(toks, MUTE_WORDS, 0.84, 1.7) + score(toks, VOLUME_WORDS, 0.82, 0.5),
         },
         IntentScore {
             kind: IntentKind::Unmute,
-            score: score(toks, UNMUTE_WORDS, 0.84, 1.7)
-                + score(toks, VOLUME_WORDS, 0.82, 0.4),
+            score: score(toks, UNMUTE_WORDS, 0.84, 1.7) + score(toks, VOLUME_WORDS, 0.82, 0.4),
         },
         IntentScore {
             kind: IntentKind::MediaPlayPause,
             score: score(toks, PAUSE_WORDS, 0.84, 1.8)
-                + score(toks, &["music", "musik", "song", "track", "video"], 0.84, 0.6),
+                + score(
+                    toks,
+                    &["music", "musik", "song", "track", "video"],
+                    0.84,
+                    0.6,
+                ),
         },
         IntentScore {
             kind: IntentKind::MediaNext,
@@ -105,10 +108,22 @@ pub fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
         IntentScore {
             kind: IntentKind::OpenApp,
             score: score(toks, OPEN_WORDS, 0.88, 1.8)
-                + if detect_known_target(toks).is_some() { 1.5 } else { 0.0 }
+                + if detect_known_target(toks).is_some() {
+                    1.5
+                } else {
+                    0.0
+                }
                 + if extract_after_prefixes(
                     normalized,
-                    &["oeffne ", "oeffne mal ", "starte ", "start ", "open ", "launch ", "run "],
+                    &[
+                        "oeffne ",
+                        "oeffne mal ",
+                        "starte ",
+                        "start ",
+                        "open ",
+                        "launch ",
+                        "run ",
+                    ],
                 )
                 .is_some()
                 {
@@ -219,8 +234,7 @@ pub fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
         },
         IntentScore {
             kind: IntentKind::BrowserClickFirstResult,
-            score: if normalized.contains("erstes ergebnis")
-                || normalized.contains("first result")
+            score: if normalized.contains("erstes ergebnis") || normalized.contains("first result")
             {
                 2.5
             } else {
@@ -269,8 +283,7 @@ pub fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
         },
         IntentScore {
             kind: IntentKind::BrowserClickBestMatch,
-            score: score(toks, CLICK_WORDS, 0.82, 1.8)
-                + score(toks, RESULT_WORDS, 0.80, 0.3),
+            score: score(toks, CLICK_WORDS, 0.82, 1.8) + score(toks, RESULT_WORDS, 0.80, 0.3),
         },
         IntentScore {
             kind: IntentKind::BrowserContext,
@@ -303,7 +316,7 @@ pub fn best_intent(normalized: &str, toks: &[&str]) -> IntentKind {
             score: score(toks, EXPLAIN_WORDS, 0.84, 1.8)
                 + score(toks, &["text", "this", "that", "das"], 0.84, 0.5),
         },
-                IntentScore {
+        IntentScore {
             kind: IntentKind::OpenDownloads,
             score: score(toks, DOWNLOADS_WORDS, 0.88, 2.2),
         },

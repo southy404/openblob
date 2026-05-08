@@ -19,11 +19,7 @@ impl CapabilityResult {
         }
     }
 
-    pub fn ok_with_data(
-        route: impl Into<String>,
-        message: impl Into<String>,
-        data: Value,
-    ) -> Self {
+    pub fn ok_with_data(route: impl Into<String>, message: impl Into<String>, data: Value) -> Self {
         Self {
             success: true,
             message: message.into(),

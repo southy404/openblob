@@ -217,8 +217,7 @@ pub async fn process_best_available_transcript() -> Result<ProcessedTranscriptRe
     let json_str = extract_json(raw_content)
         .ok_or_else(|| format!("No JSON found in AI output:\n{}", raw_content))?;
 
-    let parsed: Value = serde_json::from_str(&json_str)
-        .unwrap_or_else(|_| serde_json::json!({}));
+    let parsed: Value = serde_json::from_str(&json_str).unwrap_or_else(|_| serde_json::json!({}));
 
     let faithful_transcript = parsed
         .get("faithful_transcript")

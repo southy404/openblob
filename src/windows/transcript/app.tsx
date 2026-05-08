@@ -1139,26 +1139,33 @@ function TranscriptApp() {
                     )}
                     Download default model
                   </button>
-                  <button className="btn" onClick={openBlackHoleDownload}>
-                    <Mic size={16} />
-                    Get BlackHole
-                  </button>
-                  <button className="btn" onClick={openAudioMidiSetup}>
-                    <AudioLines size={16} />
-                    Audio MIDI Setup
-                  </button>
-                  <button className="btn" onClick={openSoundSettings}>
-                    <UserRound size={16} />
-                    Sound Settings
-                  </button>
-                  <button className="btn" onClick={openMicPrivacy}>
-                    <CheckSquare size={16} />
-                    Mic Privacy
-                  </button>
-                  <button className="btn" onClick={openAccessibilityPrivacy}>
-                    <CheckSquare size={16} />
-                    Accessibility
-                  </button>
+                  {isMacOS && (
+                    <>
+                      <button className="btn" onClick={openBlackHoleDownload}>
+                        <Mic size={16} />
+                        Get BlackHole
+                      </button>
+                      <button className="btn" onClick={openAudioMidiSetup}>
+                        <AudioLines size={16} />
+                        Audio MIDI Setup
+                      </button>
+                      <button className="btn" onClick={openSoundSettings}>
+                        <UserRound size={16} />
+                        Sound Settings
+                      </button>
+                      <button className="btn" onClick={openMicPrivacy}>
+                        <CheckSquare size={16} />
+                        Mic Privacy
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={openAccessibilityPrivacy}
+                      >
+                        <CheckSquare size={16} />
+                        Accessibility
+                      </button>
+                    </>
+                  )}
                   {prereqs.default_input_device ? (
                     <div className="chip">
                       Input: {prereqs.default_input_device}

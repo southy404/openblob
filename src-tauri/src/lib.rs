@@ -30,11 +30,32 @@ mod modules {
     pub mod transcript;
     pub mod tts;
     pub mod voice;
+    pub mod wake_word;
     pub mod windows_discovery;
 }
 
 use crate::core::app::run_command_pipeline;
+use crate::modules::memory::context::{
+    build_memory_context_for_query_and_context_async, ActiveMemoryContext,
+};
+use crate::modules::memory::embeddings::backfill_missing_event_embeddings;
 use crate::modules::memory::episodic_memory::{append_episode, EpisodicMemoryEntry};
+use crate::modules::memory::events::{
+    privacy_tier_for_kind, MemoryEvent, MemoryEventKind, PrivacyTier,
+};
+use crate::modules::memory::import::{import_legacy_episodic_memory, import_legacy_semantic_facts};
+use crate::modules::memory::management::{
+    export_memory_json, forget_memory as forget_memory_store, wipe_memory as wipe_memory_store,
+    MemoryMutationReport,
+};
+use crate::modules::memory::reflection::{
+    reflect_memory as reflect_memory_store, ReflectiveSummary,
+};
+use crate::modules::memory::retention::apply_memory_retention as apply_memory_retention_store;
+use crate::modules::memory::writer::{
+    clear_memory_private_mode as clear_memory_private_mode_store, enable_memory_private_mode,
+    enqueue_memory_event, memory_private_mode_until, start_memory_writer,
+};
 use modules::companion::bonding::load_or_create_bonding_state;
 use modules::companion::personality::{load_or_create_personality_state, load_personality_state};
 use modules::context::{is_internal_companion_app, resolve_active_context};
@@ -44,12 +65,40 @@ use modules::profile::onboarding_state::load_or_create_onboarding_state;
 use modules::profile::user_profile::{load_or_create_user_profile, save_user_profile};
 
 fn initialize_companion_persistence() -> Result<(), String> {
-    let _config = load_or_create_companion_config()?;
+    let config = load_or_create_companion_config()?;
     let _onboarding = load_or_create_onboarding_state()?;
     let _personality = load_or_create_personality_state()?;
     let _bonding = load_or_create_bonding_state()?;
     let _user_profile = load_or_create_user_profile()?;
     let _semantic_memory = load_or_create_semantic_memory()?;
+    let report = import_legacy_episodic_memory()?;
+    if report.imported > 0 || report.skipped > 0 {
+        println!(
+            "[openblob] Imported {} legacy memory events into SQLite ({} skipped)",
+            report.imported, report.skipped
+        );
+    }
+    let semantic_report = import_legacy_semantic_facts()?;
+    if semantic_report.imported > 0 || semantic_report.skipped > 0 {
+        println!(
+            "[openblob] Imported {} legacy semantic facts into SQLite ({} skipped)",
+            semantic_report.imported, semantic_report.skipped
+        );
+    }
+    let retention_report = apply_memory_retention_store(&config.memory)?;
+    if retention_report.events > 0
+        || retention_report.facts > 0
+        || retention_report.summaries > 0
+        || retention_report.embeddings > 0
+    {
+        println!(
+            "[openblob] Applied memory retention: events={}, facts={}, summaries={}, embeddings={}",
+            retention_report.events,
+            retention_report.facts,
+            retention_report.summaries,
+            retention_report.embeddings
+        );
+    }
     Ok(())
 }
 
@@ -357,6 +406,53 @@ async fn ask_ollama(
 }
 
 #[tauri::command]
+fn export_memory() -> Result<String, String> {
+    export_memory_json()
+}
+
+#[tauri::command]
+fn forget_memory(query: String) -> Result<MemoryMutationReport, String> {
+    forget_memory_store(&query)
+}
+
+#[tauri::command]
+fn wipe_memory() -> Result<MemoryMutationReport, String> {
+    wipe_memory_store()
+}
+
+#[tauri::command]
+fn apply_memory_retention() -> Result<MemoryMutationReport, String> {
+    let config = load_or_create_companion_config()?;
+    apply_memory_retention_store(&config.memory)
+}
+
+#[tauri::command]
+async fn reflect_memory(scope: String) -> Result<ReflectiveSummary, String> {
+    reflect_memory_store(&scope).await
+}
+
+#[tauri::command]
+async fn backfill_memory_embeddings(limit: Option<usize>) -> Result<usize, String> {
+    backfill_missing_event_embeddings(limit.unwrap_or(100).clamp(1, 1_000)).await
+}
+
+#[tauri::command]
+fn set_memory_private_mode(minutes: Option<u32>) -> Result<String, String> {
+    Ok(enable_memory_private_mode(minutes.unwrap_or(30)))
+}
+
+#[tauri::command]
+fn clear_memory_private_mode() -> Result<(), String> {
+    clear_memory_private_mode_store();
+    Ok(())
+}
+
+#[tauri::command]
+fn get_memory_private_mode() -> Option<String> {
+    memory_private_mode_until()
+}
+
+#[tauri::command]
 async fn trigger_copy_shortcut() -> Result<(), String> {
     crate::core::legacy::input_runtime::trigger_copy_shortcut()
 }
@@ -450,7 +546,7 @@ async fn youtube_search_and_play(query: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn youtube_play_title(title: String) -> Result<String, String> {
-    crate::core::legacy::browser_runtime::youtube_play_best_match(title).await
+    crate::core::legacy::browser_runtime::youtube_search_and_play(title).await
 }
 
 #[tauri::command]
@@ -576,6 +672,28 @@ async fn handle_voice_command(app: tauri::AppHandle, input: String) -> Result<St
         return Ok(format!("Your name is {}.", owner_name));
     }
 
+    if normalized.contains("forget everything from today")
+        || normalized.contains("forget today")
+        || normalized.contains("vergiss alles von heute")
+    {
+        let report = forget_memory_store("today")?;
+        return Ok(format!(
+            "Forgot today's memory entries: {} events and {} summaries.",
+            report.events, report.summaries
+        ));
+    }
+
+    if let Some(topic) = normalized
+        .strip_prefix("forget about ")
+        .or_else(|| normalized.strip_prefix("forget memory about "))
+    {
+        let report = forget_memory_store(topic)?;
+        return Ok(format!(
+            "Forgot matching memory entries for '{}': {} events, {} facts, {} summaries.",
+            topic, report.events, report.facts, report.summaries
+        ));
+    }
+
     if is_internal_companion_app(&ctx.app_name) && active_app != "unknown" {
         ctx.app_name = active_app.clone();
 
@@ -636,10 +754,20 @@ pub fn run() {
                         || shortcut_str == "alt+space";
 
                     let is_voice = shortcut_str == "alt+keym" || shortcut_str == "alt+m";
+                    let is_private_memory = shortcut_str == "control+shift+keym"
+                        || shortcut_str == "ctrl+shift+keym"
+                        || shortcut_str == "control+shift+m"
+                        || shortcut_str == "ctrl+shift+m";
 
                     if is_toggle {
                         // Frontend bubble listens to `bubble-toggle`.
                         let _ = app.emit("bubble-toggle", ());
+                        return;
+                    }
+
+                    if is_private_memory {
+                        let until = enable_memory_private_mode(30);
+                        let _ = app.emit("memory-private-mode-enabled", until);
                         return;
                     }
 
@@ -650,8 +778,13 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            use axum::{extract::State, routing::post, Json, Router};
+            use axum::{
+                extract::{Query, State},
+                routing::{get, post},
+                Json, Router,
+            };
             use serde::{Deserialize, Serialize};
+            use serde_json::{json, Value};
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
             #[derive(Clone)]
@@ -669,6 +802,42 @@ pub fn run() {
             struct CommandResponse {
                 result: String,
                 action_taken: bool,
+            }
+
+            #[derive(Deserialize)]
+            struct MemoryContextQuery {
+                q: Option<String>,
+                app: Option<String>,
+                domain: Option<String>,
+                limit: Option<usize>,
+            }
+
+            #[derive(Serialize)]
+            struct MemoryContextResponse {
+                memory: String,
+                event_count: usize,
+                error: Option<String>,
+            }
+
+            #[derive(Deserialize)]
+            struct MemoryEventRequest {
+                kind: Option<String>,
+                source: Option<String>,
+                channel: Option<String>,
+                app_name: Option<String>,
+                domain: Option<String>,
+                user_input: Option<String>,
+                summary: Option<String>,
+                outcome: Option<String>,
+                importance: Option<f32>,
+                privacy_tier: Option<String>,
+                metadata: Option<Value>,
+            }
+
+            #[derive(Serialize)]
+            struct MemoryEventResponse {
+                queued: bool,
+                result: String,
             }
 
             async fn handle_external_command(
@@ -703,16 +872,36 @@ pub fn run() {
 
                 match run_command_pipeline(&state.app, &input, &ctx).await {
                     Ok(pipeline) => {
-                        let result_msg = pipeline
+                        let mut result_msg = pipeline
                             .result
                             .map(|r| r.message)
                             .unwrap_or_else(|| "NO_ACTION".to_string());
+                        let action_taken = result_msg != "NO_ACTION";
+
+                        if !action_taken {
+                            match crate::core::legacy::ollama_text_runtime::ask_ollama(
+                                "chat".to_string(),
+                                input.clone(),
+                                Some(input.clone()),
+                                None,
+                            )
+                            .await
+                            {
+                                Ok(answer) => {
+                                    result_msg = answer.content;
+                                }
+                                Err(err) => {
+                                    result_msg = format!("ERROR: {}", err);
+                                }
+                            }
+                        }
 
                         // Episode speichern
                         if result_msg != "NO_ACTION" {
+                            let channel = payload.channel.unwrap_or_else(|| "unknown".to_string());
                             let entry = EpisodicMemoryEntry::new(
                                 "external_command",
-                                &payload.channel.unwrap_or_else(|| "unknown".to_string()),
+                                &channel,
                                 "external",
                                 &input,
                                 &result_msg,
@@ -720,10 +909,21 @@ pub fn run() {
                                 0.6,
                             );
                             let _ = append_episode(&entry);
+
+                            if let Ok(config) = load_or_create_companion_config() {
+                                let event = MemoryEvent::successful_connector_command(
+                                    channel,
+                                    &input,
+                                    &result_msg,
+                                    "success",
+                                    &config.privacy,
+                                );
+                                let _ = enqueue_memory_event(event);
+                            }
                         }
 
                         Json(CommandResponse {
-                            action_taken: result_msg != "NO_ACTION",
+                            action_taken,
                             result: result_msg,
                         })
                     }
@@ -734,11 +934,103 @@ pub fn run() {
                 }
             }
 
+            async fn handle_memory_context(
+                Query(query): Query<MemoryContextQuery>,
+            ) -> Json<MemoryContextResponse> {
+                let active_context = if query.app.is_some() || query.domain.is_some() {
+                    Some(ActiveMemoryContext {
+                        app_name: query.app,
+                        context_domain: query.domain,
+                    })
+                } else {
+                    None
+                };
+
+                match build_memory_context_for_query_and_context_async(
+                    query.q.as_deref(),
+                    active_context,
+                    query.limit,
+                )
+                .await
+                {
+                    Ok(context) => Json(MemoryContextResponse {
+                        memory: context.memory,
+                        event_count: context.event_count,
+                        error: None,
+                    }),
+                    Err(err) => Json(MemoryContextResponse {
+                        memory: String::new(),
+                        event_count: 0,
+                        error: Some(err),
+                    }),
+                }
+            }
+
+            async fn handle_memory_event(
+                Json(payload): Json<MemoryEventRequest>,
+            ) -> Json<MemoryEventResponse> {
+                let kind = MemoryEventKind::from_str(
+                    payload.kind.as_deref().unwrap_or("connector_message"),
+                );
+                let source = payload
+                    .source
+                    .or(payload.channel.clone())
+                    .unwrap_or_else(|| "external".to_string());
+                let configured_tier = load_or_create_companion_config()
+                    .map(|config| privacy_tier_for_kind(kind, &config.privacy))
+                    .unwrap_or(PrivacyTier::Redacted);
+                let requested_tier = payload.privacy_tier.as_deref().map(PrivacyTier::from_str);
+                let privacy_tier = match requested_tier {
+                    Some(PrivacyTier::Transient) => PrivacyTier::Transient,
+                    Some(PrivacyTier::MetadataOnly)
+                        if configured_tier != PrivacyTier::Transient =>
+                    {
+                        PrivacyTier::MetadataOnly
+                    }
+                    Some(PrivacyTier::Full) if configured_tier == PrivacyTier::Full => {
+                        PrivacyTier::Full
+                    }
+                    _ => configured_tier,
+                };
+
+                let mut event = MemoryEvent::new(kind, source, privacy_tier)
+                    .with_importance(payload.importance.unwrap_or(0.5))
+                    .with_metadata(payload.metadata.unwrap_or_else(|| json!({})));
+
+                if let Some(app_name) = payload.app_name.or(payload.channel) {
+                    event = event.with_app_name(app_name);
+                }
+                if let Some(domain) = payload.domain {
+                    event = event.with_context_domain(domain);
+                }
+                if let Some(user_input) = payload.user_input {
+                    event = event.with_user_input(user_input);
+                }
+                if let Some(summary) = payload.summary {
+                    event = event.with_summary(summary);
+                }
+                if let Some(outcome) = payload.outcome {
+                    event = event.with_outcome(outcome);
+                }
+
+                let result = enqueue_memory_event(event);
+
+                Json(MemoryEventResponse {
+                    queued: matches!(
+                        result,
+                        crate::modules::memory::writer::EnqueueMemoryEventResult::Queued
+                    ),
+                    result: format!("{result:?}"),
+                })
+            }
+
             let app_handle = app.handle().clone();
 
             tauri::async_runtime::spawn(async move {
                 let router = Router::new()
                     .route("/command", post(handle_external_command))
+                    .route("/memory/context", get(handle_memory_context))
+                    .route("/memory/event", post(handle_memory_event))
                     .with_state(ExternalCommandState { app: app_handle });
 
                 let listener = match tokio::net::TcpListener::bind("127.0.0.1:7842").await {
@@ -801,6 +1093,25 @@ pub fn run() {
                 eprintln!("Failed to initialize companion persistence: {err}");
             }
 
+            if let Err(err) = start_memory_writer() {
+                eprintln!("Failed to start memory writer: {err}");
+            }
+
+            tauri::async_runtime::spawn(async {
+                if let Err(err) = reflect_memory_store("session").await {
+                    eprintln!("Failed to refresh session memory reflection: {err}");
+                }
+                if let Err(err) = reflect_memory_store("daily").await {
+                    eprintln!("Failed to refresh daily memory reflection: {err}");
+                }
+                if let Err(err) = reflect_memory_store("weekly").await {
+                    eprintln!("Failed to refresh weekly memory reflection: {err}");
+                }
+                if let Err(err) = backfill_missing_event_embeddings(20).await {
+                    eprintln!("Failed to backfill memory embeddings: {err}");
+                }
+            });
+
             let shortcut = app.global_shortcut();
 
             // On macOS, Ctrl+Space is commonly reserved by the OS (input source switcher).
@@ -823,12 +1134,25 @@ pub fn run() {
                 shortcut.register("Alt+M")?;
             }
 
+            if !shortcut.is_registered("Ctrl+Shift+M") {
+                shortcut.register("Ctrl+Shift+M")?;
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             ping_ollama,
             ensure_ollama_running,
             ask_ollama,
+            export_memory,
+            forget_memory,
+            wipe_memory,
+            apply_memory_retention,
+            reflect_memory,
+            backfill_memory_embeddings,
+            set_memory_private_mode,
+            clear_memory_private_mode,
+            get_memory_private_mode,
             trigger_copy_shortcut,
             get_cursor_position,
             get_active_app,
@@ -876,6 +1200,22 @@ pub fn run() {
             summarize_current_transcript,
             process_transcript,
             tts_download_default_piper_assets,
+            modules::wake_word::get_wake_word_settings,
+            modules::wake_word::update_wake_word_settings,
+            modules::wake_word::start_wake_word_listener,
+            modules::wake_word::stop_wake_word_listener,
+            modules::wake_word::get_wake_word_status,
+            modules::wake_word::get_wake_word_model_status,
+            modules::wake_word::get_wake_word_install_status,
+            modules::wake_word::verify_wake_word_runtime,
+            modules::wake_word::verify_wake_word_model_bundle,
+            modules::wake_word::list_wake_word_models,
+            modules::wake_word::set_wake_word_model_path,
+            modules::wake_word::set_wake_word_runtime_path,
+            modules::wake_word::open_wake_word_model_folder,
+            modules::wake_word::open_wake_word_runtime_folder,
+            modules::wake_word::download_wake_word_runtime,
+            modules::wake_word::download_wake_word_model_bundle,
             modules::system::get_system_volume,
             modules::system::set_system_volume,
             modules::system::change_system_volume,

@@ -131,6 +131,79 @@ fn passthrough_reply(
     }
 }
 
+fn service_from_context(context: &ActiveContext) -> Option<&'static str> {
+    let joined = format!(
+        "{} {} {}",
+        context.app_name, context.process_name, context.window_title
+    )
+    .to_lowercase();
+
+    if joined.contains("youtube") {
+        Some("youtube")
+    } else if joined.contains("spotify") {
+        Some("spotify")
+    } else if joined.contains("steam") {
+        Some("steam")
+    } else if joined.contains("discord") {
+        Some("discord")
+    } else {
+        None
+    }
+}
+
+fn remember_active_context_as_controlled(context: &ActiveContext, command: &str) {
+    match service_from_context(context) {
+        Some("youtube") => crate::modules::session_memory::set_active_controlled_target(
+            crate::modules::session_memory::ControlledTargetKind::WebService,
+            Some(&context.app_name),
+            Some("youtube"),
+            Some(&context.window_title),
+            Some(&context.process_name),
+            None,
+            command,
+        ),
+        Some("spotify") => crate::modules::session_memory::set_controlled_media_service(
+            "spotify",
+            &context.app_name,
+            command,
+        ),
+        Some("steam") => crate::modules::session_memory::set_controlled_media_service(
+            "steam",
+            &context.app_name,
+            command,
+        ),
+        Some(service) => crate::modules::session_memory::set_active_controlled_target(
+            crate::modules::session_memory::ControlledTargetKind::App,
+            Some(&context.app_name),
+            Some(service),
+            Some(&context.window_title),
+            Some(&context.process_name),
+            None,
+            command,
+        ),
+        None if context.domain == "browser" => {
+            crate::modules::session_memory::set_active_controlled_target(
+                crate::modules::session_memory::ControlledTargetKind::Browser,
+                Some(&context.app_name),
+                None,
+                Some(&context.window_title),
+                Some(&context.process_name),
+                None,
+                command,
+            )
+        }
+        None => crate::modules::session_memory::set_active_controlled_target(
+            crate::modules::session_memory::ControlledTargetKind::App,
+            Some(&context.app_name),
+            None,
+            Some(&context.window_title),
+            Some(&context.process_name),
+            None,
+            command,
+        ),
+    }
+}
+
 pub async fn execute_legacy_voice_command(
     app: &tauri::AppHandle,
     input: &str,
@@ -141,11 +214,22 @@ pub async fn execute_legacy_voice_command(
         CompanionAction::OpenApp {
             target,
             prefer_browser,
-        } => passthrough_reply(
-            input,
-            context,
-            app_open_runtime::open_app_target(target, *prefer_browser),
-        ),
+        } => {
+            let result = app_open_runtime::open_app_target(target, *prefer_browser);
+            if result.is_ok() {
+                let normalized = target.trim().to_lowercase();
+                match normalized.as_str() {
+                    "spotify" => crate::modules::session_memory::set_controlled_media_service(
+                        "spotify", "spotify", input,
+                    ),
+                    "steam" => crate::modules::session_memory::set_controlled_media_service(
+                        "steam", "steam", input,
+                    ),
+                    _ => crate::modules::session_memory::set_controlled_app(target, input),
+                }
+            }
+            passthrough_reply(input, context, result)
+        }
 
         CompanionAction::InsertText(text) => {
             let _target = app_open_runtime::ensure_external_focus("unknown")?;
@@ -205,11 +289,7 @@ pub async fn execute_legacy_voice_command(
             let state = crate::modules::session_memory::get_state();
 
             if !state.last_suggested_url.is_empty() {
-                app_open_runtime::open_url_prefer_browser(
-                    &state.last_suggested_url,
-                    false,
-                    false,
-                )?;
+                app_open_runtime::open_url_prefer_browser(&state.last_suggested_url, false, false)?;
                 return success_reply(
                     input,
                     context,
@@ -243,13 +323,11 @@ pub async fn execute_legacy_voice_command(
             passthrough_reply(input, context, browser_runtime::close_active_tab().await)
         }
 
-        CompanionAction::CloseTabByIndex { index } => {
-            passthrough_reply(
-                input,
-                context,
-                browser_runtime::browser_close_tab_by_index(*index).await,
-            )
-        }
+        CompanionAction::CloseTabByIndex { index } => passthrough_reply(
+            input,
+            context,
+            browser_runtime::browser_close_tab_by_index(*index).await,
+        ),
 
         CompanionAction::NewWindow => {
             passthrough_reply(input, context, browser_runtime::new_window().await)
@@ -271,33 +349,27 @@ pub async fn execute_legacy_voice_command(
             passthrough_reply(input, context, browser_runtime::browser_scroll_up().await)
         }
 
-        CompanionAction::BrowserTypeText { text } => {
-            passthrough_reply(
-                input,
-                context,
-                browser_runtime::browser_type_text(text.clone()).await,
-            )
-        }
+        CompanionAction::BrowserTypeText { text } => passthrough_reply(
+            input,
+            context,
+            browser_runtime::browser_type_text(text.clone()).await,
+        ),
 
         CompanionAction::BrowserSubmit => {
             passthrough_reply(input, context, browser_runtime::browser_submit().await)
         }
 
-        CompanionAction::BrowserClickBestMatch { text } => {
-            passthrough_reply(
-                input,
-                context,
-                browser_runtime::browser_click_best_match(text.clone()).await,
-            )
-        }
+        CompanionAction::BrowserClickBestMatch { text } => passthrough_reply(
+            input,
+            context,
+            browser_runtime::browser_click_best_match(text.clone()).await,
+        ),
 
-        CompanionAction::BrowserClickButtonByText { text } => {
-            passthrough_reply(
-                input,
-                context,
-                browser_runtime::browser_click_best_match(text.clone()).await,
-            )
-        }
+        CompanionAction::BrowserClickButtonByText { text } => passthrough_reply(
+            input,
+            context,
+            browser_runtime::browser_click_best_match(text.clone()).await,
+        ),
 
         CompanionAction::BrowserContext => {
             let browser_ctx = browser_runtime::browser_get_context().await?;
@@ -326,8 +398,32 @@ pub async fn execute_legacy_voice_command(
             passthrough_reply(input, context, browser_runtime::youtube_search(query).await)
         }
 
-        CompanionAction::YouTubePlayTitle { title } => {
-            passthrough_reply(input, context, browser_runtime::youtube_play_title(title).await)
+        CompanionAction::YouTubePlayTitle { title } => passthrough_reply(
+            input,
+            context,
+            browser_runtime::youtube_play_title(title).await,
+        ),
+
+        CompanionAction::PlayOnService { service, query } => {
+            let result = app_open_runtime::play_on_service(service, query);
+            if result.is_ok() {
+                crate::modules::session_memory::set_controlled_media_service(
+                    service, service, input,
+                );
+            }
+            passthrough_reply(input, context, result)
+        }
+
+        CompanionAction::UseActiveWindow => {
+            remember_active_context_as_controlled(context, input);
+            success_reply(
+                input,
+                context,
+                format!(
+                    "Using {} as the active controlled target.",
+                    context.app_name
+                ),
+            )
         }
 
         CompanionAction::BrowserOpenUrl {
@@ -335,39 +431,29 @@ pub async fn execute_legacy_voice_command(
             new_tab,
             new_window,
             incognito,
-        } => {
-            passthrough_reply(
-                input,
-                context,
-                browser_runtime::browser_open_url(
-                    url.clone(),
-                    *new_tab,
-                    *new_window,
-                    *incognito,
-                )
-                .await,
-            )
-        }
+        } => passthrough_reply(
+            input,
+            context,
+            browser_runtime::browser_open_url(url.clone(), *new_tab, *new_window, *incognito).await,
+        ),
 
-        CompanionAction::BrowserClickLinkByText { text, new_tab } => {
-            passthrough_reply(
-                input,
-                context,
-                browser_runtime::browser_click_link_by_text(text.clone(), *new_tab).await,
-            )
-        }
+        CompanionAction::BrowserClickLinkByText { text, new_tab } => passthrough_reply(
+            input,
+            context,
+            browser_runtime::browser_click_link_by_text(text.clone(), *new_tab).await,
+        ),
 
-        CompanionAction::BrowserClickFirstResult => {
-            passthrough_reply(input, context, browser_runtime::browser_click_first_result().await)
-        }
+        CompanionAction::BrowserClickFirstResult => passthrough_reply(
+            input,
+            context,
+            browser_runtime::browser_click_first_result().await,
+        ),
 
-        CompanionAction::BrowserClickNthResult { index } => {
-            passthrough_reply(
-                input,
-                context,
-                browser_runtime::browser_click_nth_result(*index).await,
-            )
-        }
+        CompanionAction::BrowserClickNthResult { index } => passthrough_reply(
+            input,
+            context,
+            browser_runtime::browser_click_nth_result(*index).await,
+        ),
 
         CompanionAction::VolumeUp => {
             passthrough_reply(input, context, system_media_runtime::volume_up())
@@ -381,9 +467,7 @@ pub async fn execute_legacy_voice_command(
             passthrough_reply(input, context, system_media_runtime::set_volume(*percent))
         }
 
-        CompanionAction::Mute => {
-            passthrough_reply(input, context, system_media_runtime::mute())
-        }
+        CompanionAction::Mute => passthrough_reply(input, context, system_media_runtime::mute()),
 
         CompanionAction::Unmute => {
             passthrough_reply(input, context, system_media_runtime::unmute())
@@ -487,25 +571,21 @@ pub async fn execute_legacy_voice_command(
             success_reply(input, context, reply("youtube_ad_skip_not_found"))
         }
 
-        CompanionAction::WeatherToday { location } => {
-            passthrough_reply(
-                input,
-                context,
-                weather_runtime::weather_reply(location.clone()).await,
-            )
-        }
+        CompanionAction::WeatherToday { location } => passthrough_reply(
+            input,
+            context,
+            weather_runtime::weather_reply(location.clone()).await,
+        ),
 
         CompanionAction::StreamOpenTitle {
             service,
             title,
             autoplay: _,
-        } => {
-            passthrough_reply(
-                input,
-                context,
-                streaming_runtime::stream_open_title(service, title),
-            )
-        }
+        } => passthrough_reply(
+            input,
+            context,
+            streaming_runtime::stream_open_title(service, title),
+        ),
 
         CompanionAction::StreamRecommend {
             service,
@@ -513,42 +593,32 @@ pub async fn execute_legacy_voice_command(
             genre,
             kind,
             trending,
-        } => {
-            passthrough_reply(
-                input,
-                context,
-                streaming_runtime::stream_recommend(
-                    service.clone(),
-                    mood.clone(),
-                    genre.clone(),
-                    kind.clone(),
-                    *trending,
-                ),
-            )
-        }
+        } => passthrough_reply(
+            input,
+            context,
+            streaming_runtime::stream_recommend(
+                service.clone(),
+                mood.clone(),
+                genre.clone(),
+                kind.clone(),
+                *trending,
+            ),
+        ),
 
-        CompanionAction::StreamCapability { service } => {
-            passthrough_reply(
-                input,
-                context,
-                streaming_runtime::stream_capability(service.clone()),
-            )
-        }
+        CompanionAction::StreamCapability { service } => passthrough_reply(
+            input,
+            context,
+            streaming_runtime::stream_capability(service.clone()),
+        ),
 
-        CompanionAction::StreamOpenLastSuggestion => {
-            passthrough_reply(
-                input,
-                context,
-                streaming_runtime::stream_open_last_suggestion(),
-            )
-        }
+        CompanionAction::StreamOpenLastSuggestion => passthrough_reply(
+            input,
+            context,
+            streaming_runtime::stream_open_last_suggestion(),
+        ),
 
         CompanionAction::StreamMoreLikeLast => {
-            passthrough_reply(
-                input,
-                context,
-                streaming_runtime::stream_more_like_last(),
-            )
+            passthrough_reply(input, context, streaming_runtime::stream_more_like_last())
         }
 
         CompanionAction::CoinFlip => {
@@ -574,7 +644,11 @@ pub async fn execute_legacy_voice_command(
 
         CompanionAction::CurrentTime => {
             let now = Local::now();
-            success_reply(input, context, localized_time_phrase(now.hour(), now.minute()))
+            success_reply(
+                input,
+                context,
+                localized_time_phrase(now.hour(), now.minute()),
+            )
         }
 
         CompanionAction::CurrentDate => {
@@ -669,9 +743,7 @@ pub async fn execute_legacy_voice_command(
             success_reply(input, context, reply("snip_opened"))
         }
 
-        CompanionAction::ExplainSelection => {
-            Ok("NO_ACTION".into())
-        }
+        CompanionAction::ExplainSelection => Ok("NO_ACTION".into()),
 
         CompanionAction::None => Ok("NO_ACTION".into()),
 

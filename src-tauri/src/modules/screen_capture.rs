@@ -31,12 +31,7 @@ fn pick_screen_for_point(x: i32, y: i32) -> Result<Screen, String> {
     Err("No screen found for selected region.".into())
 }
 
-pub fn capture_region_to_file(
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-) -> Result<String, String> {
+pub fn capture_region_to_file(x: i32, y: i32, width: u32, height: u32) -> Result<String, String> {
     if width == 0 || height == 0 {
         return Err("Invalid snip region.".into());
     }

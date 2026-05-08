@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 pub enum CompanionAction {
     VolumeUp,
     VolumeDown,
-    SetVolume { percent: u8 },
+    SetVolume {
+        percent: u8,
+    },
     Mute,
     Unmute,
     ToggleMute,
@@ -13,9 +15,19 @@ pub enum CompanionAction {
     MediaNext,
     MediaPrev,
 
-    GoogleSearch { query: String },
-    YouTubeSearch { query: String },
-    YouTubePlayTitle { title: String },
+    GoogleSearch {
+        query: String,
+    },
+    YouTubeSearch {
+        query: String,
+    },
+    YouTubePlayTitle {
+        title: String,
+    },
+    PlayOnService {
+        service: String,
+        query: String,
+    },
 
     StreamOpenTitle {
         service: String,
@@ -35,7 +47,10 @@ pub enum CompanionAction {
         service: Option<String>,
     },
 
-    OpenApp { target: String, prefer_browser: bool },
+    OpenApp {
+        target: String,
+        prefer_browser: bool,
+    },
 
     Save,
     SaveAs,
@@ -45,7 +60,9 @@ pub enum CompanionAction {
 
     NewTab,
     CloseTab,
-    CloseTabByIndex { index: usize },
+    CloseTabByIndex {
+        index: usize,
+    },
     NewWindow,
     Incognito,
     Reload,
@@ -64,21 +81,30 @@ pub enum CompanionAction {
         text: String,
     },
     BrowserClickFirstResult,
-    BrowserClickNthResult { index: usize },
+    BrowserClickNthResult {
+        index: usize,
+    },
     BrowserBack,
     BrowserForward,
     BrowserScrollDown,
     BrowserScrollUp,
-    BrowserTypeText { text: String },
+    BrowserTypeText {
+        text: String,
+    },
     BrowserSubmit,
-    BrowserClickBestMatch { text: String },
+    BrowserClickBestMatch {
+        text: String,
+    },
     BrowserContext,
+    UseActiveWindow,
     YouTubePlay,
     YouTubePause,
     YouTubeSkipAd,
 
     InsertText(String),
-    InsertSnippet { key: String },
+    InsertSnippet {
+        key: String,
+    },
     KeyCombo(Vec<&'static str>),
     KeyPress(&'static str),
 
@@ -92,12 +118,16 @@ pub enum CompanionAction {
     YouTubeSeekBackward,
     CurrentTime,
     CurrentDate,
-    WeatherToday { location: Option<String> },
+    WeatherToday {
+        location: Option<String>,
+    },
     ExplainSelection,
     TakeScreenshot,
     CoinFlip,
     RollDice,
-    SetTimer { seconds: u64 },
+    SetTimer {
+        seconds: u64,
+    },
     CancelTimer,
     None,
 

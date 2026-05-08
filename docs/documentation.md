@@ -1,35 +1,43 @@
 # OpenBlob — Developer Documentation
 
-> **Local-first AI desktop companion for Windows**  
-> Built with Tauri · React · Rust · Ollama
+> **Local-first AI desktop companion for Windows**
+> Built with Tauri v2 · React · Rust · Ollama · Local-first memory · Voice · Vision · Transcript · Connectors
 
 ---
 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Architecture](#architecture)
-3. [Getting Started](#getting-started)
-4. [Project Structure](#project-structure)
-5. [Core Systems](#core-systems)
+2. [Current Status](#current-status)
+3. [Architecture](#architecture)
+4. [Getting Started](#getting-started)
+5. [Project Structure](#project-structure)
+6. [Core Systems](#core-systems)
    - [Command Router](#command-router)
+   - [Capability Execution](#capability-execution)
+   - [Active Target Context](#active-target-context)
    - [Browser Automation](#browser-automation)
-   - [Screen & Vision](#screen--vision)
+   - [System and App Launch Runtime](#system-and-app-launch-runtime)
+   - [Screen and Vision](#screen-and-vision)
+   - [Voice Input](#voice-input)
+   - [Wake Word Foundation](#wake-word-foundation)
    - [Transcript System](#transcript-system)
    - [Memory System](#memory-system)
-   - [Companion Identity](#companion-identity)
+   - [Companion Identity and Profile](#companion-identity-and-profile)
    - [Text-to-Speech](#text-to-speech)
-6. [Command Reference](#command-reference)
 7. [Frontend Windows](#frontend-windows)
 8. [Tauri Bridge Layer](#tauri-bridge-layer)
-9. [AI & Model Integration](#ai--model-integration)
-10. [Configuration & Profiles](#configuration--profiles)
+9. [Configuration and Local Data](#configuration-and-local-data)
+10. [AI and Model Integration](#ai-and-model-integration)
 11. [Global Shortcuts](#global-shortcuts)
 12. [Blob Connectors](#blob-connectors)
-13. [Contributing](#contributing)
-14. [Known Issues](#known-issues)
-15. [Roadmap](#roadmap)
-16. [License](#license)
+13. [Command Reference](#command-reference)
+14. [Testing and Validation](#testing-and-validation)
+15. [Tech Stack](#tech-stack)
+16. [Contribution Guide](#contribution-guide)
+17. [Known Issues](#known-issues)
+18. [Roadmap](#roadmap)
+19. [License](#license)
 
 ---
 
@@ -37,83 +45,135 @@
 
 OpenBlob is an **open-source, local-first desktop companion** for Windows 10/11.
 
-It goes beyond a simple chatbot — it acts as an **operating-layer assistant** that can:
+It is not meant to be a simple chatbot window. OpenBlob is designed as a desktop companion that can live on the user's screen, understand context, react visually, execute safe system actions, answer questions, analyze screenshots, transcribe system audio, and be reachable from external channels such as Telegram, Discord, Slack, and Email.
 
-- execute desktop commands directly
-- execute deterministic system commands such as opening Downloads, Settings, Explorer, locking the screen, and handling protected power actions
-- control your browser via remote debugging
-- understand your screen through vision models
-- remember context across sessions
-- speak to you using TTS
-- grow with you through a configurable companion identity
-- be reached from anywhere via Telegram, Discord, Slack, and Email
+Core product idea:
 
-**Core design principle:**
+> Build a desktop copilot that feels alive, useful, extensible, and truly personal — while keeping privacy, user control, and local-first execution at the center.
 
-> Deterministic first. AI second.
+OpenBlob can currently:
 
-Whenever a command can be executed locally without a model, it is. AI is used as a capability layer — not the whole product.
+- execute deterministic Windows actions
+- open apps, folders, settings, URLs, and media services
+- control browser tabs through Chrome / Edge remote debugging
+- use local Ollama models for chat, explanation, fallback reasoning, and vision
+- analyze screenshots and selected screen regions
+- run a transcript system for local system-audio transcription
+- persist identity, profile, personality, bonding, episodic memory, and semantic memory
+- expose a local command server for external connectors
+- receive commands from Telegram, Discord, Slack, and Email through the Python connector layer
+- support protected confirmation flows for sensitive power commands
+- provide wake-word settings, microphone-test diagnostics, and the first local ONNX wake-word inference path for opt-in hands-free voice activation
 
-Protected system actions such as shutdown and restart use an explicit confirmation flow with timeout and cancellation support.
+Core design principle:
+
+> **Deterministic first. AI second.**
+
+Whenever a command can be safely and reliably executed through local deterministic code, OpenBlob should do that instead of asking an LLM to guess. AI is used as a capability layer, fallback layer, summarization layer, and intelligence layer — not as the only system controller.
+
+---
+
+## Current Status
+
+OpenBlob is in an **early but active development stage**.
+
+The project already has a functional Tauri/Rust/React foundation and several advanced experimental systems, but some modules are still being stabilized after refactors.
+
+Recent active areas:
+
+- hardening app/media launch routing
+- improving Spotify, Steam, Discord, YouTube, and browser fallback behavior
+- adding active controlled target context for follow-up commands
+- preventing normal chat messages from being swallowed by command routing
+- improving local memory foundations
+- adding wake-word settings, microphone-test runtime foundation, local ONNX wake-word inference, and wake-to-voice diagnostics
+- expanding dev/settings UI
+- improving contributor-friendly structure and documentation
+
+Important current expectation:
+
+- deterministic commands should route through the command/action pipeline
+- normal conversation should fall back to the regular LLM chat path
+- voice shortcut flow (`ALT + M`) must remain unaffected by wake-word work
+- wake-word functionality has a local ONNX path for compatible openWakeWord-style bundles, while unsupported model/runtime states fail explicitly
 
 ---
 
 ## Architecture
 
-OpenBlob is split into three major layers:
+OpenBlob is organized into layered systems.
 
-```
-┌─────────────────────────────────────────────────┐
-│                   UI Layer (React)               │
-│  bubble · dev-window · quick-menu · snip-panel  │
-│  transcript · snip-overlay · timer-overlay      │
-└────────────────────┬────────────────────────────┘
-                     │ invoke / emit / listen
-┌────────────────────▼────────────────────────────┐
-│              Bridge Layer (Tauri v2)             │
-│  Window management · Shortcuts · Event system   │
-└────────────────────┬────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────┐
-│             Runtime Layer (Rust)                 │
-│  Command routing · Browser automation           │
-│  Screen capture · Transcript · Memory · TTS     │
-│  External command server (localhost:7842)        │
-└─────────────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────┐
-│          Blob Connectors Layer (Python)          │
-│  Telegram · Discord · Slack · Email             │
-│  Memory bridge · Ollama fallback                │
-└─────────────────────────────────────────────────┘
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                         UI Layer                             │
+│ React windows: bubble · dev · quick menu · transcript        │
+│ snip overlay · snip panel · timer overlay                    │
+└─────────────────────────────┬───────────────────────────────┘
+                              │ Tauri invoke / events
+┌─────────────────────────────▼───────────────────────────────┐
+│                     Tauri Bridge Layer                       │
+│ Window management · global shortcuts · event bus · commands  │
+└─────────────────────────────┬───────────────────────────────┘
+                              │ Rust module calls
+┌─────────────────────────────▼───────────────────────────────┐
+│                       Runtime Layer                          │
+│ Command router · app launch · browser automation · context   │
+│ memory · screen capture · transcript · voice · wake-word     │
+│ TTS · local HTTP command server                              │
+└─────────────────────────────┬───────────────────────────────┘
+                              │ Local models / local APIs
+┌─────────────────────────────▼───────────────────────────────┐
+│                       AI Layer                               │
+│ Ollama text models · vision models · Whisper CLI · TTS       │
+└─────────────────────────────┬───────────────────────────────┘
+                              │ Optional external channels
+┌─────────────────────────────▼───────────────────────────────┐
+│                  Blob Connectors Layer                       │
+│ Python connectors: Telegram · Discord · Slack · Email        │
+│ Commands forwarded to localhost:7842 or Ollama fallback      │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### Data Flow
+### Main input flow
 
+```text
+User input
+(text / voice / shortcut / external channel)
+        │
+        ▼
+Normalize input
+        │
+        ▼
+Command router
+        │
+        ├─ confident deterministic action
+        │      ▼
+        │   capability executor
+        │      ▼
+        │   system/app/browser/media action
+        │
+        └─ no confident action intent
+               ▼
+            LLM chat / explain / fallback answer
 ```
-User Input (text / voice / external channel)
-       │
-       ▼
-Command Router
-(normalize → explicit command checks → intent scoring)
-       │
-       ▼
-CompanionAction
-       │
-       ▼
-Capability Mapper
-       │
-       ▼
-Capability Executor
-       │
-  ┌────┴───────────────┐
-  │                    │
-Deterministic Action   Ollama Fallback
-(system/browser/media) (ask / explain / translate / vision)
-  │                    │
-  └────┬───────────────┘
-       │
-Subtitle Output + TTS + Channel Response
+
+### External connector flow
+
+```text
+Telegram / Discord / Slack / Email
+        │
+        ▼
+blob_connectors Python process
+        │
+        ├─ OpenBlob running
+        │      ▼
+        │   POST localhost:7842/command
+        │      ▼
+        │   Rust command pipeline
+        │
+        └─ OpenBlob unavailable
+               ▼
+            local Ollama fallback response
 ```
 
 ---
@@ -122,110 +182,134 @@ Subtitle Output + TTS + Channel Response
 
 ### Requirements
 
-| Dependency     | Version  | Notes                            |
-| -------------- | -------- | -------------------------------- |
-| Windows        | 10 or 11 | Primary platform                 |
-| Node.js        | ≥ 18     | [nodejs.org](https://nodejs.org) |
-| Rust + Cargo   | stable   | [rustup.rs](https://rustup.rs)   |
-| Tauri CLI      | v2       | via `cargo install tauri-cli`    |
-| Ollama         | latest   | [ollama.com](https://ollama.com) |
-| Chrome or Edge | any      | Required for browser automation  |
-| Python         | ≥ 3.11   | Required for Blob Connectors     |
+| Dependency | Version | Notes |
+| --- | --- | --- |
+| Windows | 10 / 11 | Primary target platform |
+| Node.js | 18+ | Frontend tooling |
+| Rust / Cargo | stable | Tauri backend |
+| Tauri CLI | v2 | Recommended through npm script or cargo install |
+| Ollama | latest | Local LLM runtime |
+| Chrome or Edge | current | Browser automation via remote debugging |
+| Python | 3.11+ | Blob Connectors |
+| Whisper CLI | local install | Transcript system |
 
-### Install & Run
+### Install
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/your-org/openblob.git
+git clone https://github.com/southy404/openblob.git
 cd openblob
-
-# 2. Install frontend dependencies
 npm install
+```
 
-# 3. Start Ollama and pull required models
+### Ollama setup
+
+```bash
 ollama serve
-ollama pull llama3.1:8b        # default text model
-ollama pull gemma3             # default vision model
+ollama pull llama3.1:8b
+ollama pull gemma3
 
-# Optional: better vision quality
+# Optional vision model
 ollama pull qwen2.5vl:7b
 
-# 4. Run in development mode
-npm run tauri dev
+# Optional embedding model for memory experiments
+ollama pull nomic-embed-text
+```
 
-# 5. Build frontend only (no Tauri shell)
+### Run desktop app
+
+Recommended:
+
+```bash
+npm run tauri dev
+```
+
+Alternative from Rust side:
+
+```bash
+cd src-tauri
+cargo tauri dev
+```
+
+If `cargo tauri dev` fails with `no such command: tauri`, install the Tauri CLI or use the npm script:
+
+```bash
+cargo install tauri-cli --version "^2"
+```
+
+### Build frontend
+
+```bash
 npm run build
 ```
 
-### First Launch Notes
+### Rust checks
 
-- On first run, Windows Defender or SmartScreen may show warnings — this is expected due to system-level access (keyboard hooks, screen capture, browser debugging).
-- Allow the app through your antivirus if you trust it.
-- Chrome/Edge must have the remote debugging port `9222` available for browser automation.
+From the `src-tauri` folder:
+
+```bash
+cargo fmt
+cargo check -j 1
+cargo test --lib -j 1 -- --test-threads=1
+```
 
 ---
 
 ## Project Structure
 
-```
+```text
 openblob/
-├── src/                        # React frontend
-│   ├── windows/
-│   │   ├── bubble/             # Main companion interaction surface
-│   │   ├── bubble-dev/         # Dev window (settings + debug)
-│   │   ├── quick-menu/         # Fast-access command menu
-│   │   ├── transcript/         # Transcript window + AI post-processing
-│   │   ├── snip-overlay/       # Screenshot capture overlay
-│   │   ├── snip-panel/         # Screenshot analysis panel
-│   │   └── timer-overlay/      # Timer utility overlay
-│   └── main.tsx
+├── public/
+│   └── openblob-logo.png
+│
+├── src/
+│   ├── main.tsx
+│   └── windows/
+│       ├── bubble/
+│       │   ├── app.tsx
+│       │   └── style.css
+│       ├── bubble-dev/
+│       │   ├── app.tsx
+│       │   └── style.css
+│       ├── quick-menu/
+│       ├── transcript/
+│       ├── snip-overlay/
+│       ├── snip-panel/
+│       └── timer-overlay/
 │
 ├── src-tauri/
+│   ├── Cargo.toml
 │   └── src/
-│       ├── main.rs             # Tauri entry point + command registration
+│       ├── main.rs
+│       ├── lib.rs
+│       ├── core/
+│       │   ├── executor/
+│       │   └── legacy/
 │       ├── modules/
-│       │   ├── command_router/ # Core command parsing + routing
-│       │   │   ├── mod.rs
-│       │   │   ├── intents.rs  # Intent detection
-│       │   │   ├── matchers.rs # Command matching logic
-│       │   │   ├── fuzzy.rs    # Fuzzy matching
-│       │   │   ├── parser.rs   # Input parsing
-│       │   │   ├── types.rs    # Shared types
-│       │   │   └── normalize.rs
+│       │   ├── command_router/
 │       │   ├── companion/
-│       │   │   ├── personality.rs
-│       │   │   └── bonding.rs
 │       │   ├── memory/
-│       │   │   ├── episodic_memory.rs
-│       │   │   └── semantic_memory.rs
 │       │   ├── profile/
-│       │   │   ├── companion_config.rs
-│       │   │   ├── user_profile.rs
-│       │   │   └── onboarding_state.rs
-│       │   ├── tts/
-│       │   │   ├── manager.rs
-│       │   │   ├── piper.rs
-│       │   │   └── kokoro.rs
-│       │   ├── storage/
-│       │   │   ├── json_store.rs
-│       │   │   └── paths.rs
-│       │   ├── browser_automations.rs
-│       │   ├── screen_capture.rs
 │       │   ├── transcript/
-│       │   ├── session_memory.rs
+│       │   ├── tts/
+│       │   ├── storage/
+│       │   ├── browser_automations.rs
 │       │   ├── context.rs
 │       │   ├── context_resolver.rs
+│       │   ├── screen_capture.rs
+│       │   ├── session_memory.rs
+│       │   ├── steam_games.rs
 │       │   ├── system.rs
 │       │   ├── voice.rs
-│       │   └── steam_games.rs
+│       │   ├── wake_word.rs
+│       │   └── windows_discovery.rs
 │       └── i18n/
 │           └── commands/
 │               ├── en.json
 │               └── de.json
 │
-├── blob_connectors/            # External channel connectors (Python)
-│   ├── base.py                 # Message model + BlobConnector interface
-│   ├── run.py                  # Connector runner + AI handler
+├── blob_connectors/
+│   ├── base.py
+│   ├── run.py
 │   ├── requirements.txt
 │   ├── .env.example
 │   ├── README.md
@@ -235,418 +319,939 @@ openblob/
 │       ├── discord_connector.py
 │       └── email.py
 │
-├── docs/                       # Architecture + design docs
-├── tools/piper/                # Bundled TTS binary
-└── .github/                    # CI, issue templates, PR template
+├── docs/
+│   ├── documentation.md
+│   └── proposals/
+│       └── memory-system.md
+│
+├── tools/
+│   └── piper/
+│
+├── package.json
+├── README.md
+├── CONTRIBUTING.md
+└── LICENSE
 ```
 
 ---
 
 ## Core Systems
 
-### Command Router
-
-The command router is the brain of OpenBlob. It processes every user input and decides what to do with it.
+## Command Router
 
 **Location:** `src-tauri/src/modules/command_router/`
 
-#### Route Priority
+The command router turns natural language into structured actions.
 
-```
-1. Identity queries        → deterministic (name, owner)
-2. Utility commands        → time, date, weather, timer
-3. Browser commands        → open, search, navigate, click
-4. System / app commands   → launch, volume, media, deterministic OS actions
-5. Snip / vision commands  → screenshot, explain, translate
-6. Streaming commands      → Netflix, YouTube playback
-7. Ollama fallback         → ask, explain, translate (model)
-```
+It should be strict enough to avoid accidental execution, but flexible enough to handle German/English mixed inputs and fuzzy user phrasing.
 
-#### Deterministic system command path
+### Route priority
 
-High-priority operating-system commands are handled deterministically before fuzzy fallback logic when possible.
-
-Examples include:
-
-- opening Downloads
-- opening Windows Settings
-- opening File Explorer
-- locking the screen
-- protected power commands such as shutdown and restart
-
-This prevents critical commands from being misclassified as generic app-launch, screenshot, or suggestion-followup actions.
-
-#### Protected actions
-
-Destructive or disruptive actions such as shutdown and restart are never executed immediately from natural language alone.
-
-Instead, OpenBlob uses a guarded pending-action flow:
-
-1. user requests a protected action
-2. blob stores a short-lived pending action
-3. blob asks for confirmation
-4. user must explicitly confirm with a short follow-up such as `yes`
-5. the pending action expires automatically after a short timeout
-6. the action can also be cancelled explicitly with `no` / `cancel`
-
-This keeps the system deterministic while reducing the risk of accidental execution.
-
-#### Key modules
-
-| File           | Purpose                                              |
-| -------------- | ---------------------------------------------------- |
-| `intents.rs`   | Maps normalized input to recognized intents          |
-| `matchers.rs`  | Pattern matching per command group                   |
-| `fuzzy.rs`     | Fuzzy string similarity for tolerant matching        |
-| `parser.rs`    | Tokenizes and classifies input                       |
-| `normalize.rs` | Lowercasing, trimming, language normalization        |
-| `types.rs`     | `CompanionAction`, `IntentKind`, `IntentScore` types |
-
-#### Extending the router
-
-To add a new command:
-
-1. Define the intent in `intents.rs`
-2. Add matchers in `matchers.rs`
-3. Add i18n keys to `i18n/commands/en.json` and `de.json`
-4. Wire the handler in `mod.rs`
-
-#### External command server
-
-OpenBlob exposes a local HTTP server on `localhost:7842` that accepts commands from external sources (Blob Connectors). Commands go through the same pipeline as voice/text input from the UI.
-
-```
-POST http://localhost:7842/command
-Content-Type: application/json
-
-{ "input": "open spotify", "channel": "telegram" }
+```text
+1. Protected confirmations
+2. Identity / profile queries
+3. Utility commands
+4. App/system launch commands
+5. Browser and web navigation
+6. Media-service commands
+7. Screenshot / snip / vision commands
+8. Transcript commands
+9. Mini-game / companion interaction commands
+10. LLM fallback chat
 ```
 
-The server is started automatically when OpenBlob launches and only listens on localhost. External connectors fall back to Ollama automatically if this server is not available.
+### Important rule
+
+Normal chat must not be swallowed by the command router.
+
+Examples that should go to chat/fallback:
+
+- `how are you?`
+- `what do you think about this?`
+- `explain this to me`
+- `can you summarize that?`
+- `ich brauche kurz eine Einschätzung`
+
+Examples that should go to action routing:
+
+- `open spotify`
+- `open downloads`
+- `play Michael Jackson Thriller on YouTube`
+- `scroll down`
+- `click the first result`
+- `shutdown`
+
+If no confident action intent is detected, OpenBlob should return a regular LLM response and reset UI state correctly.
+
+### Deterministic protected actions
+
+Protected commands such as shutdown and restart must use confirmation.
+
+Flow:
+
+```text
+User: shutdown
+Blob: Are you sure?
+User: yes
+Blob: executes shutdown if confirmation is still valid
+```
+
+Cancellation:
+
+```text
+User: cancel
+User: no
+```
+
+Timeout:
+
+- pending protected actions expire automatically
+- stale confirmations should not execute anything
 
 ---
 
-### Browser Automation
+## Capability Execution
+
+Execution is split between newer core executor paths and legacy runtime modules.
+
+Relevant areas:
+
+- `src-tauri/src/core/executor/execute.rs`
+- `src-tauri/src/core/legacy/app_open_runtime.rs`
+- `src-tauri/src/core/legacy/browser_runtime.rs`
+- `src-tauri/src/core/legacy/voice_command_executor.rs`
+- `src-tauri/src/modules/system.rs`
+- `src-tauri/src/modules/browser_automations.rs`
+
+The execution layer is responsible for:
+
+- launching apps
+- opening folders
+- opening URLs
+- executing browser automation
+- triggering media services
+- controlling volume/media keys
+- producing user-facing status messages
+- emitting UI events
+- writing memory events where appropriate
+
+### Design direction
+
+A future `CapabilityRegistry` / `AppLaunchCapability` layer should centralize:
+
+- known app names
+- aliases
+- executable discovery
+- protocol handlers
+- web fallbacks
+- service-specific routing
+- platform-specific behavior
+
+This avoids growing the legacy runtime with too many hardcoded special cases.
+
+---
+
+## Active Target Context
+
+**Location:** `src-tauri/src/modules/session_memory.rs`
+
+OpenBlob has a lightweight controlled session concept for follow-up commands.
+
+The goal is to distinguish between:
+
+- the app/window the user manually focused
+- the app/browser/service OpenBlob intentionally opened or controlled
+
+Manual OS focus is treated as passive context. OpenBlob's own actions create the active controlled context.
+
+### Controlled session model
+
+```ts
+type ControlledTargetKind =
+  | "browser"
+  | "app"
+  | "web-service"
+  | "media-service";
+
+type ControlledSession = {
+  id: string;
+  kind: ControlledTargetKind;
+  appName?: string;
+  service?: "youtube" | "spotify" | "steam" | "discord" | string;
+  windowTitle?: string;
+  processName?: string;
+  url?: string;
+  createdBy: "openblob";
+  lastCommand?: string;
+  lastUpdatedAt: number;
+  isActiveControlledTarget: boolean;
+};
+```
+
+### Expected behavior
+
+```text
+User: open YouTube
+OpenBlob: opens YouTube and marks it as controlled browser/web-service
+
+User: play Thriller
+OpenBlob: routes follow-up to YouTube, not generic search
+```
+
+```text
+User: open Spotify
+OpenBlob: opens Spotify and marks Spotify as controlled media service
+
+User: play Thriller
+OpenBlob: routes follow-up to Spotify
+```
+
+```text
+User: scroll down
+OpenBlob: sends scroll to active controlled browser/service context
+```
+
+Explicit adoption:
+
+```text
+User: use this window
+OpenBlob: current focused window becomes controlled target
+```
+
+---
+
+## Browser Automation
 
 **Location:** `src-tauri/src/modules/browser_automations.rs`
 
-OpenBlob controls Chrome or Edge via the **Chrome DevTools Protocol (CDP)** on port `9222`.
+OpenBlob uses Chrome or Edge with Chrome DevTools Protocol (CDP) via remote debugging.
 
-#### Capabilities
+### Requirements
 
-- List and close tabs
-- Open URLs in active or new tab
-- Navigate forward/back
-- Click elements by visible text or selector
-- Type into input fields
-- Submit forms
-- Inspect current page context (title, URL, visible links)
-- YouTube search and play helpers via keyboard simulation
-
-#### Requirements
+Chrome/Edge should run with:
 
 ```bash
-# Chrome must be started with remote debugging enabled
 chrome.exe --remote-debugging-port=9222
 ```
 
-> OpenBlob attempts to launch the browser automatically with the correct flags. If it fails, start Chrome/Edge manually with the flag above.
+OpenBlob can attempt to launch browsers with the correct flags, but manual setup may still be needed in dev environments.
 
----
+### Capabilities
 
-### Screen & Vision
+- open URLs
+- open search pages
+- list tabs
+- activate tabs
+- close tabs
+- navigate back/forward
+- click visible text / first result
+- type into inputs
+- submit forms
+- inspect page title / URL / visible links
+- YouTube search-and-play helper
 
-**Location:** `src-tauri/src/modules/screen_capture.rs` · `snip_session.rs`
+### YouTube play behavior
 
-#### Analysis modes
+Expected behavior:
 
-| Mode        | What it does                                             |
-| ----------- | -------------------------------------------------------- |
-| OCR         | Extract visible text from screen                         |
-| Translate   | Detect language + translate on-screen text               |
-| Explain     | Describe what is shown                                   |
-| Search      | Generate a useful search query from the content          |
-| Game assist | Detect game UI / quest text / errors and suggest actions |
-
----
-
-### Transcript System
-
-**Location:** `src-tauri/src/modules/transcript/` · `src/windows/transcript/`
-
-The transcript system adds a **continuous listening and transcription pipeline** to OpenBlob using Windows WASAPI loopback capture and a local Whisper CLI.
-
-#### End-to-end flow
-
-```
-System audio (loopback)
-        │ WASAPI capture
-        │ Mono chunk buffering
-        │ Temporary WAV write
-        │ Local Whisper CLI
-        ▼
-Transcript segments
-        ├── Live transcript window
-        ├── Session persistence
-        └── AI post-processing
-             ├── Faithful transcript
-             ├── Speaker-style blocks
-             ├── Summary
-             └── Action items
+```text
+play Michael Jackson Thriller on YouTube
+spiele Michael Jackson Thriller auf YouTube
 ```
 
-#### Core files
+Should:
 
-| File                   | Purpose                                                      |
-| ---------------------- | ------------------------------------------------------------ |
-| `audio_capture.rs`     | Windows loopback capture, mono conversion, chunk buffering   |
-| `runtime.rs`           | Worker loop, chunk merge, transcription execution            |
-| `transcript_engine.rs` | WAV writing + Whisper CLI execution                          |
-| `session.rs`           | Active transcript session lifecycle and segment append       |
-| `processor.rs`         | AI-based cleanup, manuscript, speaker grouping, action items |
-| `transcript_store.rs`  | Markdown + JSON persistence for finished sessions            |
+1. open or reuse YouTube
+2. search the query
+3. wait for results
+4. choose a likely normal video result
+5. avoid Shorts/channels/playlists unless explicitly requested
+6. click/play the best available result
+
+Matching should be tolerant/fuzzy:
+
+```text
+micheal jackson thriller
+```
+
+should still resolve to a reasonable top result such as `Michael Jackson - Thriller`.
+
+### Generic browser follow-ups
+
+Commands like these should use the active controlled browser context:
+
+- `scroll down`
+- `scroll up`
+- `click first result`
+- `click play`
+- `go back`
+- `search for ...`
+
+If no active controlled browser context exists, OpenBlob should either ask or fall back safely.
 
 ---
 
-### Memory System
+## System and App Launch Runtime
 
-**Location:** `src-tauri/src/modules/memory/`
+OpenBlob supports app and system launch commands in English and German.
 
-OpenBlob uses a layered memory architecture that persists locally as JSON files. All memory files are also read by the Blob Connectors layer to provide context to external channel conversations.
+Examples:
 
-#### Memory layers
+- `open spotify`
+- `open steam`
+- `open discord`
+- `open downloads`
+- `open settings`
+- `open explorer`
+- `spiele Elden Ring auf Steam`
+- `play Thriller on Spotify`
 
-| Layer       | File                     | Purpose                                                   |
-| ----------- | ------------------------ | --------------------------------------------------------- |
-| Episodic    | `episodic_memory.jsonl`  | Timestamped log of past interactions and events           |
-| Semantic    | `semantic_memory.json`   | Recurring facts: known apps, topics, communication style  |
-| Session     | `session_memory.rs`      | Runtime context: last command, last search, browser state |
-| Personality | `personality_state.json` | Energy, curiosity, affection, playfulness, focus bias     |
-| Bonding     | `bonding_state.json`     | Relationship level, trust score, shared session count     |
+### Launch resolution layers
 
-#### Design rule
+```text
+1. direct known app aliases
+2. Windows app discovery
+3. protocol handlers
+4. Steam game/library lookup
+5. media-service routing
+6. web fallback
+7. Google search fallback
+```
 
-> Memory must never block execution.
+### Service-aware routing
 
-Memory is loaded and saved asynchronously. If a memory operation fails, core commands still execute.
+Some commands require service-specific behavior.
 
-#### Episodic memory entry structure
+Examples:
 
-Each entry in `episodic_memory.jsonl` contains:
+- `open spotify` should open Spotify normally
+- `play Thriller on Spotify` should route through Spotify-specific search/play behavior
+- `open steam` should open Steam normally
+- `spiele Elden Ring auf Steam` should resolve via Steam game/app/store routing
+- `open discord` should prefer installed app/protocol if available
+
+---
+
+## Screen and Vision
+
+**Locations:**
+
+- `src-tauri/src/modules/screen_capture.rs`
+- snip overlay / snip panel frontend windows
+
+OpenBlob can capture the screen or a selected region, then pass the image to a local vision model through Ollama.
+
+### Modes
+
+| Mode | Purpose |
+| --- | --- |
+| OCR | Extract visible text |
+| Explain | Describe what is visible |
+| Translate | Translate screen text |
+| Search | Generate search query from visual content |
+| Game assist | Detect game UI, quest logs, errors, or objectives |
+
+### Current commands
+
+- `screenshot`
+- `take screenshot`
+- `mach screenshot`
+- `capture screen`
+- `explain this`
+- `translate this`
+- `search this`
+
+### Privacy rule
+
+Screenshot/vision data should be processed locally by default. Any future external model path must be explicit and visible to the user.
+
+---
+
+## Voice Input
+
+**Location:** `src-tauri/src/modules/voice.rs` and `src/windows/bubble/app.tsx`
+
+The existing voice input flow is shortcut-driven.
+
+Shortcut:
+
+```text
+ALT + M
+```
+
+This flow should remain stable and independent from the wake-word foundation.
+
+### Current behavior
+
+- user presses voice shortcut
+- bubble enters voice/listening state
+- speech recognition captures command
+- recognized text is routed through the same command/chat pipeline
+- pressing the voice shortcut or cancel action during listening aborts the current voice session without hiding Blob or Bubble
+- starting a new text input cancels active listening, TTS playback, and subtitle chunks before routing the new input
+
+### Important regression guard
+
+Wake-word work must not break:
+
+- `ALT + M`
+- existing voice UI state
+- normal text chat fallback
+- normal command execution
+
+---
+
+## Wake Word Foundation
+
+**Location:** `src-tauri/src/modules/wake_word.rs`
+**Config location:** `src-tauri/src/modules/profile/companion_config.rs`
+**Dev UI:** `src/windows/bubble-dev/app.tsx`
+
+The wake-word system is a safe local foundation with the first local ONNX inference path. It validates openWakeWord-style bundles, loads local ONNX sessions when `onnxruntime.dll` is explicitly configured, normalizes microphone frames to mono 16 kHz windows, runs the mel-spectrogram -> embedding -> classifier chain for compatible float32 models, and emits `wake-word-detected` when the classifier score passes the manifest threshold.
+
+Current goal:
+
+> Provide settings, runtime status, local microphone-test listening infrastructure, and a free local openWakeWord provider path that can detect compatible local models without cloud services or paid providers.
+
+### Config fields
+
+| Field | Purpose | Default expectation |
+| --- | --- | --- |
+| `wake_word_enabled` | whether wake-word system is enabled | false |
+| `wake_word_phrase` | phrase shown/configured by user | default companion phrase |
+| `wake_word_sensitivity` | normalized sensitivity value | 0.0 - 1.0 |
+| `wake_word_provider` | selected provider | disabled / none / mic-test / mock / local-openwakeword / local-wakeword |
+| `wake_word_model_path` | optional explicit local model bundle path | null |
+| `wake_word_runtime_path` | optional explicit `onnxruntime.dll` path | null |
+| `wake_word_auto_listen_enabled` | whether wake detection starts the existing voice input flow | false |
+
+### Tauri commands
+
+| Command | Purpose |
+| --- | --- |
+| `get_wake_word_settings` | read current config |
+| `update_wake_word_settings` | save config |
+| `start_wake_word_listener` | explicitly start listener |
+| `stop_wake_word_listener` | stop listener |
+| `get_wake_word_status` | inspect runtime status |
+| `get_wake_word_model_status` | inspect selected/discovered bundle state |
+| `get_wake_word_install_status` | inspect runtime + model install readiness |
+| `verify_wake_word_runtime` | verify whether a local ONNX Runtime DLL is configured/found |
+| `verify_wake_word_model_bundle` | verify selected/discovered model manifest and required files |
+| `set_wake_word_model_path` | save an explicit local bundle path |
+| `set_wake_word_runtime_path` | save an explicit local `onnxruntime.dll` path |
+| `open_wake_word_model_folder` | open the AppData model install folder |
+| `open_wake_word_runtime_folder` | open the AppData ONNX Runtime install folder |
+| `download_wake_word_runtime` | explicit future download boundary; currently does not auto-download |
+| `download_wake_word_model_bundle` | explicit future download boundary; currently does not auto-download |
+
+### Runtime states
+
+| State | Meaning |
+| --- | --- |
+| `disabled` | wake word disabled |
+| `stopped` | enabled but not listening |
+| `starting` | listener is starting |
+| `listening` | microphone-test listener is active |
+| `no_input_device` | no microphone available |
+| `permission_error` | microphone permission/access problem |
+| `provider_missing` | selected provider is unavailable or not configured |
+| `model_missing` | local provider selected but no bundle is installed |
+| `invalid_model_bundle` | manifest or required files are invalid/missing |
+| `runtime_missing` | local ONNX Runtime is not configured |
+| `unsupported_model_shape` | local ONNX model shape cannot be used safely |
+| `error` | generic runtime error |
+
+### Current microphone-test runtime
+
+The current foundation uses a local desktop audio input crate (`cpal`) to open the default microphone input device in explicit test modes only.
+
+Supported test providers:
+
+- `mic-test`
+- `mock`
+
+Provider behavior:
+
+| Provider | Behavior |
+| --- | --- |
+| `disabled` / `none` | listener does not start |
+| `mic-test` | opens local mic, counts chunks, estimates RMS input level |
+| `mock` | development-only local detection simulation with cooldown |
+| `local-openwakeword` / `local-wakeword` | local model discovery, validation, ONNX loading, compatible local inference, threshold detection |
+
+### Status fields
+
+`get_wake_word_status` should return:
+
+- enabled
+- phrase
+- provider
+- sensitivity
+- state
+- status
+- message
+- listening
+- detected
+- provider_configured
+- selected_input_device
+- available_input_devices
+- last_error
+- last_started_at
+- last_stopped_at
+- last_audio_at
+- audio_chunks_seen
+- input_level
+
+### Privacy and safety rules
+
+- no cloud streaming
+- no raw microphone audio storage
+- no fake real wake-word detection claims
+- no direct command execution from wake detection events
+- no automatic listening on app startup by default
+- no microphone opening when provider is missing
+- no panic if no microphone exists
+- no blocking Tauri startup
+- no Tokio runtime creation inside async contexts
+- no runtime audio files in git
+
+### Manual wake-word foundation test
+
+1. Start OpenBlob.
+2. Open Dev / Settings window.
+3. Enable wake word.
+4. Set provider to `mic-test`.
+5. Press Start Listener.
+6. Confirm state becomes `listening`.
+7. Speak or make noise.
+8. Confirm `audio_chunks_seen`, `last_audio_at`, or `input_level` changes.
+9. Press Stop Listener.
+10. Confirm state becomes `stopped`.
+11. Disable wake word.
+12. Confirm listener does not run.
+13. Confirm `ALT + M` still works.
+
+### Remaining wake-word limitations
+
+- real detection depends on user-provided compatible ONNX bundles and local ONNX Runtime
+- some openWakeWord model shapes may still report `unsupported_model_shape`
+- no automatic model download or custom phrase training flow yet
+- no wake confirmation sound/visual yet
+- no permission onboarding UX yet
+- no device selector persistence yet
+
+---
+
+## Transcript System
+
+**Locations:**
+
+- `src-tauri/src/modules/transcript/`
+- `src/windows/transcript/`
+
+OpenBlob includes a local transcript pipeline optimized for system audio.
+
+### Current transcript flow
+
+```text
+System audio
+   │
+   ▼
+WASAPI loopback capture
+   │
+   ▼
+Chunk buffering and temporary WAV writing
+   │
+   ▼
+Local Whisper CLI transcription
+   │
+   ▼
+Live transcript window
+   │
+   ▼
+AI post-processing
+   ├─ faithful transcript
+   ├─ speaker-style grouped blocks
+   ├─ summary
+   └─ action items
+```
+
+### Core files
+
+| File | Purpose |
+| --- | --- |
+| `audio_capture.rs` | Windows loopback capture and mono conversion |
+| `runtime.rs` | worker lifecycle and transcription loop |
+| `transcript_engine.rs` | WAV writing and Whisper CLI execution |
+| `session.rs` | active transcript sessions and segment state |
+| `processor.rs` | AI cleanup, summary, speaker-style grouping |
+| `transcript_store.rs` | persistence of transcript output |
+
+### Commands
+
+- `start transcript`
+- `stop transcript`
+- `open transcript`
+- `process transcript`
+- `save transcript`
+
+### Current limitations
+
+- optimized for system audio, not microphone input
+- true acoustic diarization is not implemented yet
+- German quality can be weaker than English depending on model/config
+- transcript-to-memory extraction is planned but not complete
+
+---
+
+## Memory System
+
+**Locations:**
+
+- `src-tauri/src/modules/memory/`
+- `src-tauri/src/modules/session_memory.rs`
+- `docs/proposals/memory-system.md`
+
+OpenBlob uses a local-first layered memory system.
+
+### Memory design principle
+
+> Memory should improve the experience but must never block core execution.
+
+If memory loading, saving, embedding, or retrieval fails, OpenBlob should still execute the requested command where possible.
+
+### Current memory layers
+
+| Layer | File / module | Purpose |
+| --- | --- | --- |
+| Episodic memory | `episodic_memory.jsonl` | timestamped event log |
+| Semantic memory | `semantic_memory.json` | stable facts and preferences |
+| Session memory | `session_memory.rs` | runtime context and controlled sessions |
+| Personality | `personality_state.json` | energy, affection, curiosity, playfulness |
+| Bonding | `bonding_state.json` | relationship level, trust, shared sessions |
+| Profile/config | companion/user config files | identity and preferences |
+
+### Episodic memory
+
+Episodic memory records events such as commands, external-channel messages, outcomes, and summaries.
+
+Example:
 
 ```json
 {
   "version": 1,
   "id": "ep_1234567890",
-  "timestamp": "2025-04-19T22:00:00Z",
+  "timestamp": "2026-05-06T12:00:00Z",
   "kind": "external_command",
   "app_name": "telegram",
   "context_domain": "external",
   "user_input": "open spotify",
-  "summary": "OpenApp { target: spotify }",
+  "summary": "Opened Spotify from Telegram connector",
   "outcome": "success",
   "importance": 0.6
 }
 ```
 
-The `app_name` field reflects the channel (telegram, discord, slack, email, or desktop) so the blob knows where interactions originated.
+### Semantic memory
+
+Semantic memory contains facts that should persist beyond a single session:
+
+- preferred language
+- known apps
+- common user topics
+- communication style
+- recurring preferences
+- owner-related facts
+- external channel context
+
+### Session memory
+
+Session memory is runtime-only or short-lived state used during command execution.
+
+Examples:
+
+- last command
+- last browser target
+- active controlled session
+- pending protected action
+- last media service
+- current context hints
+
+### Memory embedding notes
+
+Embedding-backed memory retrieval is experimental. If the embedding model is missing, OpenBlob should log a warning and continue.
+
+Example expected warning:
+
+```text
+Memory embedding skipped: Embedding model not available. Pull with: ollama pull nomic-embed-text
+```
+
+This should not break chat or deterministic commands.
+
+### Planned memory evolution
+
+- SQLite-backed event store
+- semantic fact extraction
+- query-aware retrieval
+- embedding-backed retrieval
+- memory inspector UI
+- transcript-to-memory extraction
+- per-channel memory policy
+- privacy tiers for memory records
 
 ---
 
-### Companion Identity
+## Companion Identity and Profile
 
-**Location:** `src-tauri/src/modules/profile/companion_config.rs`
+**Locations:**
 
-#### Identity fields
+- `src-tauri/src/modules/profile/companion_config.rs`
+- `src-tauri/src/modules/profile/user_profile.rs`
+- `src-tauri/src/modules/profile/onboarding_state.rs`
 
-| Field                | Default | Notes                              |
-| -------------------- | ------- | ---------------------------------- |
-| `blob_name`          | "Blob"  | The companion's display name       |
-| `owner_name`         | ""      | Your name — used in self-reference |
-| `preferred_language` | "en"    | Controls i18n command parsing      |
+OpenBlob stores companion and owner identity locally.
 
-Identity is editable in the **Dev Window**. Both the desktop UI and Blob Connectors read these values — the blob will introduce itself by name and address you by name across all channels.
+### Key fields
+
+| Field | Purpose |
+| --- | --- |
+| `blob_name` | display name of the companion |
+| `owner_name` | user's name |
+| `preferred_language` | language preference |
+| `wake_word_enabled` | wake-word setting |
+| `wake_word_phrase` | configured phrase |
+| `wake_word_sensitivity` | wake-word sensitivity |
+| `wake_word_provider` | provider selection |
+
+Identity values should propagate to:
+
+- desktop UI
+- companion responses
+- dev/settings UI
+- Blob Connectors
+- memory context
 
 ---
 
-### Text-to-Speech
+## Text-to-Speech
 
 **Location:** `src-tauri/src/modules/tts/`
 
-| Engine | Notes                                  |
-| ------ | -------------------------------------- |
-| Piper  | Fast, local ONNX-based voice synthesis |
-| Kokoro | Alternative engine (experimental)      |
+OpenBlob has local TTS support.
+
+| Provider | Status | Notes |
+| --- | --- | --- |
+| Piper | active/local | ONNX-based local voice synthesis |
+| Kokoro | experimental | alternative local TTS path |
+
+Voice output should be optional and user-controlled. Long final assistant replies are split into local speech chunks before calling Piper. The subtitle overlay displays the same active chunk that is being spoken and clears on `stop_tts`, cancellation, or a newer interaction.
 
 ---
 
-## Command Reference
+# Frontend Windows
 
-### 💻 System Control
+Each frontend surface is a separate React window.
 
-| Command           | Description                                 |
-| ----------------- | ------------------------------------------- |
-| `open <app>`      | Launch a known application                  |
-| `open downloads`  | Open the Downloads folder                   |
-| `open settings`   | Open Windows Settings                       |
-| `open explorer`   | Open File Explorer                          |
-| `lock screen`     | Lock the current Windows session            |
-| `shutdown`        | Ask for confirmation, then shut down the PC |
-| `restart`         | Ask for confirmation, then restart the PC   |
-| `yes`             | Confirm a pending protected action          |
-| `no` / `cancel`   | Cancel a pending protected action           |
-| `volume up/down`  | Adjust system volume                        |
-| `mute` / `unmute` | Toggle audio                                |
-| `play music`      | Media control                               |
-| `next track`      | Skip to the next media track                |
-| `previous track`  | Go back to the previous media track         |
+| Window | Path | Purpose |
+| --- | --- | --- |
+| Bubble | `src/windows/bubble/` | main companion UI, chat, voice, subtitles |
+| Bubble Dev | `src/windows/bubble-dev/` | settings, diagnostics, wake-word controls |
+| Quick Menu | `src/windows/quick-menu/` | fast command menu |
+| Transcript | `src/windows/transcript/` | live transcript and processed transcript view |
+| Snip Overlay | `src/windows/snip-overlay/` | screenshot region selection |
+| Snip Panel | `src/windows/snip-panel/` | screenshot analysis results |
+| Timer Overlay | `src/windows/timer-overlay/` | timer/countdown UI |
 
-> Protected power commands use a short confirmation window and expire automatically if they are not confirmed in time.
+## Bubble UI state expectations
 
----
+Normal lifecycle:
 
-## Frontend Windows
+```text
+idle → thinking → speaking/responding → idle
+```
 
-Each UI surface is a separate React app running in its own Tauri window.
+Error lifecycle:
 
-| Window            | Path                         | Purpose                                               |
-| ----------------- | ---------------------------- | ----------------------------------------------------- |
-| **Bubble**        | `src/windows/bubble/`        | Primary interaction: input, voice, subtitles          |
-| **Dev Window**    | `src/windows/bubble-dev/`    | Internal settings, command catalog, identity editor   |
-| **Quick Menu**    | `src/windows/quick-menu/`    | Fast-access panel for common actions                  |
-| **Transcript**    | `src/windows/transcript/`    | Live transcription, processing, and transcript review |
-| **Snip Overlay**  | `src/windows/snip-overlay/`  | Region selection for screenshots                      |
-| **Snip Panel**    | `src/windows/snip-panel/`    | Analysis results for screenshots                      |
-| **Timer Overlay** | `src/windows/timer-overlay/` | Countdown/timer utility                               |
+```text
+idle → thinking → error → idle
+```
+
+Important regression guard:
+
+- normal chat should not get stuck in `thinking`
+- action commands should return a user-facing result
+- LLM fallback should reset state after response
+- command router failures should surface errors cleanly
 
 ---
 
-## Tauri Bridge Layer
+# Tauri Bridge Layer
 
 **Location:** `src-tauri/src/lib.rs`
 
-The Tauri layer connects the React frontend to the Rust backend, and also hosts the external command server used by Blob Connectors.
+The Tauri bridge registers commands and connects frontend windows to Rust modules.
 
-### External command server (Blob Connectors bridge)
+Responsibilities:
 
-The server is started in the `.setup()` block using axum and the AppHandle is passed via state so commands go through the full pipeline:
+- window creation and management
+- global shortcut registration
+- command registration
+- event emission
+- startup initialization
+- command server startup
+- shared app handle access
 
-```rust
-// Started automatically in .setup()
-tauri::async_runtime::spawn(async move {
-    let router = Router::new()
-        .route("/command", post(handle_external_command))
-        .with_state(ExternalCommandState { app: app_handle });
+## External command server
 
-    let listener = TcpListener::bind("127.0.0.1:7842").await.unwrap();
-    axum::serve(listener, router).await.unwrap();
-});
+OpenBlob runs a local HTTP command server on:
+
+```text
+http://127.0.0.1:7842
 ```
 
-The handler resolves context, runs `run_command_pipeline`, writes an episodic memory entry, and returns the result — identical to how voice commands are processed.
+Example request:
 
----
+```http
+POST /command
+Content-Type: application/json
 
-## AI & Model Integration
-
-OpenBlob integrates with **Ollama** for local model inference.
-
-### Default models
-
-| Model          | Use case                 | Pull command               |
-| -------------- | ------------------------ | -------------------------- |
-| `llama3.1:8b`  | Text, ask, explain       | `ollama pull llama3.1:8b`  |
-| `gemma3`       | Vision, screenshots      | `ollama pull gemma3`       |
-| `qwen2.5vl:7b` | Better vision (optional) | `ollama pull qwen2.5vl:7b` |
-
-### When Ollama is used
-
-Ollama is invoked as a **fallback only** when no deterministic route matches the input — both in the desktop UI and in Blob Connectors.
-
----
-
-## Configuration & Profiles
-
-All persistent data lives in local JSON files under `%APPDATA%\OpenBlob\`.
-
-### Data categories
-
-| Category         | Path                            | Contents                                   |
-| ---------------- | ------------------------------- | ------------------------------------------ |
-| Companion config | `config/companion_config.json`  | Name, language, future wake-word           |
-| User profile     | `config/user_profile.json`      | Owner name, app familiarity                |
-| Episodic memory  | `memory/episodic_memory.jsonl`  | Timestamped interaction log (JSONL format) |
-| Semantic memory  | `memory/semantic_memory.json`   | Learned facts and patterns                 |
-| Personality      | `memory/personality_state.json` | Energy, affection, playfulness, focus bias |
-| Bonding          | `memory/bonding_state.json`     | Relationship level, trust score            |
-| Onboarding state | `config/onboarding_state.json`  | Reserved for future onboarding             |
-| Transcript data  | `openblob-data/transcripts/`    | Session JSON, markdown, processing files   |
-
----
-
-## Global Shortcuts
-
-| Shortcut         | Action                  |
-| ---------------- | ----------------------- |
-| `CTRL + SPACE`   | Toggle companion bubble |
-| `ALT + M`        | Toggle voice input      |
-| `CTRL + ALT + S` | Start snip / screenshot |
-
----
-
-## Blob Connectors
-
-Blob Connectors is a Python layer that bridges external messaging channels to the OpenBlob core. It lives in the `blob_connectors/` directory and runs as a separate process alongside OpenBlob.
-
-### How it works
-
-```
-Telegram / Discord / Slack / Email
-              │
-     blob_connectors/run.py
-              │
-    ┌─────────┴──────────────┐
-    │                        │
-OpenBlob running?       Ollama fallback
-POST localhost:7842     POST localhost:11434
-    │
-run_command_pipeline (Rust)
-    │
-Desktop action + episodic memory entry
+{
+  "input": "open spotify",
+  "channel": "telegram"
+}
 ```
 
-When OpenBlob is running, commands like `open spotify` sent via Telegram are executed on the desktop exactly as if typed into the bubble. When OpenBlob is not running, the connector falls back to the Ollama model for conversational responses.
+The server should:
 
-### Quickstart
+1. accept local connector requests
+2. route them through the normal command pipeline
+3. write memory events
+4. return a channel-safe response
+
+It should only listen on localhost.
+
+---
+
+# Configuration and Local Data
+
+OpenBlob stores persistent local data in the user's app data directory.
+
+Typical categories:
+
+| Category | Example path | Purpose |
+| --- | --- | --- |
+| Companion config | `config/companion_config.json` | blob name, language, wake-word settings |
+| User profile | `config/user_profile.json` | owner name and profile hints |
+| Onboarding | `config/onboarding_state.json` | onboarding state |
+| Episodic memory | `memory/episodic_memory.jsonl` | event history |
+| Semantic memory | `memory/semantic_memory.json` | stable facts |
+| Personality | `memory/personality_state.json` | mood/personality values |
+| Bonding | `memory/bonding_state.json` | relationship state |
+| Transcript output | `openblob-data/transcripts/` | transcript sessions |
+
+Runtime-generated data should not be committed to git.
+
+---
+
+# AI and Model Integration
+
+OpenBlob uses Ollama for local AI inference.
+
+## Common models
+
+| Model | Purpose |
+| --- | --- |
+| `llama3.1:8b` | default text/chat/fallback |
+| `gemma3` | vision/screenshot analysis |
+| `qwen2.5vl:7b` | optional stronger vision |
+| `nomic-embed-text` | optional memory embeddings |
+
+## AI usage policy
+
+AI should be used when:
+
+- deterministic routing cannot confidently handle the input
+- user asks a normal conversational question
+- screenshot/vision explanation is needed
+- transcript cleanup/summary is requested
+- semantic memory extraction is needed
+
+AI should not be used to guess dangerous actions.
+
+Protected actions must stay deterministic and confirmation-based.
+
+---
+
+# Global Shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `CTRL + SPACE` | toggle companion UI |
+| `ALT + M` | voice input shortcut |
+| `CTRL + ALT + S` | screenshot/snip mode |
+
+Shortcut behavior should stay stable across routing, wake-word, and UI refactors.
+
+---
+
+# Blob Connectors
+
+**Location:** `blob_connectors/`
+
+Blob Connectors is a Python layer that allows OpenBlob to be reached through external channels.
+
+Supported channels:
+
+- Telegram
+- Discord
+- Slack
+- Email
+
+## Architecture
+
+```text
+External channel
+      │
+      ▼
+Connector adapter
+      │
+      ▼
+Normalized Message object
+      │
+      ├─ OpenBlob running
+      │      ▼
+      │   localhost:7842 command server
+      │
+      └─ OpenBlob unavailable
+             ▼
+          Ollama fallback
+```
+
+## Quickstart
 
 ```bash
 cd blob_connectors
 pip install -r requirements.txt
-cp .env.example .env   # fill in tokens
+cp .env.example .env
 python run.py
 ```
 
-### Supported channels
+Only connectors with configured tokens start.
 
-| Channel  | Library             | Auth method            | Server required  |
-| -------- | ------------------- | ---------------------- | ---------------- |
-| Telegram | python-telegram-bot | BotFather token        | No               |
-| Discord  | discord.py          | Developer Portal token | No               |
-| Slack    | slack-bolt          | Bot token + App token  | No (Socket Mode) |
-| Email    | stdlib IMAP/SMTP    | App password           | No               |
-
-### Environment variables
+## Environment variables
 
 ```dotenv
 # Telegram
 TELEGRAM_BOT_TOKEN=
 
+# Discord
+DISCORD_BOT_TOKEN=
+
 # Slack
 SLACK_BOT_TOKEN=
 SLACK_APP_TOKEN=
-
-# Discord
-DISCORD_BOT_TOKEN=
 
 # Email
 EMAIL_ADDRESS=
@@ -657,197 +1262,439 @@ IMAP_PORT=993
 SMTP_PORT=587
 ```
 
-Only channels with tokens set are started. You can run just one connector to start.
-
-### Message normalization
-
-All channels normalize to the same `Message` object before reaching the AI handler:
+## Message model
 
 ```python
 @dataclass
 class Message:
-    session_id: str     # unique per user/conversation
-    user_id: str        # sender identifier in that system
-    text: str           # cleaned message content
-    channel: str        # "telegram" | "discord" | "slack" | "email"
-    username: str       # display name
+    session_id: str
+    user_id: str
+    text: str
+    channel: str
+    username: str
     message_id: str
     timestamp: datetime
     attachments: list[Attachment]
-    raw: Any            # original payload for channel-specific features
+    raw: Any
 ```
 
-### Memory context
+## Memory integration
 
-Before each Ollama call, the connector reads OpenBlob's local memory files and builds a rich system prompt:
+Connectors read local OpenBlob memory and identity files to build context:
 
-- blob name and owner name from `companion_config.json` and `user_profile.json`
-- communication style, favorite apps, recurring topics from `semantic_memory.json`
-- recent interaction history from `episodic_memory.jsonl`
-- current mood derived from `personality_state.json`
-- relationship level and trust from `bonding_state.json`
+- companion name
+- owner name
+- semantic memory
+- episodic memory
+- personality state
+- bonding state
 - current channel
 
-This means the blob knows its own name, addresses you by name, and has context from desktop usage — across all channels.
-
-### Adding a new connector
-
-Subclass `BlobConnector` and implement three methods:
-
-```python
-from blob_connectors.base import BlobConnector, Message
-
-class MyConnector(BlobConnector):
-    def __init__(self):
-        super().__init__("myplatform")
-
-    async def receive_message(self, raw) -> Message | None:
-        # normalize raw payload to Message
-        # return None to ignore this message
-
-    async def send_response(self, original: Message, response: str) -> None:
-        # send response back to the user
-
-    async def start(self) -> None:
-        # start polling / webhook / socket
-
-    async def stop(self) -> None:
-        # clean shutdown
-```
-
-Then register it in `build_connectors()` in `run.py`.
-
-### Episodic memory from external channels
-
-When a command is executed via an external connector, the Rust backend writes an episodic memory entry with `app_name` set to the channel name. This means the blob's memory reflects activity across all surfaces — desktop, Telegram, Discord, Slack, and Email — in a single unified log.
+This lets the blob keep a consistent identity across desktop and external channels.
 
 ---
 
-## Contributing
+# Command Reference
 
-All contributions are welcome — code, design, documentation, ideas, and testing.
+## Browser and navigation
 
-### Before you start
+| Command | Description |
+| --- | --- |
+| `google <query>` | Google search |
+| `google nach <query>` | German Google search |
+| `youtube <query>` | YouTube search |
+| `open <url>` | open website |
+| `open youtube` | open YouTube |
+| `go back` / `zurück` | browser back |
+| `forward` | browser forward |
+| `scroll down` / `scroll up` | scroll active controlled browser |
+| `click first result` | click first visible result |
+| `type <text>` | type into active input |
+| `submit` | press Enter |
 
-- Open an **issue** before large changes to align on direction
-- Small fixes, refactors, and doc improvements can be submitted directly as PRs
-- Use the provided [PR template](.github/PULL_REQUEST_TEMPLATE.md)
+## Media and streaming
 
-### Areas open for contribution
+| Command | Description |
+| --- | --- |
+| `play <title> on YouTube` | search and play YouTube result |
+| `spiele <title> auf YouTube` | German YouTube play |
+| `play <title> on Spotify` | route to Spotify |
+| `play <game> on Steam` | route to Steam |
+| `next video` | next media item |
+| `forward <seconds>` | seek forward |
+| `rewind` | seek back |
 
-| Area            | Examples                                                         |
-| --------------- | ---------------------------------------------------------------- |
-| Core            | New commands, better routing, bug fixes                          |
-| Frontend        | UI polish, new windows, animations                               |
-| AI              | Better prompting, model routing, agent ideas                     |
-| TTS / Voice     | Voice pipeline improvements, new models                          |
-| Browser         | More reliable automation, consent handling                       |
-| Memory          | Memory inspector UI, smarter retrieval, RAG over episodic memory |
-| Mini games      | New game modes, blob interactions                                |
-| i18n            | New language support beyond `en` / `de`                          |
-| Tests           | Unit + integration tests across Rust modules                     |
-| Docs            | Architecture docs, guides, examples                              |
-| Blob Connectors | New channel connectors, calendar/tool integrations, WhatsApp     |
+## System control
 
-### Development tips
+| Command | Description |
+| --- | --- |
+| `open <app>` | launch known app |
+| `open downloads` | open Downloads folder |
+| `open settings` | open Windows Settings |
+| `open explorer` | open File Explorer |
+| `lock screen` | lock Windows session |
+| `shutdown` | protected shutdown flow |
+| `restart` | protected restart flow |
+| `yes` | confirm pending protected action |
+| `no` / `cancel` | cancel pending protected action |
+| `volume up/down` | volume control |
+| `mute` / `unmute` | audio toggle |
+| `next track` | media next |
+| `previous track` | media previous |
 
-- Run `npm run tauri dev` for hot-reload during development
-- Rust changes require a rebuild — use `cargo check` for faster feedback
-- Each window is independent — you can work on one UI surface without affecting others
-- The external command server on `localhost:7842` starts automatically with OpenBlob
+## Screenshot and vision
+
+| Command | Description |
+| --- | --- |
+| `screenshot` | start snip mode |
+| `take screenshot` | capture screen |
+| `mach screenshot` | German screenshot |
+| `explain this` | analyze screenshot/context |
+| `translate this` | translate screen text |
+| `search this` | generate search query |
+
+## Transcript
+
+| Command | Description |
+| --- | --- |
+| `start transcript` | start system-audio transcript |
+| `stop transcript` | stop transcript |
+| `open transcript` | open transcript window |
+| `process transcript` | generate AI post-processing |
+| `save transcript` | save session |
+
+## Voice and wake-word
+
+| Command / control | Description |
+| --- | --- |
+| `ALT + M` | manual voice input |
+| Dev UI wake toggle | enable/disable wake-word foundation |
+| Provider `mic-test` | local microphone test mode |
+| Start Listener | explicit mic-test listener start |
+| Stop Listener | stop mic-test listener |
+
+---
+
+# Testing and Validation
+
+## Recommended pre-PR checks
+
+From repository root:
+
+```bash
+npm run build
+```
+
+From `src-tauri`:
+
+```bash
+cargo fmt
+cargo check -j 1
+cargo test --lib -j 1 -- --test-threads=1
+```
+
+## Manual smoke tests
+
+### Normal chat regression
+
+```text
+how are you?
+what do you think about this?
+explain this to me
+```
+
+Expected:
+
+- regular LLM response
+- no action routing
+- blob state returns to idle
+
+### App launch
+
+```text
+open spotify
+open steam
+open discord
+open downloads
+open settings
+```
+
+Expected:
+
+- app/folder/settings opens
+- user-facing response appears
+- controlled context updated when relevant
+
+### YouTube
+
+```text
+open YouTube
+play Michael Jackson Thriller
+play Micheal Jackson Thriller on YouTube
+```
+
+Expected:
+
+- YouTube opens
+- follow-up uses YouTube context
+- search-and-play attempts a normal video result
+
+### Wake-word mic-test
+
+```text
+Enable wake word in Dev UI
+Set provider to mic-test
+Start listener
+Speak or make noise
+Stop listener
+```
+
+## Wake Word
+
+Wake-word support is optional, local-first, and disabled unless the user enables it and starts the listener. `ALT + M` remains the manual voice shortcut.
+
+Providers:
+
+- `mic-test` starts local microphone capture only to verify chunks, timestamps, and input level.
+- `mock` is development-only and can emit `wake-word-detected` from loud local input.
+- `local-openwakeword` / `local-wakeword` are the free local provider path. They discover and validate openWakeWord-style ONNX bundles under `%APPDATA%/OpenBlob/voice/models/wake-word/`, then the repo-local `voice/models/wake-word/` fallback.
+
+ONNX Runtime lookup order:
+
+1. explicit path saved in Dev UI (`wake_word_runtime_path`)
+2. `OPENBLOB_ONNX_RUNTIME_PATH`
+3. `%APPDATA%/OpenBlob/voice/runtime/onnxruntime/onnxruntime.dll`
+4. `onnxruntime.dll` next to the model bundle
+5. `runtime/onnxruntime.dll` inside the model bundle
+
+Bundle layout:
+
+```text
+voice/models/wake-word/
+  openwakeword/
+    manifest.json
+    melspectrogram.onnx
+    embedding.onnx
+    hey-openblob.onnx
+```
+
+The current local provider validates the manifest, checks missing files, normalizes microphone audio to mono 16 kHz fixed windows, and loads local ONNX sessions when `onnxruntime.dll` is available. Compatible bundles run through the mel-spectrogram -> embedding -> classifier chain, compare the classifier score against the manifest threshold, and emit `wake-word-detected`. Unsupported shapes, missing runtime, invalid bundles, or inference failures are surfaced as explicit status/error states. It does not call cloud services, does not require paid keys, does not auto-download models, and does not store raw microphone audio.
+
+The Dev / Wake Word settings panel has an Installation area for verifying ONNX Runtime and model bundle readiness, opening the AppData install folders, and saving explicit local paths. The download buttons are an explicit safe boundary for future work; they currently return a clear manual-install message and do not fetch, execute, enable, or start anything automatically.
+
+Licensing note: openWakeWord code is open-source, but pretrained model licenses can differ. Users should verify model bundle licensing before redistribution or commercial use. OpenBlob does not bundle paid or cloud wake-word providers by default.
+
+Wake-to-voice is controlled separately by `wake_word_auto_listen_enabled`. When enabled, the frontend reacts to a fresh `wake-word-detected` event, checks listener/Busy/cooldown guards, and starts the existing voice input flow; the event itself never executes commands directly.
 
 ---
 
 ## Known Issues
 
-| Area                           | Status                                                                   |
-| ------------------------------ | ------------------------------------------------------------------------ |
-| Snip capture region            | ⚠️ May only trigger reliably on the second attempt                       |
-| Quick menu window              | ⚠️ Event/capability flow is still being refined after the refactor       |
-| Browser automation reliability | ⚠️ Some commands remain less reliable after recent refactors             |
-| Deterministic system commands  | ⚠️ Initial Windows system command set is stable, but coverage is limited |
-| Protected action UX            | ⚠️ Confirm/cancel/timeout flow works, but richer UI feedback is planned  |
-| Multi-model routing fallback   | ⚠️ Fallback logic is still rough in some cases                           |
-| Voice recognition pipeline     | ⚠️ Occasional recognition failures still occur                           |
-| Context detection edge cases   | ⚠️ Fallback to the last known app is not always correct                  |
-| Error handling consistency     | ⚠️ Error handling is still inconsistent across modules                   |
-| Settings UI                    | ❌ Not yet implemented                                                   |
-| Identity propagation           | ⚠️ Not all response paths are identity-aware yet                         |
-| Transcript language quality    | ⚠️ English currently performs better than German                         |
-| Speaker separation             | ⚠️ AI-grouped, not true acoustic diarization yet                         |
-| Connector session persistence  | ⚠️ Session history is lost when a connector restarts                     |
+- state becomes `listening`
+- `audio_chunks_seen` increases
+- `last_audio_at` updates
+- `input_level` changes
+- stop returns state to `stopped`
+- `ALT + M` still works
+
+### Transcript
+
+```text
+start transcript
+play system audio
+stop transcript
+process transcript
+```
+
+Expected:
+
+- transcript window receives segments
+- processing creates summary/action-item output
 
 ---
 
-## Roadmap
+# Tech Stack
 
-### Phase 1 — Stabilization
+OpenBlob is built as a local-first Windows desktop app with a Rust backend, React frontend, local AI models, local audio pipelines, and optional external connector processes.
 
-- [ ] Stable command routing pipeline
-- [ ] Reliable snip capture
-- [ ] Browser automation consent flow
-- [ ] Settings UI
-- [ ] Improved error handling
-- [ ] Identity propagated to all answer paths
-- [ ] Expand deterministic Windows system command coverage
-- [ ] Improve protected-action UX (confirm / cancel / timeout feedback)
-- [ ] Add command debug visibility in the Dev Window
+| Layer | Technology | Notes |
+| --- | --- | --- |
+| Frontend | React + TypeScript + Vite | Multi-window UI for bubble, dev/settings, quick menu, transcript, snip, and overlays |
+| Desktop shell | Tauri v2 | Native Windows desktop shell, window management, commands, events, global shortcuts |
+| Backend runtime | Rust | Command routing, app/system control, browser automation, memory, transcript, voice, wake-word runtime |
+| Local command server | axum on `127.0.0.1:7842` | Used by Blob Connectors to send commands into the same Rust pipeline |
+| AI inference | Ollama | Local model runtime for chat fallback, explanation, context reasoning, and vision prompts |
+| Text model | `llama3.1:8b` by default | Can be swapped as the model-routing layer evolves |
+| Vision models | `gemma3`, `qwen2.5vl:7b`, LLaVA-style models | Used for screenshot and snip analysis depending on local model availability |
+| Embeddings | `nomic-embed-text` optional | Used/planned for semantic retrieval; missing embeddings must not break chat |
+| Motion / UI animation | Framer Motion | Blob movement, transitions, and expressive UI states |
+| Icons / UI assets | React components + local assets | Used across bubble/dev windows and overlays |
+| Text-to-speech | Piper ONNX + Kokoro experimental | Local voice output, provider selection still evolving |
+| Manual voice input | Browser/Web Speech API path + existing `ALT + M` flow | Must remain untouched while wake-word work evolves |
+| Wake-word foundation | Rust module + `cpal` mic runtime + local ONNX path | mic-test/mock plus openWakeWord bundle validation/session loading and compatible local inference; no cloud streaming; no raw audio storage |
+| Audio input | `cpal` | Device availability, default input device, local RMS/input-level metrics for dev UI |
+| Transcript audio capture | Windows WASAPI loopback | Captures system audio for local transcript sessions |
+| Speech-to-text | Local Whisper CLI | Used by transcript pipeline for audio chunks |
+| Browser automation | Chrome DevTools Protocol (CDP) | Chrome/Edge remote debugging for tab/page interaction and YouTube helpers |
+| App/system launch | Windows APIs, protocols, shell commands | App discovery, protocol routing, deterministic Windows actions |
+| Storage | Local JSON/JSONL files under `%APPDATA%\OpenBlob\` | Companion config, user profile, memory, personality, bonding, transcripts |
+| Planned/active memory storage | JSON/JSONL now, SQLite proposal/foundation evolving | Memory must never block command execution |
+| External connectors | Python 3.11+ | Telegram, Discord, Slack, Email bridge layer |
+| Connector networking | `aiohttp` + platform SDKs | Sends commands to localhost OpenBlob server or falls back to Ollama |
+| Testing | Rust unit tests + frontend build checks | `cargo test --lib -j 1 -- --test-threads=1`, `npm run build` when deps are available |
+| Primary platform | Windows 10 / 11 | Current target; cross-platform ideas are future work |
 
-### Phase 2 — Product Polish
+## Runtime requirements
 
-- [ ] Onboarding flow
-- [ ] Wake-word configuration
-- [ ] Memory inspector UI
-- [ ] Cleaner multi-model routing
-- [ ] Transcript window polish and session UX improvements
+| Requirement | Needed for | Notes |
+| --- | --- | --- |
+| Ollama running on `127.0.0.1:11434` | Local AI responses and vision/model fallback | Pull required models before testing AI flows |
+| Chrome or Edge with CDP port `9222` | Browser automation | OpenBlob can attempt launch, but manual startup may be needed |
+| Local microphone permission | Wake-word mic-test runtime | Only starts when explicitly triggered; no startup mic capture |
+| Whisper CLI configured | Transcript system | Used for local system-audio transcription |
+| Python env for `blob_connectors/` | Telegram/Discord/Slack/Email | Optional; desktop app works without connectors |
 
-### Phase 3 — Intelligence
+## Important stack boundaries
 
-- [ ] Persistent long-term memory
-- [ ] Structured reasoning pipeline
-- [ ] Tool-based agent system
-- [ ] Better multi-app context awareness
-- [ ] Better transcript cleanup and faithful manuscript generation
-- [ ] Stronger AI-assisted speaker grouping and transcript understanding
-- [ ] Semantic memory retrieval over episodic history (RAG)
-
-### Phase 4 — Platform & Connectors
-
-- [ ] Plugin / capability registry
-- [ ] Community skill packs
-- [ ] Personality and bonding influence
-- [ ] Cross-platform exploration
-- [ ] Future microphone + mixed audio transcript modes
-- [ ] Transcript-to-memory and meeting intelligence workflows
-- [ ] Google Calendar integration via Blob Connectors
-- [ ] Voice message support in Telegram connector
-- [ ] WhatsApp and Matrix connectors
-- [ ] Per-channel permission system
-
----
-
-## Tech Stack
-
-| Layer                   | Technology                        |
-| ----------------------- | --------------------------------- |
-| Frontend                | React + TypeScript + Vite         |
-| Desktop shell           | Tauri v2                          |
-| Backend runtime         | Rust                              |
-| External command server | axum (localhost:7842)             |
-| AI inference            | Ollama (multi-model)              |
-| Vision models           | gemma3 / qwen2.5vl / llama vision |
-| Motion / animations     | Framer Motion                     |
-| TTS                     | Piper (ONNX) + Kokoro             |
-| Speech-to-text          | Whisper CLI (local)               |
-| Audio capture           | Windows WASAPI loopback           |
-| Blob Connectors         | Python 3.11+ / aiohttp            |
-| Platform                | Windows 10 / 11                   |
+- **Wake word is local-first but still guarded:** `mic-test`/`mock` can listen locally and report chunks/input level; `local-openwakeword` can validate bundles, load ONNX sessions, and run compatible model chains, while unsupported shapes and runtime failures stay explicit.
+- **Transcript and wake word are different audio paths:** transcript uses system audio loopback; wake-word mic-test uses microphone input through `cpal`.
+- **No raw mic audio is stored:** the wake-word foundation only tracks lightweight runtime metrics like chunk count, last audio timestamp, and RMS input level.
+- **Deterministic actions should stay model-independent:** app/system/browser commands should not depend on LLM success when a safe deterministic route exists.
+- **Normal chat fallback must stay intact:** no confident action intent should mean regular LLM response, not swallowed router output.
 
 ---
 
-## License
+# Contribution Guide
 
-OpenBlob is licensed under the [MIT License](./LICENSE).
+Contributions are welcome from developers, designers, testers, writers, and AI experimenters.
+
+## Good first contribution areas
+
+- command aliases
+- German/English command improvements
+- UI polish
+- docs cleanup
+- bug reproduction notes
+- smoke test scripts
+- memory inspector UI
+- wake-word status UI improvements
+- connector improvements
+
+## Before larger changes
+
+Open an issue or discussion for:
+
+- architecture refactors
+- new provider integrations
+- new persistent data formats
+- new connector types
+- security-sensitive features
+- microphone/voice pipeline changes
+- protected system actions
+
+## PR checklist
+
+- explain user-facing behavior
+- list changed files/modules
+- mention safety/privacy implications
+- run Rust checks
+- run frontend build when possible
+- include manual smoke-test notes
+- avoid committing local runtime data
+
+---
+
+# Known Issues
+
+| Area | Status |
+| --- | --- |
+| Normal chat fallback | Must be guarded after routing changes |
+| Snip capture | Region capture may still be unreliable in some cases |
+| Browser automation | CDP and UI timing can be fragile |
+| YouTube play | Fuzzy search-and-play needs real desktop smoke tests |
+| Spotify/Steam routing | Depends on installed apps/protocol handlers |
+| Memory embeddings | Optional model may be missing; should not block execution |
+| Wake word | Local ONNX inference exists for compatible bundles; model/runtime compatibility still needs broader validation |
+| Mic permissions | Needs better UX and device selection |
+| Transcript diarization | Speaker grouping is AI-estimated, not true diarization |
+| Settings UI | Growing, but not final product UX |
+| Error handling | Still inconsistent across modules |
+| Connectors | Session persistence and permissions need more work |
+
+---
+
+# Roadmap
+
+## Phase 1 — Stabilization
+
+- [ ] keep normal chat fallback stable
+- [ ] stabilize command router confidence thresholds
+- [ ] reduce legacy launch routing complexity
+- [ ] add capability registry for apps/protocols/fallbacks
+- [ ] improve app discovery and launch reliability
+- [ ] improve YouTube search-and-play reliability
+- [ ] improve browser automation timing and consent handling
+- [ ] improve protected-action UI feedback
+- [ ] improve Dev Window command/debug visibility
+
+## Phase 2 — Voice and Wake Word
+
+- [x] wake-word settings foundation
+- [x] local microphone-test runtime foundation
+- [ ] microphone permission onboarding
+- [ ] input device selector
+- [x] wake-to-voice event bridge
+- [x] first real local wake-word inference over compatible openWakeWord ONNX bundles
+- [ ] broader model compatibility and evaluation fixture bundles
+- [ ] wake feedback sound/animation
+- [ ] keep `ALT + M` as fallback manual voice path
+
+## Phase 3 — Memory
+
+- [ ] SQLite-backed memory event store
+- [ ] semantic fact extraction
+- [ ] embedding-backed retrieval
+- [ ] memory inspector UI
+- [ ] transcript-to-memory extraction
+- [ ] per-channel memory policies
+- [ ] privacy tiers for memory
+
+## Phase 4 — Transcript and Meeting Intelligence
+
+- [ ] microphone + system-audio hybrid transcript mode
+- [ ] better Whisper model config
+- [ ] better German transcript quality
+- [ ] real diarization exploration
+- [ ] meeting-note templates
+- [ ] action-item extraction to tasks
+- [ ] transcript search and memory integration
+
+## Phase 5 — Platform and Connectors
+
+- [ ] plugin/capability registry
+- [ ] community skill packs
+- [ ] WhatsApp connector
+- [ ] Matrix / Element connector
+- [ ] Telegram voice message support
+- [ ] Google Calendar integration
+- [ ] per-channel permission system
+- [ ] persistent connector sessions
+
+## Phase 6 — UX and Companion Personality
+
+- [ ] onboarding flow
+- [ ] richer blob animations
+- [ ] more emotional states
+- [ ] personality influencing tone safely
+- [ ] bonding state visible in Dev UI
+- [ ] mini-games beyond Hide & Seek
+- [ ] polished glass/motion UI pass
+
+---
+
+# License
+
+OpenBlob is licensed under the [MIT License](../LICENSE).
 
 ---
 

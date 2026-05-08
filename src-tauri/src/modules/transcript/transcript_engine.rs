@@ -55,16 +55,7 @@ pub fn transcribe_with_whisper_cli(
 
     let output = Command::new(whisper_exe)
         .args([
-            "-m",
-            model_path,
-            "-f",
-            wav_path,
-            "-l",
-            language,
-            "-otxt",
-            "-nt",
-            "-of",
-            stem,
+            "-m", model_path, "-f", wav_path, "-l", language, "-otxt", "-nt", "-of", stem,
         ])
         .current_dir(parent_dir)
         .output()
@@ -94,8 +85,8 @@ pub fn transcribe_with_whisper_cli(
         ));
     }
 
-    let raw_text =
-        fs::read_to_string(&txt_path).map_err(|e| format!("Failed to read transcript file: {}", e))?;
+    let raw_text = fs::read_to_string(&txt_path)
+        .map_err(|e| format!("Failed to read transcript file: {}", e))?;
 
     let _ = fs::remove_file(&txt_path);
 

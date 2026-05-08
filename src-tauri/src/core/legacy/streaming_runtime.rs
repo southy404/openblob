@@ -7,19 +7,11 @@ use super::app_open_runtime::open_url_prefer_browser;
 pub fn stream_open_title(service: &str, title: &str) -> Result<String, String> {
     if let Some(item) = streaming::find_title(service, title) {
         open_url_prefer_browser(&item.url, false, false)?;
-        session_memory::set_last_suggestion(
-            &item.title,
-            service,
-            &item.url,
-            title,
-        );
+        session_memory::set_last_suggestion(&item.title, service, &item.url, title);
 
         Ok(reply_with(
             "stream_opening_title",
-            &[
-                ("title", item.title),
-                ("service", service.to_string()),
-            ],
+            &[("title", item.title), ("service", service.to_string())],
         ))
     } else {
         Ok(reply_with(
@@ -74,10 +66,7 @@ pub fn stream_recommend(
 pub fn stream_capability(service: Option<String>) -> Result<String, String> {
     let svc = service.unwrap_or_else(|| "netflix".into());
 
-    Ok(reply_with(
-        "stream_capability",
-        &[("service", svc)],
-    ))
+    Ok(reply_with("stream_capability", &[("service", svc)]))
 }
 
 pub fn stream_open_last_suggestion() -> Result<String, String> {
@@ -121,10 +110,7 @@ pub fn stream_more_like_last() -> Result<String, String> {
 
         Ok(reply_with(
             "stream_more_like_last",
-            &[
-                ("title", item.title.title),
-                ("reason", item.reason),
-            ],
+            &[("title", item.title.title), ("reason", item.reason)],
         ))
     } else {
         Ok(reply("stream_no_followup_option"))

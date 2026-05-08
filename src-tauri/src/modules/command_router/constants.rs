@@ -1,14 +1,26 @@
-pub const OPEN_WORDS: &[&str] = &["open", "oeffne", "oeffnen", "starte", "start", "launch", "run"];
+pub const OPEN_WORDS: &[&str] = &[
+    "open", "oeffne", "oeffnen", "starte", "start", "launch", "run",
+];
 pub const CLOSE_WORDS: &[&str] = &["close", "schliess", "schliesse", "beenden", "exit", "quit"];
 pub const BROWSER_WORDS: &[&str] = &["browser", "web", "website", "chrome", "edge", "online"];
 pub const GOOGLE_WORDS: &[&str] = &["google", "googel", "gogle"];
 pub const YOUTUBE_WORDS: &[&str] = &["youtube", "youtub", "jutube", "jutub", "yt"];
 pub const WEATHER_WORDS: &[&str] = &[
-    "wetter", "weather", "temperatur", "temperature", "regen", "rain", "sun", "sonne", "forecast",
+    "wetter",
+    "weather",
+    "temperatur",
+    "temperature",
+    "regen",
+    "rain",
+    "sun",
+    "sonne",
+    "forecast",
 ];
 pub const TIME_WORDS: &[&str] = &["uhr", "uhrzeit", "spaet", "spät", "zeit", "time"];
 pub const DATE_WORDS: &[&str] = &["datum", "date", "heute", "tag", "today"];
-pub const EXPLAIN_WORDS: &[&str] = &["erklaer", "erklaere", "explain", "meaning", "bedeutet", "mean"];
+pub const EXPLAIN_WORDS: &[&str] = &[
+    "erklaer", "erklaere", "explain", "meaning", "bedeutet", "mean",
+];
 pub const VOLUME_UP_WORDS: &[&str] = &["lauter", "louder", "increase", "up", "hoch"];
 pub const VOLUME_DOWN_WORDS: &[&str] = &["leiser", "quieter", "down", "lower", "runter", "reduce"];
 pub const VOLUME_WORDS: &[&str] = &["lautstaerke", "volume", "sound", "ton", "audio"];
@@ -26,7 +38,12 @@ pub const REDO_WORDS: &[&str] = &["redo", "wiederholen"];
 pub const TAB_CLOSE_WORDS: &[&str] = &["close tab", "tab schliessen", "tab close"];
 pub const TAB_NEW_WORDS: &[&str] = &["new tab", "neuer tab"];
 pub const WINDOW_NEW_WORDS: &[&str] = &["new window", "neues fenster"];
-pub const INCOGNITO_WORDS: &[&str] = &["incognito", "inkognito", "private window", "privates fenster"];
+pub const INCOGNITO_WORDS: &[&str] = &[
+    "incognito",
+    "inkognito",
+    "private window",
+    "privates fenster",
+];
 pub const RELOAD_WORDS: &[&str] = &["reload", "neu laden", "refresh"];
 pub const YT_NEXT_WORDS: &[&str] = &["next video", "naechstes video", "video weiter"];
 pub const YT_FORWARD_WORDS: &[&str] = &["vorspulen", "forward", "skip ahead"];
@@ -43,7 +60,12 @@ pub const SCROLL_UP_WORDS: &[&str] = &["hoch", "up", "oben", "aufwaerts", "nach 
 
 pub const TYPE_WORDS: &[&str] = &["tippe", "type", "schreibe", "enter text"];
 pub const SUBMIT_WORDS: &[&str] = &["submit", "abschicken", "absenden", "drueck enter"];
-pub const CONTEXT_WORDS: &[&str] = &["wo bin ich", "seitenkontext", "browser context", "was ist auf der seite"];
+pub const CONTEXT_WORDS: &[&str] = &[
+    "wo bin ich",
+    "seitenkontext",
+    "browser context",
+    "was ist auf der seite",
+];
 pub const SCREENSHOT_WORDS: &[&str] = &[
     "screenshot",
     "screen shot",
@@ -89,6 +111,7 @@ pub const KNOWN_TARGETS: &[(&str, &[&str])] = &[
 pub const STREAMING_SERVICE_ALIASES: &[(&str, &[&str])] = &[
     ("netflix", &["netflix", "netflx", "netfliks"]),
     ("youtube", &["youtube", "yt", "youtub", "jutube"]),
+    ("steam", &["steam", "steem", "stim"]),
     ("prime", &["prime", "prime video", "amazon prime"]),
     ("disney", &["disney", "disney plus", "disneyplus"]),
     ("twitch", &["twitch", "twuicth", "twich"]),
@@ -129,17 +152,9 @@ pub const DOWNLOADS_WORDS: &[&str] = &[
     "download ordner",
 ];
 
-pub const SETTINGS_WORDS: &[&str] = &[
-    "settings",
-    "einstellungen",
-    "windows settings",
-];
+pub const SETTINGS_WORDS: &[&str] = &["settings", "einstellungen", "windows settings"];
 
-pub const EXPLORER_WORDS: &[&str] = &[
-    "explorer",
-    "file explorer",
-    "datei explorer",
-];
+pub const EXPLORER_WORDS: &[&str] = &["explorer", "file explorer", "datei explorer"];
 
 pub const LOCK_WORDS: &[&str] = &[
     "lock screen",
@@ -156,27 +171,8 @@ pub const SHUTDOWN_WORDS: &[&str] = &[
     "pc ausschalten",
 ];
 
-pub const RESTART_WORDS: &[&str] = &[
-    "restart",
-    "reboot",
-    "neu starten",
-    "pc neustarten",
-];
+pub const RESTART_WORDS: &[&str] = &["restart", "reboot", "neu starten", "pc neustarten"];
 
-pub const CONFIRM_WORDS: &[&str] = &[
-    "yes",
-    "ja",
-    "confirm",
-    "bestätigen",
-    "mach es",
-    "do it",
-];
+pub const CONFIRM_WORDS: &[&str] = &["yes", "ja", "confirm", "bestätigen", "mach es", "do it"];
 
-pub const CANCEL_WORDS: &[&str] = &[
-    "no",
-    "nein",
-    "cancel",
-    "abbrechen",
-    "stop",
-    "doch nicht",
-];
+pub const CANCEL_WORDS: &[&str] = &["no", "nein", "cancel", "abbrechen", "stop", "doch nicht"];

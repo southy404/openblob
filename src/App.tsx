@@ -6,7 +6,7 @@ import {
   LogicalSize,
 } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { emitTo, listen } from "@tauri-apps/api/event";
+import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import { openSnipOverlay } from "./windows/snip-overlay/open";
@@ -21,6 +21,13 @@ import {
   showQuickMenuWindow,
   hideQuickMenuWindow,
 } from "./windows/quick-menu/open";
+import {
+  BLOB_ALWAYS_ON_TOP_EVENT,
+  applyBlobWindowPinning,
+  persistBlobAlwaysOnTop,
+  readBlobAlwaysOnTop,
+  setWindowAlwaysOnTopSafely,
+} from "./windows/window-pinning";
 
 type ContextPayload = {
   text: string;
@@ -969,14 +976,17 @@ function BlobAvatar({
 
 async function ensureSpeechWindow() {
   const existing = await WebviewWindow.getByLabel("speech");
-  if (existing) return existing;
+  if (existing) {
+    await setWindowAlwaysOnTopSafely(existing, readBlobAlwaysOnTop());
+    return existing;
+  }
 
   return new WebviewWindow("speech", {
     url: "speech.html",
     title: "Companion Speech",
     transparent: true,
     decorations: false,
-    alwaysOnTop: true,
+    alwaysOnTop: readBlobAlwaysOnTop(),
     shadow: false,
     skipTaskbar: true,
     resizable: false,
@@ -1017,6 +1027,8 @@ async function positionSpeechWindow() {
 async function showBubbleWindow() {
   const bubble = await ensureBubbleWindow();
 
+  await applyBlobWindowPinning();
+  await positionBubbleWindow().catch(console.error);
   await bubble.show();
   await bubble.setFocus().catch(() => {});
 
@@ -1031,6 +1043,7 @@ async function showBubbleWindow() {
 
 async function showSpeechWindow(text: string) {
   const speech = await ensureSpeechWindow();
+  await applyBlobWindowPinning();
   await positionSpeechWindow();
   await emitTo("speech", "speech-text", text);
   await speech.show();
@@ -1048,7 +1061,7 @@ export default function App() {
   const [irisOffset, setIrisOffset] = useState({ x: 0, y: 0 });
   const [blobMood, setBlobMood] = useState<BlobMood>("idle");
   const [dragging, setDragging] = useState(false);
-  const [pinned, setPinned] = useState(true);
+  const [pinned, setPinned] = useState(readBlobAlwaysOnTop);
   const [presenceState, setPresenceState] = useState<PresenceState>("visible");
   const [hideGameState, setHideGameState] = useState<HideGameState>("idle");
   const [peekVisible, setPeekVisible] = useState(false);
@@ -1383,7 +1396,12 @@ export default function App() {
 
   useEffect(() => {
     const win = getCurrentWindow();
-    win.setAlwaysOnTop(pinned).catch(console.error);
+    persistBlobAlwaysOnTop(pinned);
+    void setWindowAlwaysOnTopSafely(win, pinned);
+    void applyBlobWindowPinning(pinned);
+    void emit(BLOB_ALWAYS_ON_TOP_EVENT, { enabled: pinned }).catch(
+      console.error
+    );
   }, [pinned]);
 
   useEffect(() => {

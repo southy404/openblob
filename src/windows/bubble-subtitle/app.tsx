@@ -2,10 +2,17 @@ import { createRoot } from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState } from "react";
+import {
+  BLOB_ALWAYS_ON_TOP_EVENT,
+  BlobAlwaysOnTopPayload,
+  readBlobAlwaysOnTop,
+  setWindowAlwaysOnTopSafely,
+} from "../window-pinning";
 
 type SubtitlePayload = {
   text: string;
   holdMs?: number;
+  mode?: "reveal" | "chunk";
 };
 
 function SubtitleApp() {
@@ -26,6 +33,17 @@ function SubtitleApp() {
     if (fadeTimerRef.current !== null) {
       window.clearTimeout(fadeTimerRef.current);
       fadeTimerRef.current = null;
+    }
+  };
+
+  const showPinnedWindow = async () => {
+    const win = getCurrentWindow();
+    await setWindowAlwaysOnTopSafely(win, readBlobAlwaysOnTop());
+
+    try {
+      await win.show();
+    } catch (error) {
+      console.error("[subtitle] show failed", error);
     }
   };
 
@@ -54,11 +72,7 @@ function SubtitleApp() {
       return;
     }
 
-    try {
-      await getCurrentWindow().show();
-    } catch (error) {
-      console.error("[subtitle] show failed", error);
-    }
+    await showPinnedWindow();
 
     const words = trimmed.split(/\s+/);
     let index = 0;
@@ -87,9 +101,39 @@ function SubtitleApp() {
     }, 34);
   };
 
+  const displaySubtitleChunk = async (text: string, holdMs = 0) => {
+    clearRevealTimer();
+    clearFadeTimer();
+
+    const trimmed = text.trim();
+    if (!trimmed) {
+      await clearSubtitle();
+      return;
+    }
+
+    setDisplayedAnswer(trimmed);
+    setVisible(true);
+    await showPinnedWindow();
+
+    if (holdMs > 0) {
+      fadeTimerRef.current = window.setTimeout(() => {
+        setVisible(false);
+
+        window.setTimeout(() => {
+          void getCurrentWindow()
+            .hide()
+            .catch((error) => {
+              console.error("[subtitle] delayed hide failed", error);
+            });
+        }, 240);
+      }, holdMs);
+    }
+  };
+
   useEffect(() => {
     let unlistenShow: null | (() => void) = null;
     let unlistenClear: null | (() => void) = null;
+    let unlistenPinning: null | (() => void) = null;
 
     const setup = async () => {
       console.log("[subtitle] app loaded");
@@ -98,6 +142,14 @@ function SubtitleApp() {
         "bubble-subtitle-show",
         async (event) => {
           console.log("[subtitle] show event", event.payload);
+          if (event.payload.mode === "chunk") {
+            await displaySubtitleChunk(
+              event.payload.text,
+              event.payload.holdMs ?? 0
+            );
+            return;
+          }
+
           await revealAnswerWordByWord(
             event.payload.text,
             event.payload.holdMs ?? 5200
@@ -109,6 +161,16 @@ function SubtitleApp() {
         console.log("[subtitle] clear event");
         await clearSubtitle();
       });
+
+      unlistenPinning = await listen<BlobAlwaysOnTopPayload>(
+        BLOB_ALWAYS_ON_TOP_EVENT,
+        async (event) => {
+          await setWindowAlwaysOnTopSafely(
+            getCurrentWindow(),
+            event.payload.enabled
+          );
+        }
+      );
     };
 
     void setup();
@@ -116,6 +178,7 @@ function SubtitleApp() {
     return () => {
       unlistenShow?.();
       unlistenClear?.();
+      unlistenPinning?.();
       clearRevealTimer();
       clearFadeTimer();
     };

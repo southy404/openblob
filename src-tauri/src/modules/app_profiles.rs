@@ -1,9 +1,6 @@
 use crate::modules::command_router::CompanionAction;
 
-pub fn resolve_app_action(
-    action: CompanionAction,
-    active_app: &str,
-) -> Option<CompanionAction> {
+pub fn resolve_app_action(action: CompanionAction, active_app: &str) -> Option<CompanionAction> {
     let app = active_app.to_lowercase();
 
     if is_browser(&app) {

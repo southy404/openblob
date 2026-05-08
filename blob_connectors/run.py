@@ -104,11 +104,51 @@ def load_personality_state() -> dict:
         pass
     return {}
 
+async def load_rust_memory_context(query: str, channel: str, limit: int = 12) -> str:
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "http://127.0.0.1:7842/memory/context",
+                params={
+                    "q": query,
+                    "app": channel,
+                    "domain": "external",
+                    "limit": limit,
+                },
+                timeout=aiohttp.ClientTimeout(total=1.5),
+            ) as resp:
+                if resp.status != 200:
+                    return ""
+                data = await resp.json()
+                return str(data.get("memory") or "").strip()
+    except Exception:
+        return ""
+
+async def record_connector_memory(message, reply: str) -> None:
+    try:
+        async with aiohttp.ClientSession() as session:
+            await session.post(
+                "http://127.0.0.1:7842/memory/event",
+                json={
+                    "kind": "connector_message",
+                    "channel": message.channel,
+                    "app_name": message.channel,
+                    "domain": "external",
+                    "user_input": message.text,
+                    "summary": reply,
+                    "outcome": "success",
+                    "importance": 0.6,
+                },
+                timeout=aiohttp.ClientTimeout(total=1.0),
+            )
+    except Exception:
+        pass
+
 # ------------------------------------------------------------------
 # System-Prompt Builder
 # ------------------------------------------------------------------
 
-def build_system_prompt(channel: str) -> dict:
+def build_system_prompt(channel: str, memory_context: str = "") -> dict:
     config   = load_companion_config()
     profile  = load_user_profile()
     semantic = load_semantic_memory()
@@ -154,27 +194,31 @@ def build_system_prompt(channel: str) -> dict:
             f"Vertrauen: {trust:.0%}, {help_count} erfolgreiche Interaktionen)."
         )
 
-    if semantic.get("inferred_user_style"):
-        parts.append(f"Kommunikationsstil des Users: {semantic['inferred_user_style']}.")
+    if memory_context.strip():
+        parts.append("Nutze diesen lokalen Langzeitgedaechtnis-Kontext nur, wenn er relevant ist.")
+        parts.append(memory_context.strip())
+    else:
+        if semantic.get("inferred_user_style"):
+            parts.append(f"Kommunikationsstil des Users: {semantic['inferred_user_style']}.")
 
-    if semantic.get("favorite_apps"):
-        apps = ", ".join(semantic["favorite_apps"][:5])
-        parts.append(f"Haeufig genutzte Apps: {apps}.")
+        if semantic.get("favorite_apps"):
+            apps = ", ".join(semantic["favorite_apps"][:5])
+            parts.append(f"Haeufig genutzte Apps: {apps}.")
 
-    if semantic.get("recurring_topics"):
-        topics = ", ".join(semantic["recurring_topics"][:5])
-        parts.append(f"Wiederkehrende Themen: {topics}.")
+        if semantic.get("recurring_topics"):
+            topics = ", ".join(semantic["recurring_topics"][:5])
+            parts.append(f"Wiederkehrende Themen: {topics}.")
 
-    if semantic.get("notes"):
-        notes = " | ".join(semantic["notes"][:3])
-        parts.append(f"Notizen ueber den User: {notes}.")
+        if semantic.get("notes"):
+            notes = " | ".join(semantic["notes"][:3])
+            parts.append(f"Notizen ueber den User: {notes}.")
 
-    if episodes:
-        ep_text = "; ".join(
-            f"{e.get('kind','?')} via {e.get('app_name','?')}: {e.get('summary','?')}"
-            for e in episodes[-5:]
-        )
-        parts.append(f"Letzte Interaktionen: {ep_text}.")
+        if episodes:
+            ep_text = "; ".join(
+                f"{e.get('kind','?')} via {e.get('app_name','?')}: {e.get('summary','?')}"
+                for e in episodes[-5:]
+            )
+            parts.append(f"Letzte Interaktionen: {ep_text}.")
 
     parts.append("Antworte direkt und hilfreich.")
 
@@ -213,7 +257,8 @@ async def ai_handler(message) -> str:
     history = session_histories.setdefault(message.session_id, [])
     history.append({"role": "user", "content": message.text})
 
-    system_prompt = build_system_prompt(message.channel)
+    memory_context = await load_rust_memory_context(message.text, message.channel)
+    system_prompt = build_system_prompt(message.channel, memory_context)
 
     async with aiohttp.ClientSession() as session:
         async with session.post(
@@ -228,6 +273,7 @@ async def ai_handler(message) -> str:
             reply = data["message"]["content"]
 
     history.append({"role": "assistant", "content": reply})
+    await record_connector_memory(message, reply)
     return reply
 
 # ------------------------------------------------------------------

@@ -13,7 +13,7 @@ use std::ffi::c_void;
 
 #[cfg(target_os = "windows")]
 use windows::{
-    core::{ComInterface, Error as WinError, GUID, HRESULT, Interface},
+    core::{ComInterface, Error as WinError, Interface, GUID, HRESULT},
     Win32::{
         Foundation::HANDLE,
         Media::Audio::{
@@ -201,10 +201,7 @@ fn run_system_loopback_capture(
                     let f32_samples =
                         std::slice::from_raw_parts(data_ptr as *const f32, sample_count);
 
-                    mono_i16_buffer.extend(downmix_f32_to_mono_i16(
-                        f32_samples,
-                        input_channels,
-                    ));
+                    mono_i16_buffer.extend(downmix_f32_to_mono_i16(f32_samples, input_channels));
                 }
 
                 capture_client
@@ -288,10 +285,7 @@ fn mono_samples_to_ms(sample_count: usize, sample_rate: u32) -> u64 {
 
 fn downmix_f32_to_mono_i16(samples: &[f32], channels: u16) -> Vec<i16> {
     if channels <= 1 {
-        return samples
-            .iter()
-            .map(|s| float_to_i16(*s))
-            .collect();
+        return samples.iter().map(|s| float_to_i16(*s)).collect();
     }
 
     let ch = channels as usize;

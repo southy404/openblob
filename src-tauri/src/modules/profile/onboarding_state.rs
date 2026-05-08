@@ -44,9 +44,7 @@ impl OnboardingState {
         }
 
         self.current_step = match self.current_step.trim() {
-            "profile" | "voice" | "appearance" | "boundaries" | "done" => {
-                self.current_step.clone()
-            }
+            "profile" | "voice" | "appearance" | "boundaries" | "done" => self.current_step.clone(),
             _ => infer_current_step(&self),
         };
 

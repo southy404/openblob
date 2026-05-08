@@ -85,19 +85,13 @@ fn build_clothing_advice(temp_now: f32, temp_max: f32, rain_prob: i32, wind_kmh:
         1 => reply_with("weather_advice_single", &[("item1", items[0].clone())]),
         2 => reply_with(
             "weather_advice_double",
-            &[
-                ("item1", items[0].clone()),
-                ("item2", items[1].clone()),
-            ],
+            &[("item1", items[0].clone()), ("item2", items[1].clone())],
         ),
         _ => {
             let last = items.pop().unwrap_or_default();
             reply_with(
                 "weather_advice_multi",
-                &[
-                    ("items", items.join(", ")),
-                    ("last", last),
-                ],
+                &[("items", items.join(", ")), ("last", last)],
             )
         }
     }
@@ -143,12 +137,7 @@ pub async fn weather_reply(location: Option<String>) -> Result<String, String> {
     let location_hit = geo_data
         .results
         .and_then(|mut results| results.drain(..).next())
-        .ok_or_else(|| {
-            reply_with(
-                "weather_location_not_found",
-                &[("place", place.clone())],
-            )
-        })?;
+        .ok_or_else(|| reply_with("weather_location_not_found", &[("place", place.clone())]))?;
 
     let forecast_url = format!(
         concat!(
@@ -192,8 +181,16 @@ pub async fn weather_reply(location: Option<String>) -> Result<String, String> {
     let feels_like = current.apparent_temperature.unwrap_or(temp_now);
     let wind = current.wind_speed_10m.unwrap_or(0.0);
 
-    let temp_max = daily.temperature_2m_max.first().copied().unwrap_or(temp_now);
-    let temp_min = daily.temperature_2m_min.first().copied().unwrap_or(temp_now);
+    let temp_max = daily
+        .temperature_2m_max
+        .first()
+        .copied()
+        .unwrap_or(temp_now);
+    let temp_min = daily
+        .temperature_2m_min
+        .first()
+        .copied()
+        .unwrap_or(temp_now);
     let rain_prob = daily
         .precipitation_probability_max
         .as_ref()
@@ -202,7 +199,12 @@ pub async fn weather_reply(location: Option<String>) -> Result<String, String> {
 
     let weather_code = current
         .weather_code
-        .or_else(|| daily.weather_code.as_ref().and_then(|v: &Vec<i32>| v.first().copied()))
+        .or_else(|| {
+            daily
+                .weather_code
+                .as_ref()
+                .and_then(|v: &Vec<i32>| v.first().copied())
+        })
         .unwrap_or(-1);
 
     let summary = weather_code_label(weather_code);

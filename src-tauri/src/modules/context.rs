@@ -8,7 +8,6 @@ pub struct ActiveContext {
     pub source: String,
 }
 
-
 fn unknown_context(window_title: String) -> ActiveContext {
     ActiveContext {
         domain: "desktop".into(),
@@ -177,7 +176,11 @@ mod platform_macos {
         }
 
         let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if s.is_empty() { None } else { Some(s) }
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
     }
 
     pub fn frontmost_app_name() -> Option<String> {

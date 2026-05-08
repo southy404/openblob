@@ -11,8 +11,12 @@ import {
   Dice5,
   MonitorSmartphone,
   Search,
+  Radio,
   TerminalSquare,
   ChevronDown,
+  FolderOpen,
+  Download,
+  CheckCircle2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -25,6 +29,128 @@ type DevPayload = {
 type UiLang = "en" | "de";
 
 type RouteState = "none" | "command" | "ollama";
+type WakeWordProvider =
+  | "none"
+  | "mic-test"
+  | "mock"
+  | "local-openwakeword"
+  | "local-wakeword"
+  | "disabled";
+type WakeWordStatusName =
+  | "disabled"
+  | "stopped"
+  | "starting"
+  | "listening"
+  | "detected"
+  | "no_input_device"
+  | "permission_error"
+  | "provider_missing"
+  | "model_missing"
+  | "invalid_model_bundle"
+  | "runtime_missing"
+  | "runtime_load_failed"
+  | "model_loaded_runtime_pipeline_incomplete"
+  | "unsupported_model_shape"
+  | "provider_not_implemented"
+  | "error";
+
+type WakeWordSettings = {
+  wake_word_enabled: boolean;
+  wake_word_auto_listen_enabled: boolean;
+  wake_word_phrase: string;
+  wake_word_sensitivity: number;
+  wake_word_provider: WakeWordProvider;
+  wake_word_model_path?: string | null;
+  wake_word_runtime_path?: string | null;
+};
+
+type WakeWordStatus = {
+  status: WakeWordStatusName;
+  state: WakeWordStatusName;
+  message: string;
+  enabled: boolean;
+  phrase: string;
+  provider: WakeWordProvider;
+  sensitivity: number;
+  listening: boolean;
+  detected: boolean;
+  provider_configured: boolean;
+  selected_input_device?: string | null;
+  available_input_devices: string[];
+  last_error?: string | null;
+  last_started_at?: string | null;
+  last_stopped_at?: string | null;
+  last_audio_at?: string | null;
+  audio_chunks_seen: number;
+  input_level?: number | null;
+  provider_state: string;
+  model_path?: string | null;
+  model_missing: boolean;
+  runtime_state: string;
+  manifest_path?: string | null;
+  manifest_valid: boolean;
+  missing_files: string[];
+  sample_rate?: number | null;
+  threshold?: number | null;
+  detection_count: number;
+  last_detected_at?: string | null;
+  last_detection_score?: number | null;
+  wake_phrase_matched?: string | null;
+  provider_ready: boolean;
+  provider_error?: string | null;
+  loaded_model_count: number;
+  classifier_input_shape?: string | null;
+  classifier_output_shape?: string | null;
+  runtime_error?: string | null;
+};
+
+type WakeWordModelStatus = {
+  configured_model_path?: string | null;
+  resolved_model_path?: string | null;
+  model_exists: boolean;
+  model_missing: boolean;
+  manifest_path?: string | null;
+  manifest_valid: boolean;
+  missing_files: string[];
+  runtime?: string | null;
+  runtime_path?: string | null;
+  phrase?: string | null;
+  sample_rate?: number | null;
+  threshold?: number | null;
+  discovered_models: string[];
+  search_paths: string[];
+  provider: WakeWordProvider;
+  runtime_state: string;
+  loaded_model_count: number;
+  classifier_input_shape?: string | null;
+  classifier_output_shape?: string | null;
+  runtime_error?: string | null;
+};
+
+type WakeWordInstallStatus = {
+  install_ready: boolean;
+  runtime_found: boolean;
+  runtime_path?: string | null;
+  runtime_error?: string | null;
+  model_bundle_found: boolean;
+  model_bundle_path?: string | null;
+  manifest_valid: boolean;
+  missing_files: string[];
+  license_notice: string;
+  provider_state: string;
+  message: string;
+  configured_runtime_path?: string | null;
+  configured_model_path?: string | null;
+  runtime_search_paths: string[];
+  model_search_paths: string[];
+};
+
+type WakeWordDetectedPayload = {
+  phrase: string;
+  provider: string;
+  score: number;
+  detectedAt: string;
+};
 
 type LocalizedText = {
   windowTitle: string;
@@ -42,6 +168,37 @@ type LocalizedText = {
   language: string;
   save: string;
   saving: string;
+
+  wakeWord: string;
+  wakeWordEnabled: string;
+  wakeWordAutoListen: string;
+  wakeWordFrontendEvent: string;
+  wakeWordAutoListenStatus: string;
+  wakeWordPhrase: string;
+  wakeWordSensitivity: string;
+  wakeWordProvider: string;
+  wakeWordStatus: string;
+  wakeWordSave: string;
+  wakeWordRefresh: string;
+  wakeWordStart: string;
+  wakeWordStop: string;
+  wakeWordInputDevice: string;
+  wakeWordLastAudio: string;
+  wakeWordChunks: string;
+  wakeWordInputLevel: string;
+  wakeWordLastError: string;
+  wakeWordProviderState: string;
+  wakeWordModelPath: string;
+  wakeWordModelStatus: string;
+  wakeWordModels: string;
+  wakeWordRuntimeState: string;
+  wakeWordManifest: string;
+  wakeWordMissingFiles: string;
+  wakeWordThreshold: string;
+  wakeWordSampleRate: string;
+  wakeWordDetectionCount: string;
+  wakeWordLastDetected: string;
+  wakeWordDetectionScore: string;
 
   searchPlaceholder: string;
   noCommandsFound: string;
@@ -97,6 +254,37 @@ const TEXTS: Record<UiLang, LocalizedText> = {
     save: "Save",
     saving: "Saving...",
 
+    wakeWord: "Wake Word",
+    wakeWordEnabled: "Enabled",
+    wakeWordAutoListen: "Start voice input after wake word",
+    wakeWordFrontendEvent: "Frontend event",
+    wakeWordAutoListenStatus: "Wake-to-voice",
+    wakeWordPhrase: "Phrase",
+    wakeWordSensitivity: "Sensitivity",
+    wakeWordProvider: "Provider",
+    wakeWordStatus: "Status",
+    wakeWordSave: "Save Wake Word",
+    wakeWordRefresh: "Refresh",
+    wakeWordStart: "Start Listener",
+    wakeWordStop: "Stop Listener",
+    wakeWordInputDevice: "Input",
+    wakeWordLastAudio: "Last audio",
+    wakeWordChunks: "Chunks",
+    wakeWordInputLevel: "Level",
+    wakeWordLastError: "Last error",
+    wakeWordProviderState: "Provider state",
+    wakeWordModelPath: "Model",
+    wakeWordModelStatus: "Model status",
+    wakeWordModels: "Local models",
+    wakeWordRuntimeState: "Runtime",
+    wakeWordManifest: "Manifest",
+    wakeWordMissingFiles: "Missing files",
+    wakeWordThreshold: "Threshold",
+    wakeWordSampleRate: "Sample rate",
+    wakeWordDetectionCount: "Detections",
+    wakeWordLastDetected: "Last detected",
+    wakeWordDetectionScore: "Score",
+
     searchPlaceholder:
       "Filter commands, e.g. youtube, timer, browser, volume, shutdown ...",
     noCommandsFound: "No commands found for this search.",
@@ -131,6 +319,37 @@ const TEXTS: Record<UiLang, LocalizedText> = {
     language: "Sprache",
     save: "Speichern",
     saving: "Speichert...",
+
+    wakeWord: "Wake Word",
+    wakeWordEnabled: "Aktiviert",
+    wakeWordAutoListen: "Spracheingabe nach Wake Word starten",
+    wakeWordFrontendEvent: "Frontend-Event",
+    wakeWordAutoListenStatus: "Wake-to-Voice",
+    wakeWordPhrase: "Phrase",
+    wakeWordSensitivity: "Empfindlichkeit",
+    wakeWordProvider: "Provider",
+    wakeWordStatus: "Status",
+    wakeWordSave: "Wake Word speichern",
+    wakeWordRefresh: "Aktualisieren",
+    wakeWordStart: "Listener starten",
+    wakeWordStop: "Listener stoppen",
+    wakeWordInputDevice: "Eingang",
+    wakeWordLastAudio: "Letztes Audio",
+    wakeWordChunks: "Chunks",
+    wakeWordInputLevel: "Pegel",
+    wakeWordLastError: "Letzter Fehler",
+    wakeWordProviderState: "Provider-Status",
+    wakeWordModelPath: "Modell",
+    wakeWordModelStatus: "Modellstatus",
+    wakeWordModels: "Lokale Modelle",
+    wakeWordRuntimeState: "Runtime",
+    wakeWordManifest: "Manifest",
+    wakeWordMissingFiles: "Fehlende Dateien",
+    wakeWordThreshold: "Schwelle",
+    wakeWordSampleRate: "Sample-Rate",
+    wakeWordDetectionCount: "Erkennungen",
+    wakeWordLastDetected: "Zuletzt erkannt",
+    wakeWordDetectionScore: "Score",
 
     searchPlaceholder:
       "Befehle filtern, z. B. youtube, timer, browser, volume, shutdown ...",
@@ -547,6 +766,27 @@ function getCommandGroups(lang: UiLang): LocalizedCommandGroup[] {
   ];
 }
 
+type SettingsPanelKey = "voiceTts" | "wakeWord";
+
+const DEV_PANEL_STORAGE_KEY = "openblob-dev-settings-panels";
+
+function readDevPanelState(): Record<SettingsPanelKey, boolean> {
+  try {
+    const value = window.localStorage.getItem(DEV_PANEL_STORAGE_KEY);
+    if (!value) {
+      return { voiceTts: false, wakeWord: false };
+    }
+
+    const parsed = JSON.parse(value) as Partial<Record<SettingsPanelKey, boolean>>;
+    return {
+      voiceTts: parsed.voiceTts ?? false,
+      wakeWord: parsed.wakeWord ?? false,
+    };
+  } catch {
+    return { voiceTts: false, wakeWord: false };
+  }
+}
+
 function DevWindow() {
   const [uiLang, setUiLang] = useState<UiLang>("en");
   const [lastRoute, setLastRoute] = useState<RouteState>("none");
@@ -562,6 +802,102 @@ function DevWindow() {
   const [isMacOS] = useState(() =>
     /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
   );
+  const [wakeWordSettings, setWakeWordSettings] = useState<WakeWordSettings>({
+    wake_word_enabled: false,
+    wake_word_auto_listen_enabled: false,
+    wake_word_phrase: "hey blob",
+    wake_word_sensitivity: 0.5,
+    wake_word_provider: "none",
+    wake_word_model_path: null,
+    wake_word_runtime_path: null,
+  });
+  const [wakeWordStatus, setWakeWordStatus] = useState<WakeWordStatus>({
+    status: "disabled",
+    state: "disabled",
+    message: "Wake word is disabled.",
+    enabled: false,
+    phrase: "hey blob",
+    provider: "none",
+    sensitivity: 0.5,
+    listening: false,
+    detected: false,
+    provider_configured: false,
+    selected_input_device: null,
+    available_input_devices: [],
+    last_error: null,
+    last_started_at: null,
+    last_stopped_at: null,
+    last_audio_at: null,
+    audio_chunks_seen: 0,
+    input_level: null,
+    provider_state: "provider_missing",
+    model_path: null,
+    model_missing: false,
+    runtime_state: "not_configured",
+    manifest_path: null,
+    manifest_valid: false,
+    missing_files: [],
+    sample_rate: null,
+    threshold: null,
+    detection_count: 0,
+    last_detected_at: null,
+    last_detection_score: null,
+    wake_phrase_matched: null,
+    provider_ready: false,
+    provider_error: null,
+    loaded_model_count: 0,
+    classifier_input_shape: null,
+    classifier_output_shape: null,
+    runtime_error: null,
+  });
+  const [wakeWordModelStatus, setWakeWordModelStatus] =
+    useState<WakeWordModelStatus>({
+      configured_model_path: null,
+      resolved_model_path: null,
+      model_exists: false,
+      model_missing: false,
+      manifest_path: null,
+      manifest_valid: false,
+      missing_files: [],
+      runtime: null,
+      runtime_path: null,
+      phrase: null,
+      sample_rate: null,
+      threshold: null,
+      discovered_models: [],
+      search_paths: [],
+      provider: "none",
+      runtime_state: "not_configured",
+      loaded_model_count: 0,
+      classifier_input_shape: null,
+      classifier_output_shape: null,
+      runtime_error: null,
+  });
+  const [wakeWordInstallStatus, setWakeWordInstallStatus] =
+    useState<WakeWordInstallStatus>({
+      install_ready: false,
+      runtime_found: false,
+      runtime_path: null,
+      runtime_error: null,
+      model_bundle_found: false,
+      model_bundle_path: null,
+      manifest_valid: false,
+      missing_files: [],
+      license_notice:
+        "openWakeWord code is open-source. Pretrained model licenses may differ.",
+      provider_state: "not_configured",
+      message: "Wake-word installation has not been checked yet.",
+      configured_runtime_path: null,
+      configured_model_path: null,
+      runtime_search_paths: [],
+      model_search_paths: [],
+    });
+  const [wakeWordInstallBusy, setWakeWordInstallBusy] = useState(false);
+  const [wakeWordSaving, setWakeWordSaving] = useState(false);
+  const [wakeWordLastFrontendEventAt, setWakeWordLastFrontendEventAt] =
+    useState<string | null>(null);
+  const [openSettingsPanels, setOpenSettingsPanels] =
+    useState<Record<SettingsPanelKey, boolean>>(readDevPanelState);
 
   const t = TEXTS[uiLang];
   const commandGroups = useMemo(() => getCommandGroups(uiLang), [uiLang]);
@@ -579,6 +915,22 @@ function DevWindow() {
   });
 
   const appWindow = useMemo(() => getCurrentWindow(), []);
+
+  const toggleSettingsPanel = (key: SettingsPanelKey) => {
+    setOpenSettingsPanels((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        DEV_PANEL_STORAGE_KEY,
+        JSON.stringify(openSettingsPanels)
+      );
+    } catch {}
+  }, [openSettingsPanels]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("macos-lite", isMacOS);
@@ -648,6 +1000,118 @@ function DevWindow() {
     void loadIdentity();
   }, []);
 
+  const refreshWakeWord = async () => {
+    try {
+      const [settings, status, modelStatus, installStatus] = await Promise.all([
+        invoke<WakeWordSettings>("get_wake_word_settings"),
+        invoke<WakeWordStatus>("get_wake_word_status"),
+        invoke<WakeWordModelStatus>("get_wake_word_model_status"),
+        invoke<WakeWordInstallStatus>("get_wake_word_install_status"),
+      ]);
+
+      setWakeWordSettings(settings);
+      setWakeWordStatus(status);
+      setWakeWordModelStatus(modelStatus);
+      setWakeWordInstallStatus(installStatus);
+    } catch (err) {
+      console.error("failed to load wake word settings", err);
+      setWakeWordStatus({
+        status: "error",
+        state: "error",
+        message: String(err),
+        enabled: wakeWordSettings.wake_word_enabled,
+        phrase: wakeWordSettings.wake_word_phrase,
+        provider: wakeWordSettings.wake_word_provider,
+        sensitivity: wakeWordSettings.wake_word_sensitivity,
+        listening: false,
+        detected: false,
+        provider_configured: false,
+        selected_input_device: null,
+        available_input_devices: [],
+        last_error: String(err),
+        last_started_at: null,
+        last_stopped_at: null,
+        last_audio_at: null,
+        audio_chunks_seen: 0,
+        input_level: null,
+        provider_state: "error",
+        model_path: null,
+        model_missing: false,
+        runtime_state: "error",
+        manifest_path: null,
+        manifest_valid: false,
+        missing_files: [],
+        sample_rate: null,
+        threshold: null,
+        detection_count: 0,
+        last_detected_at: null,
+        last_detection_score: null,
+        wake_phrase_matched: null,
+        provider_ready: false,
+        provider_error: String(err),
+        loaded_model_count: 0,
+        classifier_input_shape: null,
+        classifier_output_shape: null,
+        runtime_error: String(err),
+      });
+      setWakeWordInstallStatus((prev) => ({
+        ...prev,
+        install_ready: false,
+        runtime_error: String(err),
+        message: String(err),
+      }));
+    }
+  };
+
+  useEffect(() => {
+    void refreshWakeWord();
+
+    const interval = window.setInterval(() => {
+      void invoke<WakeWordStatus>("get_wake_word_status")
+        .then(setWakeWordStatus)
+        .catch((err) => {
+          console.error("failed to refresh wake word status", err);
+        });
+    }, 3000);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    let unlisten: null | (() => void) = null;
+
+    const setup = async () => {
+      unlisten = await listen<WakeWordDetectedPayload>(
+        "wake-word-detected",
+        (event) => {
+          setWakeWordLastFrontendEventAt(event.payload.detectedAt);
+          setWakeWordStatus((prev) => ({
+            ...prev,
+            status: "detected",
+            state: "detected",
+            message: "Wake word detected.",
+            listening: true,
+            detected: true,
+            provider_state: "detected",
+            runtime_state: "detected",
+            detection_count: prev.detection_count + 1,
+            last_detected_at: event.payload.detectedAt,
+            last_detection_score: event.payload.score,
+            wake_phrase_matched: event.payload.phrase,
+            provider_ready: true,
+            provider_error: null,
+          }));
+        }
+      );
+    };
+
+    void setup();
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   const closeWindow = async () => {
     try {
       await appWindow.hide();
@@ -695,7 +1159,9 @@ function DevWindow() {
     try {
       setTtsBusy(true);
       setTtsMessage(t.downloading);
-      const result = (await invoke("tts_download_default_piper_assets")) as string;
+      const result = (await invoke(
+        "tts_download_default_piper_assets"
+      )) as string;
       setTtsMessage(result || t.downloadDone);
     } catch (err) {
       console.error("tts download failed", err);
@@ -703,6 +1169,204 @@ function DevWindow() {
     } finally {
       setTtsBusy(false);
     }
+  };
+
+  const saveWakeWordSettings = async () => {
+    try {
+      setWakeWordSaving(true);
+
+      const saved = await invoke<WakeWordSettings>("update_wake_word_settings", {
+        settings: wakeWordSettings,
+      });
+      setWakeWordSettings(saved);
+      const [nextStatus, modelStatus, installStatus] = await Promise.all([
+        invoke<WakeWordStatus>("get_wake_word_status"),
+        invoke<WakeWordModelStatus>("get_wake_word_model_status"),
+        invoke<WakeWordInstallStatus>("get_wake_word_install_status"),
+      ]);
+      setWakeWordStatus(nextStatus);
+      setWakeWordModelStatus(modelStatus);
+      setWakeWordInstallStatus(installStatus);
+    } catch (err) {
+      console.error("failed to save wake word settings", err);
+      setWakeWordStatus({
+        status: "error",
+        state: "error",
+        message: String(err),
+        enabled: wakeWordSettings.wake_word_enabled,
+        phrase: wakeWordSettings.wake_word_phrase,
+        provider: wakeWordSettings.wake_word_provider,
+        sensitivity: wakeWordSettings.wake_word_sensitivity,
+        listening: false,
+        detected: false,
+        provider_configured: false,
+        selected_input_device: null,
+        available_input_devices: [],
+        last_error: String(err),
+        last_started_at: null,
+        last_stopped_at: null,
+        last_audio_at: null,
+        audio_chunks_seen: 0,
+        input_level: null,
+        provider_state: "error",
+        model_path: null,
+        model_missing: false,
+        runtime_state: "error",
+        manifest_path: null,
+        manifest_valid: false,
+        missing_files: [],
+        sample_rate: null,
+        threshold: null,
+        detection_count: 0,
+        last_detected_at: null,
+        last_detection_score: null,
+        wake_phrase_matched: null,
+        provider_ready: false,
+        provider_error: String(err),
+        loaded_model_count: 0,
+        classifier_input_shape: null,
+        classifier_output_shape: null,
+        runtime_error: String(err),
+      });
+    } finally {
+      setWakeWordSaving(false);
+    }
+  };
+
+  const startWakeWordListener = async () => {
+    try {
+      const nextStatus = await invoke<WakeWordStatus>("start_wake_word_listener");
+      setWakeWordStatus(nextStatus);
+      const modelStatus = await invoke<WakeWordModelStatus>(
+        "get_wake_word_model_status"
+      );
+      const installStatus = await invoke<WakeWordInstallStatus>(
+        "get_wake_word_install_status"
+      );
+      setWakeWordModelStatus(modelStatus);
+      setWakeWordInstallStatus(installStatus);
+    } catch (err) {
+      console.error("failed to start wake word listener", err);
+    }
+  };
+
+  const stopWakeWordListener = async () => {
+    try {
+      const nextStatus = await invoke<WakeWordStatus>("stop_wake_word_listener");
+      setWakeWordStatus(nextStatus);
+      const modelStatus = await invoke<WakeWordModelStatus>(
+        "get_wake_word_model_status"
+      );
+      const installStatus = await invoke<WakeWordInstallStatus>(
+        "get_wake_word_install_status"
+      );
+      setWakeWordModelStatus(modelStatus);
+      setWakeWordInstallStatus(installStatus);
+    } catch (err) {
+      console.error("failed to stop wake word listener", err);
+    }
+  };
+
+  const refreshWakeWordInstallStatus = async (command: string) => {
+    try {
+      setWakeWordInstallBusy(true);
+      const installStatus = await invoke<WakeWordInstallStatus>(command);
+      setWakeWordInstallStatus(installStatus);
+      const [status, modelStatus] = await Promise.all([
+        invoke<WakeWordStatus>("get_wake_word_status"),
+        invoke<WakeWordModelStatus>("get_wake_word_model_status"),
+      ]);
+      setWakeWordStatus(status);
+      setWakeWordModelStatus(modelStatus);
+    } catch (err) {
+      console.error(`wake word install command failed: ${command}`, err);
+      setWakeWordInstallStatus((prev) => ({
+        ...prev,
+        install_ready: false,
+        message: String(err),
+        runtime_error: String(err),
+      }));
+    } finally {
+      setWakeWordInstallBusy(false);
+    }
+  };
+
+  const selectWakeWordRuntime = async () => {
+    const path = window.prompt(
+      "Paste the full path to onnxruntime.dll. OpenBlob will save the path but will not start the microphone."
+    );
+    if (path == null) return;
+
+    try {
+      setWakeWordInstallBusy(true);
+      const installStatus = await invoke<WakeWordInstallStatus>(
+        "set_wake_word_runtime_path",
+        { path }
+      );
+      setWakeWordInstallStatus(installStatus);
+      setWakeWordSettings((prev) => ({
+        ...prev,
+        wake_word_runtime_path: installStatus.configured_runtime_path ?? path,
+      }));
+      const status = await invoke<WakeWordStatus>("get_wake_word_status");
+      setWakeWordStatus(status);
+    } catch (err) {
+      console.error("failed to set wake word runtime path", err);
+      setWakeWordInstallStatus((prev) => ({
+        ...prev,
+        install_ready: false,
+        message: String(err),
+        runtime_error: String(err),
+      }));
+    } finally {
+      setWakeWordInstallBusy(false);
+    }
+  };
+
+  const selectWakeWordModelBundle = async () => {
+    const path = window.prompt(
+      "Paste the full path to the wake-word model bundle folder or manifest.json."
+    );
+    if (path == null) return;
+
+    try {
+      setWakeWordInstallBusy(true);
+      const modelStatus = await invoke<WakeWordModelStatus>(
+        "set_wake_word_model_path",
+        { path }
+      );
+      const installStatus = await invoke<WakeWordInstallStatus>(
+        "get_wake_word_install_status"
+      );
+      setWakeWordModelStatus(modelStatus);
+      setWakeWordInstallStatus(installStatus);
+      setWakeWordSettings((prev) => ({
+        ...prev,
+        wake_word_model_path: installStatus.configured_model_path ?? path,
+      }));
+      const status = await invoke<WakeWordStatus>("get_wake_word_status");
+      setWakeWordStatus(status);
+    } catch (err) {
+      console.error("failed to set wake word model path", err);
+      setWakeWordInstallStatus((prev) => ({
+        ...prev,
+        install_ready: false,
+        message: String(err),
+      }));
+    } finally {
+      setWakeWordInstallBusy(false);
+    }
+  };
+
+  const requestWakeWordDownload = async (
+    command: "download_wake_word_runtime" | "download_wake_word_model_bundle"
+  ) => {
+    const confirmed = window.confirm(
+      "This will download local runtime/model files to your OpenBlob app data folder. Microphone audio is never uploaded."
+    );
+    if (!confirmed) return;
+
+    await refreshWakeWordInstallStatus(command);
   };
 
   const filteredGroups = useMemo(() => {
@@ -752,6 +1416,21 @@ function DevWindow() {
       [key]: !prev[key],
     }));
   };
+
+  const wakeWordProviderCanTriggerVoice =
+    wakeWordStatus.provider === "mock" ||
+    wakeWordStatus.provider === "local-openwakeword" ||
+    wakeWordStatus.provider === "local-wakeword";
+  const wakeToVoiceBlockReason = !wakeWordSettings.wake_word_auto_listen_enabled
+    ? "Wake-to-voice is disabled. Detection will not start voice input."
+    : !wakeWordSettings.wake_word_enabled || !wakeWordStatus.enabled
+      ? "Wake word is disabled."
+      : !wakeWordStatus.listening
+        ? "Wake listener is not active."
+        : !wakeWordProviderCanTriggerVoice
+          ? "Selected provider does not trigger voice input."
+          : null;
+  const wakeToVoiceArmed = wakeToVoiceBlockReason == null;
 
   return (
     <>
@@ -969,11 +1648,243 @@ function DevWindow() {
           gap: 12px;
         }
 
+        .settingsPanelToggle {
+          appearance: none;
+          border: 0;
+          background: transparent;
+          color: inherit;
+          padding: 0;
+          width: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          text-align: left;
+          cursor: pointer;
+        }
+
+        .settingsPanelSummary {
+          color: var(--text-soft);
+          font-size: 12px;
+          line-height: 1.35;
+          margin-top: 4px;
+        }
+
+        .settingsPanelBody {
+          display: grid;
+          gap: 12px;
+        }
+
+        .settingsChevron {
+          flex: 0 0 auto;
+          transition: transform 180ms ease;
+        }
+
+        .settingsChevron.open {
+          transform: rotate(180deg);
+        }
+
         .identityGrid {
           display: grid;
           grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
           gap: 10px;
           align-items: end;
+        }
+
+        .wakeGrid {
+          display: grid;
+          grid-template-columns: minmax(130px, 0.7fr) minmax(150px, 1fr) minmax(130px, 0.8fr) minmax(160px, 1fr) auto;
+          gap: 10px;
+          align-items: end;
+        }
+
+        .checkField {
+          display: flex;
+          min-height: 42px;
+          align-items: center;
+          gap: 10px;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.07);
+          padding: 0 12px;
+          color: rgba(255,255,255,0.82);
+          font-size: 13px;
+        }
+
+        .checkField input {
+          width: 16px;
+          height: 16px;
+          accent-color: #75A3FF;
+        }
+
+        .rangeInput {
+          width: 100%;
+          accent-color: #75A3FF;
+        }
+
+        .statusPill {
+          min-height: 42px;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.07);
+          padding: 8px 12px;
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          color: rgba(255,255,255,0.78);
+          font-size: 12px;
+          line-height: 1.35;
+        }
+
+        .statusDot {
+          width: 8px;
+          height: 8px;
+          border-radius: 999px;
+          background: rgba(255,255,255,0.38);
+          flex-shrink: 0;
+        }
+
+        .statusPill.listening .statusDot {
+          background: #64f0ad;
+        }
+
+        .statusPill.detected .statusDot {
+          background: #75A3FF;
+        }
+
+        .statusPill.error .statusDot {
+          background: #ff8a8a;
+        }
+
+        .statusPill.no_input_device .statusDot,
+        .statusPill.permission_error .statusDot,
+        .statusPill.provider_missing .statusDot,
+        .statusPill.model_missing .statusDot,
+        .statusPill.invalid_model_bundle .statusDot,
+        .statusPill.runtime_missing .statusDot,
+        .statusPill.provider_not_implemented .statusDot {
+          background: #ffd166;
+        }
+
+        .wakeNotice {
+          min-height: 28px;
+          color: rgba(255,255,255,0.72);
+          font-size: 12px;
+          line-height: 1.4;
+          word-break: break-word;
+        }
+
+        .wakeMetrics {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 10px;
+        }
+
+        .wakeInstaller {
+          display: grid;
+          gap: 10px;
+          border-radius: 16px;
+          border: 1px solid rgba(255,255,255,0.08);
+          background: rgba(255,255,255,0.04);
+          padding: 12px;
+        }
+
+        .installerHeader {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 12px;
+        }
+
+        .installerText {
+          color: rgba(255,255,255,0.68);
+          font-size: 12px;
+          line-height: 1.45;
+        }
+
+        .installBadge {
+          min-height: 30px;
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          border-radius: 999px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.07);
+          padding: 0 11px;
+          color: rgba(255,255,255,0.78);
+          font-size: 11px;
+          white-space: nowrap;
+        }
+
+        .installBadge.ready {
+          color: #9ff0c3;
+        }
+
+        .installBadge.missing {
+          color: #ffd166;
+        }
+
+        .installerGrid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+        }
+
+        .installerPanel {
+          display: grid;
+          gap: 8px;
+          min-width: 0;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.08);
+          background: rgba(0,0,0,0.12);
+          padding: 10px;
+        }
+
+        .installerTitle {
+          color: rgba(255,255,255,0.88);
+          font-size: 13px;
+          font-weight: 700;
+        }
+
+        .installerLine,
+        .installerError {
+          color: rgba(255,255,255,0.70);
+          font-size: 12px;
+          line-height: 1.4;
+          word-break: break-word;
+        }
+
+        .installerError {
+          color: #ffd166;
+        }
+
+        .installerActions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .wakeMetric {
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.08);
+          background: rgba(255,255,255,0.045);
+          padding: 10px 12px;
+          min-width: 0;
+        }
+
+        .wakeMetric .metricLabel {
+          font-size: 10px;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          opacity: 0.52;
+          margin-bottom: 5px;
+        }
+
+        .wakeMetric .metricValue {
+          font-size: 12px;
+          line-height: 1.4;
+          color: rgba(255,255,255,0.76);
+          word-break: break-word;
         }
 
         .field {
@@ -1027,6 +1938,10 @@ function DevWindow() {
           font-weight: 700;
           padding: 0 16px;
           cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
           transition: background 0.18s ease, border-color 0.18s ease, opacity 0.18s ease;
           white-space: nowrap;
           box-shadow:
@@ -1212,6 +2127,18 @@ function DevWindow() {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
 
+          .wakeGrid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .installerGrid {
+            grid-template-columns: 1fr;
+          }
+
+          .wakeMetrics {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
           .saveBtn {
             width: 100%;
           }
@@ -1249,6 +2176,18 @@ function DevWindow() {
           }
 
           .identityGrid {
+            grid-template-columns: 1fr;
+          }
+
+          .wakeGrid {
+            grid-template-columns: 1fr;
+          }
+
+          .installerHeader {
+            display: grid;
+          }
+
+          .wakeMetrics {
             grid-template-columns: 1fr;
           }
 
@@ -1385,30 +2324,675 @@ function DevWindow() {
             </div>
 
             <div className="card identityCard">
-              <div className="label">{t.ttsTools}</div>
+              <button
+                className="settingsPanelToggle"
+                type="button"
+                onClick={() => toggleSettingsPanel("voiceTts")}
+              >
+                <div>
+                  <div className="label">Voice / TTS</div>
+                  <div className="settingsPanelSummary">
+                    shortcut {voiceShortcut} - model {model}
+                  </div>
+                </div>
+                <ChevronDown
+                  size={16}
+                  className={`settingsChevron ${
+                    openSettingsPanels.voiceTts ? "open" : ""
+                  }`}
+                />
+              </button>
 
-              <div className="identityGrid">
+              {openSettingsPanels.voiceTts && (
+                <div className="settingsPanelBody">
+                  <div className="wakeMetrics">
+                    <div className="wakeMetric">
+                      <div className="metricLabel">{t.voiceShortcut}</div>
+                      <div className="metricValue">{voiceShortcut}</div>
+                    </div>
+                    <div className="wakeMetric">
+                      <div className="metricLabel">{t.model}</div>
+                      <div className="metricValue">{model}</div>
+                    </div>
+                    <div className="wakeMetric">
+                      <div className="metricLabel">TTS playback</div>
+                      <div className="metricValue">
+                        Bubble quick setting controls speech output.
+                      </div>
+                    </div>
+                    {isMacOS && (
+                      <div className="wakeMetric">
+                        <div className="metricLabel">{t.ttsTools}</div>
+                        <button
+                          className="saveBtn"
+                          onClick={() => void downloadPiper()}
+                          disabled={ttsBusy}
+                          type="button"
+                          style={{
+                            width: "100%",
+                            justifyContent: "center",
+                          }}
+                        >
+                          {ttsBusy ? t.downloading : t.downloadPiper}
+                        </button>
+                        {ttsMessage ? (
+                          <div className="metricValue">{ttsMessage}</div>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="card identityCard">
+              <button
+                className="settingsPanelToggle"
+                type="button"
+                onClick={() => toggleSettingsPanel("wakeWord")}
+              >
+                <div>
+                  <div className="label">{t.wakeWord}</div>
+                  <div className="settingsPanelSummary">
+                    {wakeWordSettings.wake_word_enabled ? "enabled" : "disabled"} -{" "}
+                    {wakeWordSettings.wake_word_provider} - {wakeWordStatus.state}
+                  </div>
+                </div>
+                <ChevronDown
+                  size={16}
+                  className={`settingsChevron ${
+                    openSettingsPanels.wakeWord ? "open" : ""
+                  }`}
+                />
+              </button>
+
+              {openSettingsPanels.wakeWord && (
+                <div className="settingsPanelBody">
+              <div className="wakeGrid">
+                <div className="field">
+                  <div className="fieldLabel">{t.wakeWordEnabled}</div>
+                  <label className="checkField">
+                    <input
+                      type="checkbox"
+                      checked={wakeWordSettings.wake_word_enabled}
+                      onChange={(e) =>
+                        setWakeWordSettings((prev) => ({
+                          ...prev,
+                          wake_word_enabled: e.target.checked,
+                        }))
+                      }
+                    />
+                    <span>{wakeWordSettings.wake_word_enabled ? "on" : "off"}</span>
+                  </label>
+                </div>
+
+                <div className="field">
+                  <div className="fieldLabel">{t.wakeWordAutoListen}</div>
+                  <label className="checkField">
+                    <input
+                      type="checkbox"
+                      checked={wakeWordSettings.wake_word_auto_listen_enabled}
+                      onChange={(e) =>
+                        setWakeWordSettings((prev) => ({
+                          ...prev,
+                          wake_word_auto_listen_enabled: e.target.checked,
+                        }))
+                      }
+                    />
+                    <span>
+                      {wakeWordSettings.wake_word_auto_listen_enabled
+                        ? "on"
+                        : "off"}
+                    </span>
+                  </label>
+                </div>
+
+                <div className="field">
+                  <div className="fieldLabel">{t.wakeWordPhrase}</div>
+                  <input
+                    className="textInput"
+                    value={wakeWordSettings.wake_word_phrase}
+                    onChange={(e) =>
+                      setWakeWordSettings((prev) => ({
+                        ...prev,
+                        wake_word_phrase: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="field">
+                  <div className="fieldLabel">{t.wakeWordProvider}</div>
+                  <select
+                    className="selectInput"
+                    value={wakeWordSettings.wake_word_provider}
+                    onChange={(e) =>
+                      setWakeWordSettings((prev) => ({
+                        ...prev,
+                        wake_word_provider: e.target.value as WakeWordProvider,
+                      }))
+                    }
+                  >
+                    <option value="none">none</option>
+                    <option value="disabled">disabled</option>
+                    <option value="mic-test">mic-test</option>
+                    <option value="mock">mock</option>
+                    <option value="local-openwakeword">local-openwakeword</option>
+                    <option value="local-wakeword">local-wakeword</option>
+                  </select>
+                </div>
+
+                <div className="field">
+                  <div className="fieldLabel">{t.wakeWordModelPath}</div>
+                  <input
+                    className="textInput"
+                    value={wakeWordSettings.wake_word_model_path || ""}
+                    onChange={(e) =>
+                      setWakeWordSettings((prev) => ({
+                        ...prev,
+                        wake_word_model_path: e.target.value || null,
+                      }))
+                    }
+                    placeholder="voice/models/wake-word/model.onnx"
+                  />
+                </div>
+
+                <div className="field">
+                  <div className="fieldLabel">ONNX Runtime DLL</div>
+                  <input
+                    className="textInput"
+                    value={wakeWordSettings.wake_word_runtime_path || ""}
+                    onChange={(e) =>
+                      setWakeWordSettings((prev) => ({
+                        ...prev,
+                        wake_word_runtime_path: e.target.value || null,
+                      }))
+                    }
+                    placeholder="%APPDATA%/OpenBlob/voice/runtime/onnxruntime/onnxruntime.dll"
+                  />
+                </div>
+
+                <div className="field">
+                  <div className="fieldLabel">
+                    {t.wakeWordSensitivity}{" "}
+                    {Math.round(wakeWordSettings.wake_word_sensitivity * 100)}%
+                  </div>
+                  <input
+                    className="rangeInput"
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={wakeWordSettings.wake_word_sensitivity}
+                    onChange={(e) =>
+                      setWakeWordSettings((prev) => ({
+                        ...prev,
+                        wake_word_sensitivity: Number(e.target.value),
+                      }))
+                    }
+                  />
+                </div>
+
                 <button
                   className="saveBtn"
-                  onClick={() => void downloadPiper()}
-                  disabled={ttsBusy || !isMacOS}
+                  onClick={() => void saveWakeWordSettings()}
+                  disabled={wakeWordSaving}
                   type="button"
-                  title={!isMacOS ? "macOS only" : undefined}
-                  style={{
-                    width: "100%",
-                    justifyContent: "center",
-                    gridColumn: "1 / -1",
-                  }}
                 >
-                  {ttsBusy ? t.downloading : t.downloadPiper}
+                  {wakeWordSaving ? t.saving : t.wakeWordSave}
                 </button>
 
-                {ttsMessage ? (
-                  <div className="field" style={{ gridColumn: "1 / -1" }}>
-                    <div className="fieldLabel">{ttsMessage}</div>
-                  </div>
-                ) : null}
+                <button
+                  className="saveBtn"
+                  onClick={() => void startWakeWordListener()}
+                  disabled={!wakeWordSettings.wake_word_enabled}
+                  type="button"
+                >
+                  {t.wakeWordStart}
+                </button>
+
+                <button
+                  className="saveBtn"
+                  onClick={() => void stopWakeWordListener()}
+                  type="button"
+                >
+                  {t.wakeWordStop}
+                </button>
               </div>
+
+              <div className="wakeInstaller">
+                <div className="installerHeader">
+                  <div>
+                    <div className="label">Installation</div>
+                    <div className="installerText">
+                      Local files only. No microphone audio is uploaded, and
+                      nothing starts automatically after install or verify.
+                    </div>
+                  </div>
+                  <div
+                    className={`installBadge ${
+                      wakeWordInstallStatus.install_ready ? "ready" : "missing"
+                    }`}
+                  >
+                    <CheckCircle2 size={14} />
+                    {wakeWordInstallStatus.install_ready
+                      ? "install ready"
+                      : "not ready"}
+                  </div>
+                </div>
+
+                <div className="installerGrid">
+                  <div className="installerPanel">
+                    <div className="installerTitle">Runtime status</div>
+                    <div className="installerLine">
+                      ONNX Runtime configured:{" "}
+                      {wakeWordInstallStatus.runtime_found ? "yes" : "no"}
+                    </div>
+                    <div className="installerLine">
+                      Runtime path:{" "}
+                      {wakeWordInstallStatus.runtime_path ||
+                        wakeWordInstallStatus.configured_runtime_path ||
+                        "none"}
+                    </div>
+                    {wakeWordInstallStatus.runtime_error && (
+                      <div className="installerError">
+                        {wakeWordInstallStatus.runtime_error}
+                      </div>
+                    )}
+                    <div className="installerActions">
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() =>
+                          void refreshWakeWordInstallStatus(
+                            "verify_wake_word_runtime"
+                          )
+                        }
+                      >
+                        Verify ONNX Runtime
+                      </button>
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() => void selectWakeWordRuntime()}
+                      >
+                        Select ONNX Runtime DLL
+                      </button>
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() =>
+                          void refreshWakeWordInstallStatus(
+                            "open_wake_word_runtime_folder"
+                          )
+                        }
+                      >
+                        <FolderOpen size={14} /> Open runtime folder
+                      </button>
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() =>
+                          void requestWakeWordDownload(
+                            "download_wake_word_runtime"
+                          )
+                        }
+                      >
+                        <Download size={14} /> Download ONNX Runtime
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="installerPanel">
+                    <div className="installerTitle">Model bundle status</div>
+                    <div className="installerLine">
+                      Bundle found:{" "}
+                      {wakeWordInstallStatus.model_bundle_found ? "yes" : "no"}
+                    </div>
+                    <div className="installerLine">
+                      Bundle path:{" "}
+                      {wakeWordInstallStatus.model_bundle_path ||
+                        wakeWordInstallStatus.configured_model_path ||
+                        "none"}
+                    </div>
+                    <div className="installerLine">
+                      Manifest:{" "}
+                      {wakeWordInstallStatus.manifest_valid
+                        ? "valid"
+                        : "missing or invalid"}
+                    </div>
+                    {wakeWordInstallStatus.missing_files.length > 0 && (
+                      <div className="installerError">
+                        Missing files:{" "}
+                        {wakeWordInstallStatus.missing_files.join(", ")}
+                      </div>
+                    )}
+                    <div className="installerActions">
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() =>
+                          void refreshWakeWordInstallStatus(
+                            "verify_wake_word_model_bundle"
+                          )
+                        }
+                      >
+                        Verify model bundle
+                      </button>
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() => void selectWakeWordModelBundle()}
+                      >
+                        Select local model bundle
+                      </button>
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() =>
+                          void refreshWakeWordInstallStatus(
+                            "open_wake_word_model_folder"
+                          )
+                        }
+                      >
+                        <FolderOpen size={14} /> Open model folder
+                      </button>
+                      <button
+                        className="saveBtn"
+                        type="button"
+                        disabled={wakeWordInstallBusy}
+                        onClick={() =>
+                          void requestWakeWordDownload(
+                            "download_wake_word_model_bundle"
+                          )
+                        }
+                      >
+                        <Download size={14} /> Download model bundle
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="installerText">
+                  {wakeWordInstallStatus.message}{" "}
+                  {wakeWordInstallStatus.license_notice}
+                </div>
+              </div>
+
+              <div className={`statusPill ${wakeWordStatus.state}`}>
+                <Radio size={14} />
+                <span className="statusDot" />
+                <span>
+                  {t.wakeWordStatus}: {wakeWordStatus.state}
+                  {wakeWordStatus.message ? ` - ${wakeWordStatus.message}` : ""}
+                </span>
+                <button
+                  className="saveBtn"
+                  onClick={() => void refreshWakeWord()}
+                  type="button"
+                >
+                  {t.wakeWordRefresh}
+                </button>
+              </div>
+
+              <div className="wakeNotice">
+                {wakeWordStatus.provider === "mic-test" &&
+                  "Mic test is active. No wake-word model is running."}
+                {wakeWordStatus.provider === "mock" &&
+                  "Mock wake-word detection is active for development only."}
+                {wakeWordSettings.wake_word_auto_listen_enabled
+                  ? " Wake-to-voice is enabled."
+                  : " Wake-to-voice is disabled. Detection will not start voice input."}
+                {(wakeWordStatus.provider === "local-openwakeword" ||
+                  wakeWordStatus.provider === "local-wakeword") &&
+                  wakeWordStatus.model_missing &&
+                  "Local wake-word provider selected, but no model is installed."}
+                {(wakeWordStatus.provider === "local-openwakeword" ||
+                  wakeWordStatus.provider === "local-wakeword") &&
+                  wakeWordStatus.state === "invalid_model_bundle" &&
+                  "Local wake-word model bundle is invalid."}
+                {(wakeWordStatus.provider === "local-openwakeword" ||
+                  wakeWordStatus.provider === "local-wakeword") &&
+                  wakeWordStatus.state === "runtime_missing" &&
+                  "Local wake-word runtime is missing or could not be loaded."}
+                {(wakeWordStatus.provider === "local-openwakeword" ||
+                  wakeWordStatus.provider === "local-wakeword") &&
+                  wakeWordModelStatus.model_exists &&
+                  wakeWordModelStatus.manifest_valid &&
+                  wakeWordStatus.runtime_state === "model_loaded" &&
+                  "Local wake-word model loaded."}
+                {(wakeWordStatus.provider === "local-openwakeword" ||
+                  wakeWordStatus.provider === "local-wakeword") &&
+                  wakeWordStatus.state ===
+                    "model_loaded_runtime_pipeline_incomplete" &&
+                  "Local wake-word inference pipeline is not complete yet."}
+                {(wakeWordStatus.provider === "local-openwakeword" ||
+                  wakeWordStatus.provider === "local-wakeword") &&
+                  wakeWordStatus.state === "unsupported_model_shape" &&
+                  "Local wake-word model shape is not supported yet."}
+                {wakeWordStatus.state === "detected" && " Wake word detected."}
+                {wakeWordStatus.state === "no_input_device" &&
+                  "No microphone input device is available."}
+                {wakeWordStatus.state === "permission_error" &&
+                  "Microphone permission or access error."}
+              </div>
+
+              <div className="wakeMetrics">
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordInputDevice}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.selected_input_device ||
+                      wakeWordStatus.available_input_devices[0] ||
+                      "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordLastAudio}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.last_audio_at || "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordChunks}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.audio_chunks_seen}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordInputLevel}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.input_level == null
+                      ? "none"
+                      : `${Math.round(wakeWordStatus.input_level * 100)}%`}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordProviderState}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.provider_state || "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordRuntimeState}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.runtime_state ||
+                      wakeWordModelStatus.runtime_state ||
+                      wakeWordModelStatus.runtime ||
+                      "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">Loaded ONNX models</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.loaded_model_count ||
+                      wakeWordModelStatus.loaded_model_count ||
+                      0}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">Classifier input</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.classifier_input_shape ||
+                      wakeWordModelStatus.classifier_input_shape ||
+                      "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">Classifier output</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.classifier_output_shape ||
+                      wakeWordModelStatus.classifier_output_shape ||
+                      "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordAutoListenStatus}</div>
+                  <div className="metricValue">
+                    {wakeToVoiceArmed
+                      ? "armed - voice can start from wake word"
+                      : `blocked - ${wakeToVoiceBlockReason}`}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordFrontendEvent}</div>
+                  <div className="metricValue">
+                    {wakeWordLastFrontendEventAt || "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordModelStatus}</div>
+                  <div className="metricValue">
+                    {wakeWordModelStatus.model_exists
+                      ? "bundle valid"
+                      : wakeWordModelStatus.missing_files.length
+                        ? "invalid bundle"
+                      : wakeWordStatus.model_missing
+                        ? "model missing"
+                        : "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordManifest}</div>
+                  <div className="metricValue">
+                    {wakeWordModelStatus.manifest_path
+                      ? wakeWordModelStatus.manifest_valid
+                        ? `valid: ${wakeWordModelStatus.manifest_path}`
+                        : `invalid: ${wakeWordModelStatus.manifest_path}`
+                      : "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordMissingFiles}</div>
+                  <div className="metricValue">
+                    {wakeWordModelStatus.missing_files.length
+                      ? wakeWordModelStatus.missing_files.join(", ")
+                      : "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordSampleRate}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.sample_rate ||
+                      wakeWordModelStatus.sample_rate ||
+                      "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordThreshold}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.threshold == null &&
+                    wakeWordModelStatus.threshold == null
+                      ? "none"
+                      : (
+                          wakeWordStatus.threshold ??
+                          wakeWordModelStatus.threshold ??
+                          0
+                        ).toFixed(3)}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordModelPath}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.model_path ||
+                      wakeWordModelStatus.resolved_model_path ||
+                      "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordModels}</div>
+                  <div className="metricValue">
+                    {wakeWordModelStatus.discovered_models.length
+                      ? wakeWordModelStatus.discovered_models.join(", ")
+                      : "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordDetectionCount}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.detection_count}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordLastDetected}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.last_detected_at || "none"}
+                  </div>
+                </div>
+
+                <div className="wakeMetric">
+                  <div className="metricLabel">{t.wakeWordDetectionScore}</div>
+                  <div className="metricValue">
+                    {wakeWordStatus.last_detection_score == null
+                      ? "none"
+                      : wakeWordStatus.last_detection_score.toFixed(3)}
+                  </div>
+                </div>
+
+                {wakeWordStatus.last_error && (
+                  <div className="wakeMetric">
+                    <div className="metricLabel">{t.wakeWordLastError}</div>
+                    <div className="metricValue">{wakeWordStatus.last_error}</div>
+                  </div>
+                )}
+                {(wakeWordStatus.runtime_error ||
+                  wakeWordModelStatus.runtime_error) && (
+                  <div className="wakeMetric">
+                    <div className="metricLabel">Runtime error</div>
+                    <div className="metricValue">
+                      {wakeWordStatus.runtime_error ||
+                        wakeWordModelStatus.runtime_error}
+                    </div>
+                  </div>
+                )}
+              </div>
+                </div>
+              )}
             </div>
 
             <div className="searchWrap">

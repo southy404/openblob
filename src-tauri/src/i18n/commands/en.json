@@ -95,6 +95,7 @@
   "streaming_service_aliases": {
     "netflix": ["netflix", "netflx", "netfliks"],
     "youtube": ["youtube", "yt", "youtub", "jutube"],
+    "steam": ["steam", "steem", "stim"],
     "prime": ["prime", "prime video", "amazon prime"],
     "disney": ["disney", "disney plus", "disneyplus"],
     "twitch": ["twitch", "twuicth", "twich"],

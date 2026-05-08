@@ -90,7 +90,9 @@ fn is_piper_installed() -> bool {
 }
 
 fn is_default_voice_installed() -> bool {
-    let Ok(dir) = models_dir() else { return false; };
+    let Ok(dir) = models_dir() else {
+        return false;
+    };
     dir.join(format!("{DEFAULT_EN_VOICE}.onnx")).exists()
         && dir.join(format!("{DEFAULT_EN_VOICE}.onnx.json")).exists()
 }

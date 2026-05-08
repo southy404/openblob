@@ -2,14 +2,41 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, emit, emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Mic, MicOff, Send, Volume2, VolumeX } from "lucide-react";
+import { Mic, MicOff, Send, Volume2, VolumeX, X } from "lucide-react";
 import { ensureDevWindow } from "../bubble-dev/open";
 import { ensureSubtitleWindow } from "../bubble-subtitle/open";
+import {
+  BLOB_ALWAYS_ON_TOP_EVENT,
+  BlobAlwaysOnTopPayload,
+  applyBlobWindowPinning,
+  readBlobAlwaysOnTop,
+  setWindowAlwaysOnTopSafely,
+} from "../window-pinning";
 
 type ContextPayload = {
   text: string;
   hint?: string;
   autoRun?: boolean;
+};
+
+type WakeWordDetectedPayload = {
+  phrase: string;
+  provider: string;
+  score: number;
+  detectedAt: string;
+};
+
+type WakeWordSettings = {
+  wake_word_enabled: boolean;
+  wake_word_auto_listen_enabled?: boolean;
+};
+
+type WakeWordStatus = {
+  state: string;
+  listening: boolean;
+  enabled?: boolean;
+  provider?: string;
+  detected?: boolean;
 };
 
 type OllamaResult = {
@@ -28,6 +55,7 @@ type SpeechRecognitionLike = {
   onresult: null | ((event: SpeechRecognitionEventLike) => void);
   start: () => void;
   stop: () => void;
+  abort?: () => void;
 };
 
 type SpeechRecognitionEventLike = {
@@ -41,6 +69,7 @@ type SpeechRecognitionEventLike = {
 type BubbleMode = "command" | "chat";
 type UiLang = "en" | "de";
 type RouteState = "command" | "ollama" | "none";
+type VoiceCaptureSource = "shortcut" | "wake-word";
 
 type BlobPhase =
   | "idle"
@@ -51,6 +80,12 @@ type BlobPhase =
   | "alert";
 
 type BlobSignal = Exclude<BlobPhase, "idle">;
+
+type SpeechSubtitleChunk = {
+  text: string;
+  index: number;
+  estimatedMs: number;
+};
 
 type BubbleTexts = {
   ready: string;
@@ -67,6 +102,16 @@ type BubbleTexts = {
   localCommandFailed: string;
   listening: string;
   speechRecognitionUnsupported: string;
+  voiceInputUnavailable: string;
+  alreadyListening: string;
+  wakeWordDetected: string;
+  iHeardYou: string;
+  wakeToVoiceDisabled: string;
+  wakeEventIgnoredBusy: string;
+  wakeEventIgnoredListening: string;
+  wakeEventIgnoredStale: string;
+  wakeEventIgnoredProvider: string;
+  voiceStartedFromWakeWord: string;
   voiceError: (msg: string) => string;
   microphoneError: (msg: string) => string;
   chattingWithModel: (model: string) => string;
@@ -78,6 +123,9 @@ type BubbleTexts = {
   ttsOnTitle: string;
   ttsOffTitle: string;
   speechRecognitionTitle: (shortcut: string) => string;
+  cancelTitle: string;
+  cancelled: string;
+  speaking: string;
   sendTitle: string;
   devMode: string;
   routeReady: string;
@@ -110,6 +158,14 @@ const BLOB_SIGNALS: BlobSignal[] = [
   "alert",
 ];
 
+const WAKE_TO_VOICE_COOLDOWN_MS = 2_000;
+const WAKE_EVENT_MAX_AGE_MS = 10_000;
+const WAKE_EVENT_ALLOWED_PROVIDERS = new Set([
+  "mock",
+  "local-openwakeword",
+  "local-wakeword",
+]);
+
 const BUBBLE_TEXTS: Record<UiLang, BubbleTexts> = {
   en: {
     ready: "Ready.",
@@ -127,6 +183,16 @@ const BUBBLE_TEXTS: Record<UiLang, BubbleTexts> = {
     localCommandFailed: "Local command failed.",
     listening: "Listening…",
     speechRecognitionUnsupported: "Speech recognition is not supported here.",
+    voiceInputUnavailable: "Voice input is not available.",
+    alreadyListening: "Already listening.",
+    wakeWordDetected: "Wake word detected.",
+    iHeardYou: "I heard you.",
+    wakeToVoiceDisabled: "Wake-to-voice is disabled.",
+    wakeEventIgnoredBusy: "Wake event ignored because OpenBlob is busy.",
+    wakeEventIgnoredListening: "Wake event ignored because voice input is already active.",
+    wakeEventIgnoredStale: "Wake event ignored because it is stale.",
+    wakeEventIgnoredProvider: "Wake event ignored for this provider.",
+    voiceStartedFromWakeWord: "Voice input started from wake word.",
     voiceError: (msg) => `Voice error: ${msg}`,
     microphoneError: (msg) => `Microphone error: ${msg}`,
     chattingWithModel: (model) => `Chatting with ${model}`,
@@ -139,6 +205,9 @@ const BUBBLE_TEXTS: Record<UiLang, BubbleTexts> = {
     ttsOnTitle: "Speech output on",
     ttsOffTitle: "Speech output off",
     speechRecognitionTitle: (shortcut) => `Speech recognition (${shortcut})`,
+    cancelTitle: "Cancel current flow",
+    cancelled: "Cancelled.",
+    speaking: "Speaking...",
     sendTitle: "Send",
     devMode: "dev mode",
     routeReady: "ready",
@@ -164,6 +233,17 @@ const BUBBLE_TEXTS: Record<UiLang, BubbleTexts> = {
     listening: "Ich höre zu …",
     speechRecognitionUnsupported:
       "Spracherkennung wird hier nicht unterstützt.",
+    voiceInputUnavailable: "Spracheingabe ist nicht verfuegbar.",
+    alreadyListening: "Ich hoere schon zu.",
+    wakeWordDetected: "Wake word erkannt.",
+    iHeardYou: "Ja?",
+    wakeToVoiceDisabled: "Wake-to-Voice ist deaktiviert.",
+    wakeEventIgnoredBusy: "Wake-Event ignoriert, weil OpenBlob beschaeftigt ist.",
+    wakeEventIgnoredListening:
+      "Wake-Event ignoriert, weil die Spracheingabe schon aktiv ist.",
+    wakeEventIgnoredStale: "Wake-Event ignoriert, weil es zu alt ist.",
+    wakeEventIgnoredProvider: "Wake-Event fuer diesen Provider ignoriert.",
+    voiceStartedFromWakeWord: "Spracheingabe vom Wake Word gestartet.",
     voiceError: (msg) => `Sprachfehler: ${msg}`,
     microphoneError: (msg) => `Mikrofonfehler: ${msg}`,
     chattingWithModel: (model) => `Chatte mit ${model}`,
@@ -176,6 +256,9 @@ const BUBBLE_TEXTS: Record<UiLang, BubbleTexts> = {
     ttsOnTitle: "Sprachausgabe an",
     ttsOffTitle: "Sprachausgabe aus",
     speechRecognitionTitle: (shortcut) => `Spracherkennung (${shortcut})`,
+    cancelTitle: "Aktuellen Ablauf abbrechen",
+    cancelled: "Abgebrochen.",
+    speaking: "Spricht...",
     sendTitle: "Senden",
     devMode: "dev mode",
     routeReady: "bereit",
@@ -219,16 +302,139 @@ function readBubbleMode(): BubbleMode {
   return value === "chat" ? "chat" : "command";
 }
 
-async function speak(text: string, onError?: (msg: string) => void) {
-  const trimmed = text.trim();
-  if (!trimmed) return;
+function sanitizeSpeechText(text: string) {
+  return text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function estimateChunkDurationMs(chunk: string) {
+  const words = chunk.trim().split(/\s+/).filter(Boolean).length;
+  const estimated = 600 + words * 340;
+  return Math.max(900, Math.min(6500, estimated));
+}
+
+function isDecimalBoundary(text: string, index: number) {
+  return /\d/.test(text[index - 1] ?? "") && /\d/.test(text[index + 1] ?? "");
+}
+
+function looksLikeAbbreviation(text: string, index: number) {
+  const before = text.slice(Math.max(0, index - 12), index + 1).toLowerCase();
+  return /\b(dr|mr|mrs|ms|prof|sr|jr|vs|z\.b|bzw|ca|bspw|d\.h|u\.a)\.$/.test(
+    before
+  );
+}
+
+function splitSentenceSegments(text: string) {
+  const normalized = text.replace(/\r/g, "\n").replace(/[ \t]+/g, " ").trim();
+  const segments: string[] = [];
+  let start = 0;
+
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index];
+    const isLineBreak = char === "\n";
+    const isSentencePunctuation = char === "." || char === "!" || char === "?";
+
+    if (
+      isLineBreak ||
+      (isSentencePunctuation &&
+        !isDecimalBoundary(normalized, index) &&
+        !looksLikeAbbreviation(normalized, index) &&
+        (index === normalized.length - 1 || /\s/.test(normalized[index + 1])))
+    ) {
+      const segment = normalized.slice(start, index + 1).trim();
+      if (segment) segments.push(segment);
+      start = index + 1;
+    }
+  }
+
+  const rest = normalized.slice(start).trim();
+  if (rest) segments.push(rest);
+  return segments;
+}
+
+function splitLongSegment(segment: string, maxChars = 230): string[] {
+  const trimmed = segment.trim();
+  if (trimmed.length <= maxChars) return [trimmed];
+
+  const chunks: string[] = [];
+  let remaining = trimmed;
+
+  while (remaining.length > maxChars) {
+    const windowText = remaining.slice(0, maxChars + 1);
+    const commaIndex = Math.max(
+      windowText.lastIndexOf(","),
+      windowText.lastIndexOf(";"),
+      windowText.lastIndexOf(":")
+    );
+    const spaceIndex = windowText.lastIndexOf(" ");
+    const cutIndex =
+      commaIndex >= 80 ? commaIndex + 1 : spaceIndex >= 80 ? spaceIndex : maxChars;
+
+    chunks.push(remaining.slice(0, cutIndex).trim());
+    remaining = remaining.slice(cutIndex).trim();
+  }
+
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
+
+function mergeTinySegments(segments: string[], maxChars = 230) {
+  const merged: string[] = [];
+
+  for (const segment of segments) {
+    const last = merged[merged.length - 1];
+    const wordCount = segment.split(/\s+/).filter(Boolean).length;
+
+    if (
+      last &&
+      (segment.length < 36 || wordCount <= 3) &&
+      `${last} ${segment}`.length <= maxChars
+    ) {
+      merged[merged.length - 1] = `${last} ${segment}`;
+    } else {
+      merged.push(segment);
+    }
+  }
+
+  return merged;
+}
+
+function splitSpeechSubtitleChunks(text: string): SpeechSubtitleChunk[] {
+  const sanitized = sanitizeSpeechText(text);
+  if (!sanitized) return [];
+
+  const longSplit = splitSentenceSegments(sanitized).flatMap((segment) =>
+    splitLongSegment(segment)
+  );
+
+  return mergeTinySegments(longSplit).map((chunk, index) => ({
+    text: chunk,
+    index,
+    estimatedMs: estimateChunkDurationMs(chunk),
+  }));
+}
+
+async function speak(
+  text: string,
+  onError?: (msg: string) => void,
+  lang?: UiLang
+) {
+  const trimmed = sanitizeSpeechText(text);
+  if (!trimmed) return true;
 
   try {
-    await invoke("speak_text", { text: trimmed });
+    await invoke("speak_text", { text: trimmed, lang });
+    return true;
   } catch (error) {
     const msg = `TTS failed: ${String(error)}`;
     console.error("native tts failed", error);
     onError?.(msg);
+    return false;
   }
 }
 
@@ -345,6 +551,7 @@ function BubbleApp() {
   );
   const [visible, setVisible] = useState(false);
   const [listening, setListening] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
   const [interimText, setInterimText] = useState("");
   const [lastRoute, setLastRoute] = useState<RouteState>("none");
   const [voiceShortcut, setVoiceShortcut] = useState(
@@ -360,13 +567,20 @@ function BubbleApp() {
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const recognitionSessionRef = useRef(0);
+  const voiceStoppingRef = useRef(false);
+  const voiceCancelRequestedRef = useRef(false);
   const finalVoiceTextRef = useRef("");
   const visibleRef = useRef(visible);
   const listeningRef = useRef(listening);
+  const speakingRef = useRef(false);
   const busyRef = useRef(false);
+  const interactionIdRef = useRef(0);
   const phaseRef = useRef<BlobPhase>("idle");
   const suppressBlurHideUntilRef = useRef(0);
   const blurHideTimerRef = useRef<number | null>(null);
+  const lastWakeEventKeyRef = useRef("");
+  const lastWakeVoiceAtRef = useRef(0);
 
   const t = BUBBLE_TEXTS[uiLang];
 
@@ -383,6 +597,14 @@ function BubbleApp() {
 
   const sleep = (ms: number) =>
     new Promise((resolve) => window.setTimeout(resolve, ms));
+
+  const isActiveInteraction = (sessionId: number) =>
+    sessionId === interactionIdRef.current;
+
+  const beginInteraction = () => {
+    interactionIdRef.current += 1;
+    return interactionIdRef.current;
+  };
 
   const setBlobPhase = async (phase: BlobPhase) => {
     phaseRef.current = phase;
@@ -476,6 +698,7 @@ function BubbleApp() {
     const prepareSubtitleWindow = async () => {
       try {
         const subtitleWindow = await ensureSubtitleWindow();
+        await applyBlobWindowPinning();
         await subtitleWindow.show().catch(() => {});
         await new Promise((resolve) => window.setTimeout(resolve, 80));
         await subtitleWindow.hide().catch(() => {});
@@ -529,6 +752,10 @@ function BubbleApp() {
   }, [listening]);
 
   useEffect(() => {
+    speakingRef.current = speaking;
+  }, [speaking]);
+
+  useEffect(() => {
     busyRef.current = busy;
   }, [busy]);
 
@@ -577,17 +804,22 @@ function BubbleApp() {
     }
   }, [subtitlesEnabled]);
 
+  const clearSubtitle = async () => {
+    try {
+      await emitTo("bubble-subtitle", "bubble-subtitle-clear");
+    } catch {}
+  };
+
   const showSubtitle = async (text: string, holdMs = 5200) => {
     if (!subtitlesEnabled) {
-      try {
-        await emitTo("bubble-subtitle", "bubble-subtitle-clear");
-      } catch {}
+      await clearSubtitle();
       return;
     }
 
     try {
       suppressBlurHideUntilRef.current = Date.now() + 800;
       const subtitleWindow = await ensureSubtitleWindow();
+      await applyBlobWindowPinning();
       await subtitleWindow.show().catch(() => {});
       await new Promise((resolve) => window.setTimeout(resolve, 80));
 
@@ -597,6 +829,58 @@ function BubbleApp() {
       });
     } catch (error) {
       console.error("failed to show subtitle window", error);
+    }
+  };
+
+  const showSubtitleChunk = async (chunk: SpeechSubtitleChunk) => {
+    if (!subtitlesEnabled) {
+      await clearSubtitle();
+      return;
+    }
+
+    try {
+      const subtitleWindow = await ensureSubtitleWindow();
+      await applyBlobWindowPinning();
+      await subtitleWindow.show().catch(() => {});
+      await emitTo("bubble-subtitle", "bubble-subtitle-show", {
+        text: chunk.text,
+        holdMs: 0,
+        mode: "chunk",
+      });
+    } catch (error) {
+      console.error("failed to show subtitle chunk", error);
+    }
+  };
+
+  const speakBlobResponseStreamed = async (text: string, sessionId: number) => {
+    const chunks = splitSpeechSubtitleChunks(text);
+    if (!chunks.length || !isActiveInteraction(sessionId)) return;
+
+    if (!speakEnabled) {
+      await showSubtitle(text, 5600);
+      return;
+    }
+
+    setSpeaking(true);
+    speakingRef.current = true;
+
+    try {
+      for (const chunk of chunks) {
+        if (!isActiveInteraction(sessionId)) break;
+
+        await setBlobPhase("executing");
+        await showSubtitleChunk(chunk);
+
+        if (!isActiveInteraction(sessionId)) break;
+        const spoken = await speak(chunk.text, setHint, uiLang);
+        if (!spoken) break;
+      }
+    } finally {
+      if (isActiveInteraction(sessionId)) {
+        setSpeaking(false);
+        speakingRef.current = false;
+        await clearSubtitle();
+      }
     }
   };
 
@@ -610,6 +894,8 @@ function BubbleApp() {
 
   const fadeInAndShow = async () => {
     const win = getCurrentWindow();
+    await setWindowAlwaysOnTopSafely(win, readBlobAlwaysOnTop());
+    await applyBlobWindowPinning();
     await win.show();
     requestAnimationFrame(() => setVisible(true));
     const focused = await win.isFocused().catch(() => false);
@@ -650,7 +936,7 @@ function BubbleApp() {
     });
   };
 
-  const runOllamaAsk = async (prompt: string) => {
+  const runOllamaAsk = async (prompt: string, sessionId: number) => {
     await setBlobPhase("thinking");
 
     const started = Date.now();
@@ -671,7 +957,9 @@ function BubbleApp() {
         model,
       });
 
-      await showSubtitle(result.content, 5600);
+      if (!isActiveInteraction(sessionId)) return;
+
+      await setBlobPhase("executing");
 
       setHint(
         bubbleMode === "chat"
@@ -682,13 +970,13 @@ function BubbleApp() {
 
       await emit("companion-speech", result.content.slice(0, 180));
 
-      if (speakEnabled) {
-        await speak(result.content.slice(0, 260), setHint);
-      }
+      await speakBlobResponseStreamed(result.content, sessionId);
     } finally {
       window.clearInterval(tick);
       setOllamaElapsedMs(null);
-      await setBlobPhase("idle");
+      if (isActiveInteraction(sessionId)) {
+        await setBlobPhase("idle");
+      }
     }
   };
 
@@ -703,7 +991,10 @@ function BubbleApp() {
     }, 0);
   };
 
-  const executeCommandOrAsk = async (rawInput: string) => {
+  const executeCommandOrAsk = async (
+    rawInput: string,
+    sessionId = beginInteraction()
+  ) => {
     const input = rawInput.trim();
 
     if (!input) {
@@ -712,30 +1003,36 @@ function BubbleApp() {
     }
 
     if (busyRef.current) return;
+    if (!isActiveInteraction(sessionId)) return;
 
     busyRef.current = true;
     setBusy(true);
     await setBlobPhase("thinking");
 
     try {
+      if (bubbleMode === "chat") {
+        setHint(t.justChatting);
+        await runOllamaAsk(input, sessionId);
+        return;
+      }
+
       const directUrl = getDirectKnownUrl(input);
 
       if (directUrl) {
         await showThinkingBeforeExecuting();
+        if (!isActiveInteraction(sessionId)) return;
         await setBlobPhase("executing");
 
         await invoke<string>("handle_voice_command", {
           input: `open ${directUrl}`,
         });
+        if (!isActiveInteraction(sessionId)) return;
 
         const spoken = t.knownSiteOpeningSpoken(directUrl);
-        await showSubtitle(spoken, 4200);
         setHint(t.knownSiteOpened);
         setLastRoute("command");
 
-        if (speakEnabled) {
-          void speak(spoken);
-        }
+        await speakBlobResponseStreamed(spoken, sessionId);
 
         await setBlobPhase("idle");
         return;
@@ -743,16 +1040,15 @@ function BubbleApp() {
 
       if (isHideAndSeekCommand(input)) {
         await showThinkingBeforeExecuting();
+        if (!isActiveInteraction(sessionId)) return;
         await setBlobPhase("executing");
 
         await emit("start-hide-and-seek");
-        await showSubtitle(t.hideAndSeekStartedSpoken, 4200);
+        if (!isActiveInteraction(sessionId)) return;
         setHint(t.hideAndSeekStarted);
         setLastRoute("command");
 
-        if (speakEnabled) {
-          void speak(t.hideAndSeekStartedSpoken);
-        }
+        await speakBlobResponseStreamed(t.hideAndSeekStartedSpoken, sessionId);
 
         await setBlobPhase("idle");
         return;
@@ -763,20 +1059,15 @@ function BubbleApp() {
       const actionResult = await invoke<string>("handle_voice_command", {
         input,
       });
+      if (!isActiveInteraction(sessionId)) return;
 
       if (actionResult !== "NO_ACTION") {
         await setBlobPhase("executing");
         await sleep(450);
+        if (!isActiveInteraction(sessionId)) return;
 
-        await showSubtitle(actionResult, 4200);
         setHint(t.commandExecuted);
         setLastRoute("command");
-
-        await emit("companion-speech", actionResult);
-
-        if (speakEnabled) {
-          await speak(actionResult.slice(0, 220));
-        }
 
         return;
       }
@@ -786,24 +1077,21 @@ function BubbleApp() {
       if (looksLikeDirectCommand(input)) {
         const message = t.directCommandFailedMessage(input);
 
-        await showSubtitle(message, 4200);
         setHint(t.directCommandRecognizedButNoLocalMatch);
         setLastRoute("command");
 
-        if (speakEnabled) {
-          await speak(message);
-        }
+        await speakBlobResponseStreamed(message, sessionId);
 
         await flashBlobAlert();
         return;
       }
 
-      setHint(bubbleMode === "chat" ? t.justChatting : t.noLocalCommandMatched);
-      await runOllamaAsk(input);
+      setHint(t.noLocalCommandMatched);
+      await runOllamaAsk(input, sessionId);
     } catch (error) {
-      const message = String(error);
+      if (!isActiveInteraction(sessionId)) return;
 
-      await showSubtitle(message, 4800);
+      const message = String(error);
 
       if (bubbleMode === "command" && looksLikeDirectCommand(input)) {
         setHint(t.localCommandFailed);
@@ -812,14 +1100,14 @@ function BubbleApp() {
         setHint(t.errorPrefix(message));
       }
 
-      if (speakEnabled) {
-        await speak(message.slice(0, 220));
-      }
-
       await flashBlobAlert();
     } finally {
+      if (!isActiveInteraction(sessionId)) return;
+
       busyRef.current = false;
       setBusy(false);
+      setSpeaking(false);
+      speakingRef.current = false;
 
       if (phaseRef.current !== "alert") {
         await setBlobPhase("idle");
@@ -833,22 +1121,56 @@ function BubbleApp() {
     const text = (questionRef.current || "").trim();
 
     if (!text) {
+      if (busyRef.current || listeningRef.current || speakingRef.current) {
+        await cancelCurrentInteraction();
+        return;
+      }
+
       setHint(t.pleaseEnterSomething);
       return;
     }
 
+    const sessionId = beginInteraction();
+    stopVoiceInput({ cancel: true });
+    await Promise.allSettled([stopSpeaking(), clearSubtitle()]);
+    busyRef.current = false;
+    speakingRef.current = false;
+    setBusy(false);
+    setSpeaking(false);
+    setListening(false);
+    listeningRef.current = false;
     clearComposer();
-    await executeCommandOrAsk(text);
+    await executeCommandOrAsk(text, sessionId);
   };
 
-  const startVoiceInput = async () => {
+  const startVoiceInput = async (
+    source: VoiceCaptureSource = "shortcut"
+  ): Promise<boolean> => {
     if (!SpeechRecognitionCtor) {
-      setHint(t.speechRecognitionUnsupported);
+      setHint(
+        source === "wake-word"
+          ? t.voiceInputUnavailable
+          : t.speechRecognitionUnsupported
+      );
       await flashBlobAlert();
-      return;
+      return false;
     }
 
-    if (listeningRef.current || busyRef.current) return;
+    if (listeningRef.current) {
+      setHint(t.alreadyListening);
+      return false;
+    }
+
+    if (busyRef.current) {
+      setHint(t.processing);
+      return false;
+    }
+
+    const sessionId = beginInteraction();
+    await stopSpeaking();
+    await clearSubtitle();
+    setSpeaking(false);
+    speakingRef.current = false;
 
     try {
       const recognition = new SpeechRecognitionCtor();
@@ -858,7 +1180,12 @@ function BubbleApp() {
       recognition.maxAlternatives = 1;
 
       recognition.onstart = async () => {
+        if (!isActiveInteraction(sessionId)) return;
+
         finalVoiceTextRef.current = "";
+        voiceCancelRequestedRef.current = false;
+        voiceStoppingRef.current = false;
+        recognitionSessionRef.current = sessionId;
         setListening(true);
         setInterimText("");
         setHint(t.listening);
@@ -866,6 +1193,10 @@ function BubbleApp() {
       };
 
       recognition.onresult = (event) => {
+        if (!isActiveInteraction(sessionId) || voiceCancelRequestedRef.current) {
+          return;
+        }
+
         let finalTranscript = "";
         let liveTranscript = "";
 
@@ -894,26 +1225,44 @@ function BubbleApp() {
       };
 
       recognition.onend = async () => {
+        const cancelled =
+          voiceCancelRequestedRef.current || !isActiveInteraction(sessionId);
+
         setListening(false);
         listeningRef.current = false;
+        voiceStoppingRef.current = false;
         recognitionRef.current = null;
 
         const finalText = finalVoiceTextRef.current.trim();
         finalVoiceTextRef.current = "";
 
-        clearComposer();
+        if (cancelled) {
+          setInterimText("");
+          clearComposer();
+          if (isActiveInteraction(sessionId)) {
+            await setBlobPhase("idle");
+          }
+          return;
+        }
 
         if (finalText) {
           await setBlobPhase("thinking");
-          await executeCommandOrAsk(finalText);
+          clearComposer();
+          await executeCommandOrAsk(finalText, sessionId);
         } else {
           await setBlobPhase("idle");
         }
       };
 
       recognition.onerror = async (event) => {
+        if (!isActiveInteraction(sessionId) || voiceCancelRequestedRef.current) {
+          voiceStoppingRef.current = false;
+          return;
+        }
+
         setListening(false);
         listeningRef.current = false;
+        voiceStoppingRef.current = false;
         recognitionRef.current = null;
         setInterimText("");
         finalVoiceTextRef.current = "";
@@ -922,28 +1271,82 @@ function BubbleApp() {
       };
 
       recognitionRef.current = recognition;
+      recognitionSessionRef.current = sessionId;
+      voiceCancelRequestedRef.current = false;
       recognition.start();
+      return true;
     } catch (error) {
       setListening(false);
       listeningRef.current = false;
+      voiceStoppingRef.current = false;
       setInterimText("");
       finalVoiceTextRef.current = "";
       setHint(t.microphoneError(String(error)));
       await flashBlobAlert();
+      return false;
     }
   };
 
-  const stopVoiceInput = () => {
-    try {
-      recognitionRef.current?.stop();
-    } catch {}
+  const stopVoiceInput = (
+    options: { cancel?: boolean; setIdle?: boolean } = {}
+  ) => {
+    const cancel = options.cancel ?? true;
+    const setIdle = options.setIdle ?? true;
+    const recognition = recognitionRef.current;
 
-    recognitionRef.current = null;
+    if (voiceStoppingRef.current) return;
+    voiceStoppingRef.current = true;
+    voiceCancelRequestedRef.current = cancel;
+
+    if (cancel) {
+      finalVoiceTextRef.current = "";
+      clearComposer();
+    }
+
+    try {
+      if (cancel && recognition?.abort) {
+        recognition.abort();
+      } else {
+        recognition?.stop();
+      }
+    } catch (error) {
+      console.error("voice stop failed", error);
+      setHint(t.voiceError(String(error)));
+      voiceStoppingRef.current = false;
+    }
+
+    if (!recognition) {
+      recognitionRef.current = null;
+      voiceStoppingRef.current = false;
+      setListening(false);
+      listeningRef.current = false;
+    }
+
+    setInterimText("");
+
+    if (setIdle) {
+      void setBlobPhase("idle");
+    }
+  };
+
+  const cancelCurrentInteraction = async () => {
+    beginInteraction();
+
+    stopVoiceInput({ cancel: true, setIdle: false });
+    await Promise.allSettled([stopSpeaking(), clearSubtitle()]);
+
+    busyRef.current = false;
+    speakingRef.current = false;
+    setBusy(false);
+    setSpeaking(false);
     setListening(false);
     listeningRef.current = false;
     setInterimText("");
+    finalVoiceTextRef.current = "";
+    setHint(t.cancelled);
 
-    void setBlobPhase("idle");
+    await setBlobPhase("idle");
+    await fadeInAndShow().catch(() => {});
   };
 
   useEffect(() => {
@@ -953,16 +1356,14 @@ function BubbleApp() {
     let unlistenHide: null | (() => void) = null;
     let unlistenVoiceToggle: null | (() => void) = null;
     let unlistenShortcut: null | (() => void) = null;
+    let unlistenWakeWord: null | (() => void) = null;
+    let unlistenPinning: null | (() => void) = null;
 
     const setup = async () => {
       unlistenContext = await listen<ContextPayload>(
         "companion-context",
         async (event) => {
           const payload = event.payload;
-
-          if (payload.text?.trim()) {
-            await showSubtitle(payload.text.trim(), 5200);
-          }
 
           if (payload.hint) {
             setHint(payload.hint);
@@ -1005,9 +1406,11 @@ function BubbleApp() {
         await fadeInAndShow();
 
         if (listeningRef.current) {
-          stopVoiceInput();
+          stopVoiceInput({ cancel: true });
+        } else if (busyRef.current || speakingRef.current) {
+          await cancelCurrentInteraction();
         } else {
-          await startVoiceInput();
+          await startVoiceInput("shortcut");
         }
       });
 
@@ -1017,6 +1420,141 @@ function BubbleApp() {
         setLastShortcut(value);
         window.setTimeout(() => setLastShortcut(null), 1800);
       });
+
+      unlistenPinning = await listen<BlobAlwaysOnTopPayload>(
+        BLOB_ALWAYS_ON_TOP_EVENT,
+        async (event) => {
+          await setWindowAlwaysOnTopSafely(
+            getCurrentWindow(),
+            event.payload.enabled
+          );
+          await applyBlobWindowPinning(event.payload.enabled);
+        }
+      );
+
+      unlistenWakeWord = await listen<WakeWordDetectedPayload>(
+        "wake-word-detected",
+        async (event) => {
+          const payload = event.payload;
+          const provider = payload.provider?.trim().toLowerCase() ?? "";
+          const eventKey = `${provider}:${payload.detectedAt}:${payload.score}`;
+          const now = Date.now();
+          const eventTime = Date.parse(payload.detectedAt);
+          const eventAge = Number.isFinite(eventTime) ? now - eventTime : 0;
+
+          console.info("[openblob:wake-word] frontend received wake event", {
+            provider,
+            detectedAt: payload.detectedAt,
+            score: payload.score,
+          });
+
+          if (eventKey === lastWakeEventKeyRef.current) {
+            console.info("[openblob:wake-word] duplicate wake event ignored");
+            return;
+          }
+          lastWakeEventKeyRef.current = eventKey;
+
+          if (
+            !WAKE_EVENT_ALLOWED_PROVIDERS.has(provider) ||
+            !Number.isFinite(payload.score)
+          ) {
+            setHint(t.wakeEventIgnoredProvider);
+            console.info("[openblob:wake-word] wake event ignored: provider");
+            return;
+          }
+
+          if (
+            Number.isFinite(eventTime) &&
+            (eventAge > WAKE_EVENT_MAX_AGE_MS || eventAge < -2_000)
+          ) {
+            setHint(t.wakeEventIgnoredStale);
+            console.info("[openblob:wake-word] wake event ignored: stale");
+            return;
+          }
+
+          await fadeInAndShow();
+          setHint(t.wakeWordDetected);
+          await setBlobPhase("alert");
+
+          window.setTimeout(() => {
+            if (phaseRef.current === "alert") {
+              void setBlobPhase("idle");
+            }
+          }, 900);
+
+          if (now - lastWakeVoiceAtRef.current < WAKE_TO_VOICE_COOLDOWN_MS) {
+            setHint(t.alreadyListening);
+            console.info("[openblob:wake-word] wake event ignored: cooldown");
+            return;
+          }
+
+          if (listeningRef.current) {
+            setHint(t.wakeEventIgnoredListening);
+            console.info("[openblob:wake-word] wake event ignored: listening");
+            return;
+          }
+
+          if (
+            busyRef.current ||
+            speakingRef.current ||
+            phaseRef.current === "thinking" ||
+            phaseRef.current === "executing" ||
+            phaseRef.current === "transcript"
+          ) {
+            setHint(t.wakeEventIgnoredBusy);
+            console.info("[openblob:wake-word] wake event ignored: busy");
+            return;
+          }
+
+          let settings: WakeWordSettings;
+          let status: WakeWordStatus;
+
+          try {
+            [settings, status] = await Promise.all([
+              invoke<WakeWordSettings>("get_wake_word_settings"),
+              invoke<WakeWordStatus>("get_wake_word_status"),
+            ]);
+          } catch (error) {
+            console.error("failed to read wake word status", error);
+            setHint(t.voiceInputUnavailable);
+            await flashBlobAlert();
+            return;
+          }
+
+          if (
+            !settings.wake_word_enabled ||
+            !settings.wake_word_auto_listen_enabled ||
+            status.enabled === false ||
+            (status.state !== "listening" && status.state !== "detected") ||
+            !status.listening ||
+            (status.provider &&
+              status.provider !== "mock" &&
+              status.provider !== "local-openwakeword" &&
+              status.provider !== "local-wakeword")
+          ) {
+            setHint(
+              settings.wake_word_auto_listen_enabled
+                ? t.wakeEventIgnoredBusy
+                : t.wakeToVoiceDisabled
+            );
+            console.info("[openblob:wake-word] wake event ignored: not armed", {
+              enabled: settings.wake_word_enabled,
+              autoListen: settings.wake_word_auto_listen_enabled,
+              status,
+            });
+            return;
+          }
+
+          lastWakeVoiceAtRef.current = now;
+          setHint(t.iHeardYou);
+          await sleep(180);
+          const started = await startVoiceInput("wake-word");
+          if (started) {
+            setHint(t.voiceStartedFromWakeWord);
+            console.info("[openblob:wake-word] voice input started from wake event");
+          }
+        }
+      );
     };
 
     void setup();
@@ -1028,6 +1566,8 @@ function BubbleApp() {
       unlistenHide?.();
       unlistenVoiceToggle?.();
       unlistenShortcut?.();
+      unlistenWakeWord?.();
+      unlistenPinning?.();
     };
   }, [uiLang, t]);
 
@@ -1049,8 +1589,10 @@ function BubbleApp() {
       ) {
         event.preventDefault();
 
-        if (listeningRef.current) stopVoiceInput();
-        else void startVoiceInput();
+        if (listeningRef.current) stopVoiceInput({ cancel: true });
+        else if (busyRef.current || speakingRef.current)
+          void cancelCurrentInteraction();
+        else void startVoiceInput("shortcut");
       }
     };
 
@@ -1060,13 +1602,10 @@ function BubbleApp() {
 
   useEffect(() => {
     return () => {
+      stopVoiceInput({ cancel: true });
       void stopSpeaking();
       void emitTo("bubble-subtitle", "bubble-subtitle-clear").catch(() => {});
       void setBlobPhase("idle");
-
-      try {
-        recognitionRef.current?.stop();
-      } catch {}
     };
   }, []);
 
@@ -1080,6 +1619,9 @@ function BubbleApp() {
 
   const placeholder =
     bubbleMode === "chat" ? t.placeholderChat : t.placeholderCommand;
+  const interactionActive = busy || listening || speaking;
+  const showCancelAction =
+    interactionActive && questionRef.current.trim().length === 0;
 
   return (
     <>
@@ -1129,11 +1671,13 @@ function BubbleApp() {
           position: relative;
           border-radius: 999px;
           isolation: isolate;
-          background: transparent;
+          background: rgba(24, 24, 28, 0.28);
           backdrop-filter: blur(18px) saturate(155%);
           -webkit-backdrop-filter: blur(18px) saturate(155%);
-          border: 0;
-          box-shadow: none;
+          border: 1px solid rgba(255, 255, 255, 0.14);
+          box-shadow:
+            inset 0 1px 1px rgba(255, 255, 255, 0.18),
+            inset 0 -1px 1px rgba(0, 0, 0, 0.16);
           backface-visibility: hidden;
         }
 
@@ -1159,10 +1703,6 @@ function BubbleApp() {
           flex-direction: column;
           justify-content: center;
           gap: 4px;
-          border-radius: 999px;
-          padding: 10px 16px 10px 18px;
-          border: 1px solid rgba(255, 255, 255, 0.14);
-          background: rgba(24, 24, 28, 0.28);
         }
 
         .bubble-input {
@@ -1196,8 +1736,8 @@ function BubbleApp() {
           width: 52px;
           height: 52px;
           border-radius: 50%;
-          border: 0;
-          background: transparent;
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          background: rgba(255, 255, 255, 0.09);
           color: var(--text-main);
           display: grid;
           place-items: center;
@@ -1208,6 +1748,8 @@ function BubbleApp() {
         }
 
         .icon-btn:hover {
+          background: rgba(255, 255, 255, 0.16);
+          border-color: rgba(255, 255, 255, 0.24);
           transform: scale(1.04);
         }
 
@@ -1222,14 +1764,15 @@ function BubbleApp() {
         }
 
         .icon-btn-active {
-          background: transparent;
+          background: rgba(255, 255, 255, 0.2);
+          border-color: rgba(255, 255, 255, 0.28);
         }
 
         .send-btn {
           position: relative;
           border: none;
           border-radius: 50%;
-          background: transparent;
+          background: rgba(255, 255, 255, 0.09);
           box-shadow:
             inset 0 1px 1px rgba(255,255,255,0.22),
             inset 0 -1px 1px rgba(0,0,0,0.16),
@@ -1245,7 +1788,39 @@ function BubbleApp() {
         }
 
         .send-btn:hover {
+          background: rgba(255, 255, 255, 0.16);
           transform: scale(1.045);
+        }
+
+        .macos-lite .input-wrap {
+          border-radius: 999px;
+          padding: 10px 16px 10px 18px;
+          border: 1px solid rgba(255, 255, 255, 0.14);
+          background: rgba(24, 24, 28, 0.28);
+        }
+
+        .macos-lite .icon-btn,
+        .macos-lite .send-btn {
+          border: 0;
+          background: transparent;
+        }
+
+        .macos-lite .icon-btn:hover,
+        .macos-lite .send-btn:hover,
+        .macos-lite .icon-btn-active {
+          background: transparent;
+        }
+
+        .cancel-btn {
+          background: rgba(255, 92, 92, 0.24);
+          box-shadow:
+            inset 0 1px 1px rgba(255,255,255,0.18),
+            inset 0 -1px 1px rgba(0,0,0,0.16),
+            0 0 0 1px rgba(255,120,120,0.25);
+        }
+
+        .cancel-btn:hover {
+          background: rgba(255, 92, 92, 0.34);
         }
 
         .send-glow {
@@ -1402,13 +1977,16 @@ function BubbleApp() {
 
                     if (e.key === "Escape") {
                       e.preventDefault();
-                      void closeBubble();
+                      if (interactionActive) void cancelCurrentInteraction();
+                      else void closeBubble();
                     }
                   }}
                 />
 
                 <div className="bubble-meta">
-                  <span>{busy ? t.processing : hint}</span>
+                  <span>
+                    {busy ? t.processing : speaking ? t.speaking : hint}
+                  </span>
                   {ollamaElapsedMs !== null && (
                     <span> | Ollama {Math.ceil(ollamaElapsedMs / 1000)}s</span>
                   )}
@@ -1424,7 +2002,12 @@ function BubbleApp() {
                 onClick={() => {
                   setSpeakEnabled((prev) => {
                     const next = !prev;
-                    if (!next) void stopSpeaking();
+                    if (!next) {
+                      setSpeaking(false);
+                      speakingRef.current = false;
+                      void stopSpeaking();
+                      void clearSubtitle();
+                    }
                     return next;
                   });
                 }}
@@ -1437,32 +2020,50 @@ function BubbleApp() {
               <button
                 className={`icon-btn ${listening ? "icon-btn-active" : ""}`}
                 onClick={() => {
-                  if (listeningRef.current) stopVoiceInput();
-                  else void startVoiceInput();
+                  if (listeningRef.current) stopVoiceInput({ cancel: true });
+                  else if (busyRef.current || speakingRef.current)
+                    void cancelCurrentInteraction();
+                  else void startVoiceInput("shortcut");
                 }}
                 title={t.speechRecognitionTitle(voiceShortcut)}
-                disabled={busy}
                 type="button"
               >
                 {listening ? <MicOff size={20} /> : <Mic size={20} />}
               </button>
 
               <button
-                className="icon-btn send-btn"
-                onClick={() => void handleTypedSubmit()}
-                title={t.sendTitle}
-                disabled={busy}
+                className={`icon-btn send-btn ${
+                  showCancelAction ? "cancel-btn" : ""
+                }`}
+                onClick={() =>
+                  showCancelAction
+                    ? void cancelCurrentInteraction()
+                    : void handleTypedSubmit()
+                }
+                title={showCancelAction ? t.cancelTitle : t.sendTitle}
                 type="button"
               >
-                <Send
-                  size={18}
-                  color="#ffffff"
-                  style={{
-                    marginLeft: "-1px",
-                    position: "relative",
-                    zIndex: 2,
-                  }}
-                />
+                {showCancelAction ? (
+                  <X
+                    size={20}
+                    color="#ffffff"
+                    strokeWidth={2.8}
+                    style={{
+                      position: "relative",
+                      zIndex: 2,
+                    }}
+                  />
+                ) : (
+                  <Send
+                    size={18}
+                    color="#ffffff"
+                    style={{
+                      marginLeft: "-1px",
+                      position: "relative",
+                      zIndex: 2,
+                    }}
+                  />
+                )}
 
                 <svg
                   className="send-glow"

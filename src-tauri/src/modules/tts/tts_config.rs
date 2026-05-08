@@ -26,16 +26,11 @@ pub struct TtsConfig {
 impl Default for TtsConfig {
     fn default() -> Self {
         #[cfg(target_os = "macos")]
-        let (piper_exe, piper_models_dir) = (
-            "piper".to_string(),
-            "piper_models".to_string(),
-        );
+        let (piper_exe, piper_models_dir) = ("piper".to_string(), "piper_models".to_string());
 
         #[cfg(not(target_os = "macos"))]
-        let (piper_exe, piper_models_dir) = (
-            "../tools/piper/piper.exe".to_string(),
-            "models".to_string(),
-        );
+        let (piper_exe, piper_models_dir) =
+            ("../tools/piper/piper.exe".to_string(), "models".to_string());
 
         Self {
             default_lang: "de".into(),
@@ -59,8 +54,8 @@ pub fn detect_lang_from_text(text: &str) -> String {
     let lower = format!(" {} ", text.to_lowercase());
 
     let german_markers = [
-        " ich ", " und ", " oder ", " nicht ", " bitte ", " heute ", " wetter ",
-        " danke ", " hallo ", "ü", "ö", "ä", "ß",
+        " ich ", " und ", " oder ", " nicht ", " bitte ", " heute ", " wetter ", " danke ",
+        " hallo ", "ü", "ö", "ä", "ß",
     ];
 
     if german_markers.iter().any(|m| lower.contains(m)) {

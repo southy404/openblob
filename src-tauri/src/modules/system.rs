@@ -250,8 +250,7 @@ pub fn lock_screen() -> Result<(), String> {
     {
         use windows::Win32::System::Shutdown::LockWorkStation;
 
-        unsafe { LockWorkStation() }
-            .map_err(|e| format!("Failed to lock screen: {e}"))?;
+        unsafe { LockWorkStation() }.map_err(|e| format!("Failed to lock screen: {e}"))?;
 
         return Ok(());
     }

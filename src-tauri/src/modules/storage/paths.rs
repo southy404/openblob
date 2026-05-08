@@ -38,9 +38,7 @@ fn fallback_base_dir() -> PathBuf {
     }
 
     if let Ok(user_profile) = std::env::var("USERPROFILE") {
-        return PathBuf::from(user_profile)
-            .join("AppData")
-            .join("Roaming");
+        return PathBuf::from(user_profile).join("AppData").join("Roaming");
     }
 
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
@@ -108,6 +106,10 @@ pub fn episodic_memory_path() -> Result<PathBuf, String> {
 
 pub fn semantic_memory_path() -> Result<PathBuf, String> {
     Ok(memory_dir()?.join("semantic_memory.json"))
+}
+
+pub fn memory_database_path() -> Result<PathBuf, String> {
+    Ok(memory_dir()?.join("memory.db"))
 }
 
 fn ensure_dir(path: &PathBuf) -> Result<(), String> {

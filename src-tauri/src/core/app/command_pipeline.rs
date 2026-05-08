@@ -53,10 +53,7 @@ pub async fn run_command_pipeline(
                 route: CommandRoute::LegacyFallback,
                 action: Some(action),
                 capability: None,
-                result: Some(CapabilityResult::ok(
-                    "legacy.fallback",
-                    legacy_message,
-                )),
+                result: Some(CapabilityResult::ok("legacy.fallback", legacy_message)),
             })
         }
     }
